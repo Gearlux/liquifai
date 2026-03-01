@@ -1,0 +1,8 @@
+2026-03-01 18:42:43.929 | INFO     | logflow.core:configure_logging:159 | LogFlow initialized (Rank: N/A)
+2026-03-01 18:42:43.930 | DEBUG    | liquify.core:_bootstrap:67 | Configuration loaded from /private/var/folders/4x/x26tt86913gcwvfprsl3xtnw0000gp/T/pytest-of-gertbehi/pytest-56/test_bootstrap_logic_direct0/logic_config.yaml
+2026-03-01 18:42:43.942 | INFO     | logflow.core:configure_logging:159 | LogFlow initialized (Rank: N/A)
+2026-03-01 18:42:43.943 | DEBUG    | liquify.core:_bootstrap:67 | Configuration loaded from /private/var/folders/4x/x26tt86913gcwvfprsl3xtnw0000gp/T/pytest-of-gertbehi/pytest-56/test_bootstrap_with_scopes_dir0/scoped_direct.yaml
+2026-03-01 18:42:43.954 | INFO     | logflow.core:configure_logging:159 | LogFlow initialized (Rank: N/A)
+2026-03-01 18:42:43.986 | INFO     | logflow.core:configure_logging:159 | LogFlow initialized (Rank: N/A)
+2026-03-01 18:42:43.998 | INFO     | logflow.core:configure_logging:159 | LogFlow initialized (Rank: N/A)
+2026-03-01 18:42:43.999 | DEBUG    | liquify.core:_bootstrap:67 | Configuration loaded from /private/var/folders/4x/x26tt86913gcwvfprsl3xtnw0000gp/T/pytest-of-gertbehi/pytest-56/test_global_context_extraction0/test.yaml
