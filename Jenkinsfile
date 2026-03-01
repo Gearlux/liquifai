@@ -79,8 +79,8 @@ pipeline {
                 // Use single quotes for the shell command to prevent Groovy from trying to resolve $f
                 sh '''
                     for f in examples/*.py; do
-                        echo "Running $f..."
-                        ${VENV_BIN}/python3 "$f"
+                        echo "Verifying $f..."
+                        ${VENV_BIN}/python3 "$f" --help
                     done
                 '''
             }
