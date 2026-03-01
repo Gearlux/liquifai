@@ -49,8 +49,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e "../logflow"
-        pip install -e "../confluid"
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
         pip install -e ".[dev]"
     - name: Run Tests
       run: |
@@ -76,8 +76,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e "../logflow"
-        pip install -e "../confluid"
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
         pip install -e ".[dev]"
     - name: Run Examples
       run: |
