@@ -22,7 +22,7 @@ pipeline {
             }
         }
 
-        stage('Linting') {
+        stage('Quality Gates') {
             parallel {
                 stage('Black') {
                     steps {
@@ -36,11 +36,8 @@ pipeline {
                 }
                 stage('Flake8') {
                     steps {
-                        // Clean up previous reports (Learned from LogFlow/Confluid corrections)
                         sh "rm -f flake8.txt flake8-report.xml"
-                        // Use || true to prevent the stage from stopping before the report is generated
                         sh "${VENV_BIN}/flake8 liquify tests examples --tee --output-file=flake8.txt || true"
-                        // Convert report to JUnit XML
                         sh "if [ -f flake8.txt ]; then ${VENV_BIN}/flake8_junit flake8.txt flake8-report.xml; fi"
                     }
                     post {
@@ -49,12 +46,11 @@ pipeline {
                         }
                     }
                 }
-            }
-        }
-
-        stage('Type Check') {
-            steps {
-                sh "${VENV_BIN}/mypy liquify tests examples"
+                stage('Mypy') {
+                    steps {
+                        sh "${VENV_BIN}/mypy liquify tests examples"
+                    }
+                }
             }
         }
 
