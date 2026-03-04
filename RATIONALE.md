@@ -27,8 +27,8 @@ Liquify manages the "Critical Path" of an application start:
 3.  **Load Confluid:** Resolve the hierarchical configuration and dependency graph.
 4.  **Execute Command:** Dispatch the specific task (e.g., `train`) with all dependencies resolved.
 
-### 2. Dependency Injection via `flow()`
-Liquify bridges the gap between CLI parameters and complex Python objects. If a command defines a parameter typed with a `@configurable` class, Liquify will use **Confluid** to `flow()` that instance automatically.
+### 2. Dependency Injection via `confluid.load()`
+Liquify bridges the gap between CLI parameters and complex Python objects. By inspecting command signatures, Liquify automatically identifies parameters typed with `@configurable` classes and uses **Confluid** to reconstruct the entire object hierarchy from the YAML context. This ensures that your `train` or `evaluate` functions receive fully-configured instances (e.g. a `Trainer` with its `Model` and `Optimizer`) without manual boilerplate.
 
 ### 3. Modular Command Registration
 Applications are built by composing standalone commands. This allows for a "Plug-and-Play" architecture where different teams can contribute tools to a single unified workspace CLI.

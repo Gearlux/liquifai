@@ -12,6 +12,13 @@ class Model:
     def __init__(self, layers: int = 3, dropout: float = 0.1):
         self.layers = layers
         self.dropout = dropout
+        self._secret = "hidden"
+
+    @property
+    @confluid.ignore_config
+    def secret(self) -> str:
+        """This attribute will be hidden from the --show-config table."""
+        return self._secret
 
     def __repr__(self) -> str:
         return f"Model(layers={self.layers}, dropout={self.dropout})"
@@ -32,7 +39,7 @@ class Trainer:
 app = LiquifyApp(name="liquify-demo")
 
 
-@app.command()
+@app.command(default=True)
 def train(trainer: Trainer, name: str = "Experiment") -> None:
     """
     Run a simulated training experiment with automatic injection.

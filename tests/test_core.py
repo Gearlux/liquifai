@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import typer
 from typer.testing import CliRunner
 
 from liquify import LiquifyApp, LiquifyContext
@@ -29,9 +28,9 @@ def test_global_context_extraction(tmp_path: Path) -> None:
     config_file.write_text("val: 1")
 
     @app.command()
-    def check(ctx: typer.Context) -> None:
+    def check() -> None:
         nonlocal captured_context
-        captured_context = ctx.obj
+        captured_context = app.context
 
     # Run with global flags
     result = runner.invoke(app.typer_app, ["--config", str(config_file), "--scope", "debug", "--debug", "check"])
