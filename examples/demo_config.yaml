@@ -1,0 +1,8 @@
+# demo_config.yaml
+Model:
+  layers: 10
+  dropout: 0.2
+
+Trainer:
+  epochs: 3
+  model: "@Model()" # Explicit dependency injection

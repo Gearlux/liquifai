@@ -9,11 +9,12 @@
 - **Rich Integration:** Beautiful terminal output and progress reporting via **Rich**.
 - **Modular Commands:** Register and compose multiple tools into a single entry point.
 
-## Quick Start (Coming Soon)
+## Quick Start
 
 ```python
-from liquify import LiquifyApp
+from liquify import LiquifyApp, LiquifyContext
 from confluid import configurable
+import typer
 
 @configurable
 class MyTrainer:
@@ -23,8 +24,8 @@ class MyTrainer:
 app = LiquifyApp(name="my-app")
 
 @app.command()
-def train(trainer: MyTrainer):
-    # 'trainer' is automatically loaded via Confluid and flowed
+def train(trainer: MyTrainer) -> None:
+    # 'trainer' is automatically loaded via Confluid and injected
     print(f"Training with lr={trainer.lr}")
 
 if __name__ == "__main__":

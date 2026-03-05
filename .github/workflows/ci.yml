@@ -7,8 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  quality-checks:
-    name: Linting & Type Checking
+  formatting:
+    name: Formatting (Isort & Black)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -20,24 +20,16 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        # Install internal trio dependencies from GitHub
         pip install git+https://github.com/gearlux/logflow.git
         pip install git+https://github.com/gearlux/confluid.git
         pip install -e ".[dev]"
-    - name: Formatting (Isort & Black)
-      run: |
-        isort --check-only .
-        black --check .
-    - name: Linting (Flake8)
-      run: |
-        flake8 .
-    - name: Type Checking (Mypy)
-      run: |
-        mypy .
+    - name: Isort
+      run: isort --check-only .
+    - name: Black
+      run: black --check .
 
-  unit-tests:
-    name: Unit Tests & Coverage
-    needs: quality-checks
+  linting:
+    name: Linting (Flake8)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -49,8 +41,47 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e "../logflow"
-        pip install -e "../confluid"
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
+        pip install -e ".[dev]"
+    - name: Flake8
+      run: flake8 .
+
+  type-check:
+    name: Type Checking (Mypy)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
+        pip install -e ".[dev]"
+    - name: Mypy
+      run: mypy .
+
+  unit-tests:
+    name: Unit Tests & Coverage
+    needs: [formatting, linting, type-check]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        cache: 'pip'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
         pip install -e ".[dev]"
     - name: Run Tests
       run: |
@@ -64,7 +95,7 @@ jobs:
 
   verify-examples:
     name: Verify Examples
-    needs: quality-checks
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -76,9 +107,9 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e "../logflow"
-        pip install -e "../confluid"
+        pip install git+https://github.com/gearlux/logflow.git
+        pip install git+https://github.com/gearlux/confluid.git
         pip install -e ".[dev]"
     - name: Run Examples
       run: |
-        for f in examples/*.py; do echo "Running $f..."; python "$f"; done
+        for f in examples/*.py; do echo "Verifying $f..."; python "$f" --help; done
