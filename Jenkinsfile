@@ -43,7 +43,7 @@ ET.ElementTree(root).write('black-report.xml', xml_declaration=True, encoding='u
                     post {
                         always {
                             recordIssues(
-                                tool: junitXml(id: 'black-liquify', name: 'Black Formatting (Liquify)', pattern: 'black-report.xml'),
+                                tools: [junit(id: 'black-liquify', name: 'Black Formatting (Liquify)', pattern: 'black-report.xml')],
                                 enabledForFailure: true,
                                 skipBlames: true
                             )
@@ -69,7 +69,7 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     post {
                         always {
                             recordIssues(
-                                tool: junitXml(id: 'isort-liquify', name: 'Isort Import Order (Liquify)', pattern: 'isort-report.xml'),
+                                tools: [junit(id: 'isort-liquify', name: 'Isort Import Order (Liquify)', pattern: 'isort-report.xml')],
                                 enabledForFailure: true,
                                 skipBlames: true
                             )
@@ -85,7 +85,7 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     post {
                         always {
                             recordIssues(
-                                tool: junitXml(id: 'flake8-liquify', name: 'Flake8 (Liquify)', pattern: 'flake8-report.xml'),
+                                tools: [junit(id: 'flake8-liquify', name: 'Flake8 (Liquify)', pattern: 'flake8-report.xml')],
                                 enabledForFailure: true,
                                 skipBlames: true
                             )
@@ -99,7 +99,7 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     post {
                         always {
                             recordIssues(
-                                tool: junitXml(id: 'mypy-liquify', name: 'Mypy (Liquify)', pattern: 'mypy-report.xml'),
+                                tools: [junit(id: 'mypy-liquify', name: 'Mypy (Liquify)', pattern: 'mypy-report.xml')],
                                 enabledForFailure: true,
                                 skipBlames: true
                             )
