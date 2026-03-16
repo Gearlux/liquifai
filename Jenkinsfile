@@ -42,10 +42,10 @@ ET.ElementTree(root).write('black-report.xml', xml_declaration=True, encoding='u
                     }
                     post {
                         always {
-                            recordIssues(
-                                tools: [junit(id: 'black-liquify', name: 'Black Formatting (Liquify)', pattern: 'black-report.xml')],
-                                enabledForFailure: true,
-                                skipBlames: true
+                            recordCoverage(
+                                id: 'black-liquify',
+                                name: 'Black Formatting (Liquify)',
+                                tools: [[parser: 'JUNIT', pattern: 'black-report.xml']]
                             )
                         }
                     }
@@ -68,10 +68,10 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     }
                     post {
                         always {
-                            recordIssues(
-                                tools: [junit(id: 'isort-liquify', name: 'Isort Import Order (Liquify)', pattern: 'isort-report.xml')],
-                                enabledForFailure: true,
-                                skipBlames: true
+                            recordCoverage(
+                                id: 'isort-liquify',
+                                name: 'Isort Import Order (Liquify)',
+                                tools: [[parser: 'JUNIT', pattern: 'isort-report.xml']]
                             )
                         }
                     }
@@ -84,10 +84,10 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     }
                     post {
                         always {
-                            recordIssues(
-                                tools: [junit(id: 'flake8-liquify', name: 'Flake8 (Liquify)', pattern: 'flake8-report.xml')],
-                                enabledForFailure: true,
-                                skipBlames: true
+                            recordCoverage(
+                                id: 'flake8-liquify',
+                                name: 'Flake8 (Liquify)',
+                                tools: [[parser: 'JUNIT', pattern: 'flake8-report.xml']]
                             )
                         }
                     }
@@ -98,10 +98,10 @@ ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='u
                     }
                     post {
                         always {
-                            recordIssues(
-                                tools: [junit(id: 'mypy-liquify', name: 'Mypy (Liquify)', pattern: 'mypy-report.xml')],
-                                enabledForFailure: true,
-                                skipBlames: true
+                            recordCoverage(
+                                id: 'mypy-liquify',
+                                name: 'Mypy (Liquify)',
+                                tools: [[parser: 'JUNIT', pattern: 'mypy-report.xml']]
                             )
                         }
                     }
