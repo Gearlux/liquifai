@@ -1,231 +1,244 @@
-import functools
 import inspect
+import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import confluid
 import logflow
-import typer
+from confluid import materialize
+from logflow import get_logger
 from rich.console import Console
+from rich.table import Table
 
-from liquify.context import LiquifyContext
+from liquify.context import LiquifyContext, set_context
 
 console = Console()
+logger = get_logger("liquify.core")
 
 
 class LiquifyApp:
-    """Simplified Liquify Framework."""
+    """Pure Python CLI Framework without Typer/Click baggage."""
 
     def __init__(self, name: str) -> None:
         self.name = name
         self.context: Optional[LiquifyContext] = None
+        self._commands: Dict[str, Callable[..., Any]] = {}
         self._default_cmd: Optional[Callable[..., Any]] = None
-        self._configurable_types: List[Any] = []
+        self._script_cmds: Set[str] = set()
 
-        # Initialize Typer
-        self.typer_app = typer.Typer(name=name)
-        self.typer_app.callback(
-            context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-            invoke_without_command=True,
-        )(self._global_callback)
+    def command(
+        self, name: Optional[str] = None, default: bool = False
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a command."""
 
-    def _global_callback(
-        self,
-        ctx: typer.Context,
-        config: Optional[Path] = typer.Option(None, "--config", "-c", help="Config file."),
-        scope: List[str] = typer.Option([], "--scope", "-s", help="Active scopes."),
-        debug: bool = typer.Option(False, "--debug", "-d", help="Debug mode."),
-        options: bool = typer.Option(False, "--options", help="Show overview."),
-    ) -> None:
-        # 1. Initialize Context & Trio
-        self.context = LiquifyContext(name=self.name, config_path=config, scopes=scope, debug=debug)
+        def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+            cmd_name = name or f.__name__.replace("_", "-")
+            self._commands[cmd_name] = f
+            if default:
+                self._default_cmd = f
+            return f
+
+        return decorator
+
+    def script_command(self, name: Optional[str] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a command that supports config-promotion."""
+
+        def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+            cmd_name = name or f.__name__.replace("_", "-")
+            self._script_cmds.add(cmd_name)
+            return self.command(name=cmd_name)(f)
+
+        return decorator
+
+    def run(self) -> Any:
+        """Main entry point for the CLI."""
+        argv = sys.argv[1:]
+
+        if "--help" in argv or (not argv and not self._default_cmd):
+            self._show_help()
+            return
+
+        # 1. IDENTIFY COMMAND & PROMOTION
+        config_path = None
+        cmd_name = None
+        remaining_argv = []
+
+        i = 0
+        while i < len(argv):
+            arg = argv[i]
+            if arg in self._commands:
+                cmd_name = arg
+                if cmd_name in self._script_cmds and i + 1 < len(argv):
+                    next_arg = argv[i + 1]
+                    if not next_arg.startswith("-"):
+                        cp = Path(next_arg)
+                        if not cp.suffix:
+                            cp = cp.with_suffix(".yaml")
+                        if cp.exists():
+                            config_path = cp
+                            i += 1
+                i += 1
+            else:
+                remaining_argv.append(arg)
+                i += 1
+
+        # 2. PARSE GLOBALS
+        final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(remaining_argv)
+        if final_config_path:
+            config_path = final_config_path
+
+        # 3. INITIALIZE STATE
+        self.context = LiquifyContext(
+            name=self.name, config_path=config_path, scopes=scopes, debug=debug, **log_overrides
+        )
+        set_context(self.context)
         self._bootstrap()
 
-        # 2. Process dynamic overrides from extra args
-        self._apply_overrides(ctx.args)
+        # 4. APPLY OVERRIDES
+        self._apply_overrides(final_argv)
 
-        # 3. Handle --options
-        if options:
-            from liquify.report import show_configuration
+        # 5. EXECUTE
+        target_func = self._commands.get(cmd_name) if cmd_name else self._default_cmd
+        if not target_func:
+            console.print(f"[red]Error:[/red] Unknown command '{cmd_name}'")
+            sys.exit(1)
 
-            for cls in self._configurable_types:
-                show_configuration(cls, config_map=self.context.config_data)
-            raise typer.Exit()
+        return self.run_command(target_func)
 
-        # 4. Handle Default Command (if no subcommand)
-        if ctx.invoked_subcommand is None and self._default_cmd:
-            # Execute the default command function directly
-            # We must use the wrapper logic to ensure DI works
-            self.run_command(self._default_cmd)
+    def _parse_globals(self, argv: List[str]) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
+        config_path = None
+        scopes = []
+        debug = False
+        log_overrides = {}
+        remaining = []
+
+        i = 0
+        while i < len(argv):
+            arg = argv[i]
+            if arg in ("--config", "-c") and i + 1 < len(argv):
+                config_path = Path(argv[i + 1])
+                i += 2
+            elif arg in ("--scope", "-s") and i + 1 < len(argv):
+                scopes.extend(argv[i + 1].split(","))
+                i += 2
+            elif arg in ("--debug", "-d"):
+                debug = True
+                i += 1
+            elif arg == "--level" and i + 1 < len(argv):
+                log_overrides["log_level"] = argv[i + 1]
+                i += 2
+            elif arg == "--console-level" and i + 1 < len(argv):
+                log_overrides["console_level"] = argv[i + 1]
+                i += 2
+            elif arg == "--file-level" and i + 1 < len(argv):
+                log_overrides["file_level"] = argv[i + 1]
+                i += 2
+            elif arg == "--log-dir" and i + 1 < len(argv):
+                log_overrides["log_dir"] = Path(argv[i + 1])  # type: ignore
+                i += 2
+            else:
+                remaining.append(arg)
+                i += 1
+        return config_path, scopes, debug, log_overrides, remaining
 
     def _bootstrap(self) -> None:
-        """Standard trio bootstrapping."""
+        """Standard Trio Bootstrap."""
         if not self.context:
             return
-        log_level = "DEBUG" if self.context.debug else "INFO"
-        logflow.configure_logging(console_level=log_level)
-        self.context.logger = logflow.get_logger(self.name)
+
+        script_name = self.context.name
+        if self.context.config_path:
+            script_name = self.context.config_path.stem
+
+        console_level = (
+            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+        )
+        file_level = self.context.file_level or self.context.log_level or "DEBUG"
+
+        logflow.configure_logging(
+            console_level=console_level,
+            file_level=file_level,
+            log_dir=self.context.log_dir,
+            script_name=script_name,
+            force=True,
+        )
+        self.context.logger = get_logger(script_name)
 
         if self.context.config_path:
-            if not self.context.config_path.exists():
-                if self.context.logger:
-                    self.context.logger.error(f"Configuration file not found: {self.context.config_path}")
-                raise typer.Exit(code=1)
-            self.context.config_data = confluid.load(self.context.config_path, scopes=self.context.scopes)
+            self.context.config_data = confluid.load(self.context.config_path, scopes=self.context.scopes, flow=False)
+            self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
+            self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
 
     def _apply_overrides(self, args: List[str]) -> None:
-        """Simple --KEY VAL parsing with broadcast support."""
-        if not self.context:
+        if not self.context or not args:
             return
+
         from confluid import deep_merge, expand_dotted_keys, parse_value
 
         overrides = {}
-        for i in range(0, len(args), 2):
-            if i + 1 < len(args) and args[i].startswith("--"):
+        for i in range(len(args)):
+            if args[i].startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"):
                 key = args[i][2:]
-                # Use Confluid to parse the value (handles ints, lists, bools, etc)
                 val = parse_value(args[i + 1])
                 overrides[key] = val
 
         if overrides:
-            # 1. Expand dotted keys
+            self.context.logger.debug(f"Applying CLI overrides: {overrides}")
             expanded = expand_dotted_keys(overrides)
+            self.context.config_data = deep_merge(self.context.config_data, expanded)
+            self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
-            # 2. Apply Broadcast logic: if a key exists in overrides but not at top level
-            # of config_data, try to find it inside nested dicts and update them.
-            final_overrides = {}
-            for k, v in expanded.items():
-                if k not in self.context.config_data:
-                    # Search and inject into any dict that has this key
-                    self._broadcast_inject(self.context.config_data, k, v)
-                else:
-                    final_overrides[k] = v
-
-            # 3. Deep merge the remaining explicit/top-level overrides
-            if final_overrides:
-                self.context.config_data = deep_merge(self.context.config_data, final_overrides)
-
-    def _broadcast_inject(self, data: Dict[str, Any], target_key: str, value: Any) -> None:
-        """Recursively inject a value into any dictionary containing target_key."""
-        for k, v in data.items():
-            if k == target_key:
-                data[k] = value
-            elif isinstance(v, dict):
-                self._broadcast_inject(v, target_key, value)
-
-    def command(
-        self, *args: Any, default: bool = False, **kwargs: Any
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register command with DI and hidden signature."""
-        # Ensure command allows extra args for overrides
-        context_settings: Dict[str, Any] = kwargs.pop("context_settings", {})
-        context_settings.setdefault("allow_extra_args", True)
-        context_settings.setdefault("ignore_unknown_options", True)
-        kwargs["context_settings"] = context_settings
-
-        def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-            if default:
-                self._default_cmd = f
-
-            @functools.wraps(f)
-            def wrapper(**f_kwargs: Any) -> Any:
-                # 1. Capture and remove ctx if present in kwargs
-                ctx = f_kwargs.pop("ctx", None)
-
-                # 2. Process overrides from extra arguments
-                if ctx and ctx.args:
-                    self._apply_overrides(ctx.args)
-
-                # 3. Execute with DI
-                return self.run_command(f, ctx=ctx, **f_kwargs)
-
-            # 2. Update the wrapper's signature for Typer
-            sig = inspect.signature(f)
-            new_params = []
-            for name, param in sig.parameters.items():
-                if name == "ctx" or param.annotation is typer.Context:
-                    continue
-                if hasattr(param.annotation, "__confluid_configurable__"):
-                    if param.annotation not in self._configurable_types:
-                        self._configurable_types.append(param.annotation)
-                else:
-                    new_params.append(param)
-
-            # Append Context at the end to satisfy Typer and Python ordering
-            ctx_param = inspect.Parameter(
-                "ctx",
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=typer.Context,
-                default=None,  # Make it optional so it doesn't break positional calls
-            )
-            new_params.append(ctx_param)
-
-            wrapper.__signature__ = sig.replace(parameters=new_params)  # type: ignore
-
-            return self.typer_app.command(*args, **kwargs)(wrapper)
-
-        return decorator
-
-    def run_command(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """Perform DI and execute a function."""
+    def run_command(self, func: Callable[..., Any]) -> Any:
+        """Execute with Dependency Injection."""
+        print(f"!!! APP IDENTITY: {hex(id(self))} - run_command()")
         if not self.context:
-            return func(*args, **kwargs)
+            return func()
+
+        self.context.logger.info(f"DI: Resolving arguments for {func.__name__}")
+        self.context.logger.info(f"DI: Global config keys: {list(self.context.config_data.keys())}")
+        if "DatasetProcessor" in self.context.config_data:
+            self.context.logger.info(f"DI: DatasetProcessor block: {self.context.config_data['DatasetProcessor']}")
 
         sig = inspect.signature(func)
-        # 1. Resolve and inject configurable objects only if NOT already provided
+        kwargs = {}
+
+        from confluid import get_registry
+
+        reg = get_registry()
+
         for name, param in sig.parameters.items():
-            if hasattr(param.annotation, "__confluid_configurable__"):
-                if name not in kwargs:
-                    # Resolve from Confluid
-                    kwargs[name] = confluid.load(
-                        {param.annotation.__name__: self.context.config_data.get(param.annotation.__name__, {})},
-                        scopes=self.context.scopes,
-                    )
+            if reg.is_configurable(param.annotation):
+                cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
+                config_block = self.context.config_data.get(cls_name) or self.context.config_data.get(name) or {}
 
-        # 2. FILTER: Only pass kwargs that the function actually accepts
-        # This prevents "unexpected keyword argument 'ctx'" for user functions
-        valid_kwargs = {
-            k: v
-            for k, v in kwargs.items()
-            if k in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-        }
+                self.context.logger.debug(
+                    f"DI: Resolving {name} ({cls_name}). Block keys: "
+                    f"{list(config_block.keys()) if isinstance(config_block, dict) else 'N/A'}"
+                )
 
-        # 3. Execute with the merged and filtered argument set
-        return func(*args, **valid_kwargs)
+                marker_dict = {
+                    "_confluid_class_": cls_name,
+                    **(config_block if isinstance(config_block, dict) else {}),
+                }
+                kwargs[name] = materialize(marker_dict, context=self.context.config_data)
 
-    def run(self) -> Any:
-        import sys
+        return func(**kwargs)
 
-        if self._default_cmd:
-            cmds = [c.name for c in self.typer_app.registered_commands if c.name]
-            # If no subcommand present in argv, we perform redirection
-            if not any(arg in cmds for arg in sys.argv[1:]):
-                if "--help" not in sys.argv and "--options" not in sys.argv:
-                    # 1. Identify known global flags
-                    globals = ["--config", "-c", "--scope", "-s", "--debug", "-d"]
+    def _show_help(self) -> None:
+        """Beautiful help menu via Rich."""
+        console.print(f"\n[bold]{self.name.upper()}[/bold] - Modular Septet Framework\n")
+        table = Table(box=None, padding=(0, 2))
+        table.add_column("Command", style="cyan")
+        table.add_column("Description")
 
-                    # 2. Re-assemble argv: [Script] [Globals] [DefaultCmd] [Remaining]
-                    new_argv = [sys.argv[0]]
-                    remaining = []
+        for name, func in sorted(self._commands.items()):
+            desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
+            table.add_row(name, desc)
 
-                    i = 1
-                    while i < len(sys.argv):
-                        if sys.argv[i] in globals:
-                            new_argv.append(sys.argv[i])
-                            # Globals usually have a following value (except --debug)
-                            if sys.argv[i] not in ["--debug", "-d"]:
-                                if i + 1 < len(sys.argv):
-                                    new_argv.append(sys.argv[i + 1])
-                                    i += 2
-                                else:
-                                    i += 1
-                            else:
-                                i += 1
-                        else:
-                            remaining.append(sys.argv[i])
-                            i += 1
-
-                    cmd_name = self._default_cmd.__name__.replace("_", "-")
-                    sys.argv = new_argv + [cmd_name] + remaining
-
-        return self.typer_app()
+        console.print(table)
+        console.print("\n[bold]Global Options:[/bold]")
+        console.print("  -c, --config PATH    Configuration file.")
+        console.print("  -s, --scope NAME     Active scope(s).")
+        console.print("  -d, --debug          Enable debug mode.")
+        console.print("  --level LEVEL        Set log level (TRACE, DEBUG, INFO).")
+        console.print("")

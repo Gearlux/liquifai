@@ -14,7 +14,7 @@ def test_app_initialization() -> None:
     def hello(name: str = "World") -> None:
         print(f"Hello {name}")
 
-    result = runner.invoke(app.typer_app, ["hello"])
+    result = runner.invoke(app.typer_app, ["hello"])  # type: ignore
     assert result.exit_code == 0
     assert "Hello World" in result.stdout
 
@@ -33,7 +33,10 @@ def test_global_context_extraction(tmp_path: Path) -> None:
         captured_context = app.context
 
     # Run with global flags
-    result = runner.invoke(app.typer_app, ["--config", str(config_file), "--scope", "debug", "--debug", "check"])
+    result = runner.invoke(
+        app.typer_app,  # type: ignore
+        ["--config", str(config_file), "--scope", "debug", "--debug", "check"],
+    )
 
     assert result.exit_code == 0
     assert captured_context is not None

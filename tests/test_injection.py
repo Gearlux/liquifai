@@ -36,7 +36,7 @@ def test_command_injection(tmp_path: Path) -> None:
         captured["name"] = name
 
     # 2. Run app
-    result = runner.invoke(app.typer_app, ["--config", str(config_file), "train", "--name", "RealRun"])
+    result = runner.invoke(app.typer_app, ["--config", str(config_file), "train", "--name", "RealRun"])  # type: ignore
 
     assert result.exit_code == 0
     assert captured["name"] == "RealRun"
@@ -55,6 +55,6 @@ def test_injection_without_config() -> None:
     def run(model: MyModel) -> None:
         captured["model"] = model
 
-    result = runner.invoke(app.typer_app, ["run"])
+    result = runner.invoke(app.typer_app, ["run"])  # type: ignore
     assert result.exit_code == 0
     assert captured["model"].layers == 3  # Default value

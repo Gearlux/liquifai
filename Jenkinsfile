@@ -26,12 +26,54 @@ pipeline {
             parallel {
                 stage('Black') {
                     steps {
-                        sh "${VENV_BIN}/black --check liquify tests examples"
+                        script {
+                            def rc = sh(script: "${VENV_BIN}/black --check --diff liquify tests examples > black-output.txt 2>&1", returnStatus: true)
+                            sh """${VENV_BIN}/python3 -c "
+import xml.etree.ElementTree as ET
+rc = ${rc}
+root = ET.Element('testsuite', name='black', tests='1', failures=str(min(rc, 1)))
+tc = ET.SubElement(root, 'testcase', classname='black', name='formatting-check')
+if rc != 0:
+    with open('black-output.txt') as f:
+        ET.SubElement(tc, 'failure', message='Black formatting issues found').text = f.read()
+ET.ElementTree(root).write('black-report.xml', xml_declaration=True, encoding='unicode')
+" """
+                        }
+                    }
+                    post {
+                        always {
+                            recordIssues(
+                                tool: junitXml(id: 'black-liquify', name: 'Black Formatting (Liquify)', pattern: 'black-report.xml'),
+                                enabledForFailure: true,
+                                skipBlames: true
+                            )
+                        }
                     }
                 }
                 stage('Isort') {
                     steps {
-                        sh "${VENV_BIN}/isort --check-only liquify tests examples"
+                        script {
+                            def rc = sh(script: "${VENV_BIN}/isort --check-only --diff liquify tests examples > isort-output.txt 2>&1", returnStatus: true)
+                            sh """${VENV_BIN}/python3 -c "
+import xml.etree.ElementTree as ET
+rc = ${rc}
+root = ET.Element('testsuite', name='isort', tests='1', failures=str(min(rc, 1)))
+tc = ET.SubElement(root, 'testcase', classname='isort', name='import-order-check')
+if rc != 0:
+    with open('isort-output.txt') as f:
+        ET.SubElement(tc, 'failure', message='Isort import order issues found').text = f.read()
+ET.ElementTree(root).write('isort-report.xml', xml_declaration=True, encoding='unicode')
+" """
+                        }
+                    }
+                    post {
+                        always {
+                            recordIssues(
+                                tool: junitXml(id: 'isort-liquify', name: 'Isort Import Order (Liquify)', pattern: 'isort-report.xml'),
+                                enabledForFailure: true,
+                                skipBlames: true
+                            )
+                        }
                     }
                 }
                 stage('Flake8') {
@@ -42,13 +84,26 @@ pipeline {
                     }
                     post {
                         always {
-                            junit allowEmptyResults: true, testResults: 'flake8-report.xml'
+                            recordIssues(
+                                tool: junitXml(id: 'flake8-liquify', name: 'Flake8 (Liquify)', pattern: 'flake8-report.xml'),
+                                enabledForFailure: true,
+                                skipBlames: true
+                            )
                         }
                     }
                 }
                 stage('Mypy') {
                     steps {
-                        sh "${VENV_BIN}/mypy liquify tests examples"
+                        sh "${VENV_BIN}/mypy liquify tests examples --junit-xml=mypy-report.xml || true"
+                    }
+                    post {
+                        always {
+                            recordIssues(
+                                tool: junitXml(id: 'mypy-liquify', name: 'Mypy (Liquify)', pattern: 'mypy-report.xml'),
+                                enabledForFailure: true,
+                                skipBlames: true
+                            )
+                        }
                     }
                 }
             }

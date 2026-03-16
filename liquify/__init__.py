@@ -1,8 +1,8 @@
 """
-Liquify: Type-safe application framework for the modular Python trio.
+Liquify: A streamlined, type-safe application framework.
 """
 
-from liquify.context import LiquifyContext
+from liquify.context import LiquifyContext, get_context, set_context
 from liquify.core import LiquifyApp
 
-__all__ = ["LiquifyApp", "LiquifyContext"]
+__all__ = ["LiquifyApp", "LiquifyContext", "get_context", "set_context"]
