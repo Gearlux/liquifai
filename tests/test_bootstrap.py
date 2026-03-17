@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-import typer
 
 from liquify import LiquifyApp, LiquifyContext
 
@@ -37,11 +36,11 @@ def test_bootstrap_invalid_config_direct() -> None:
     app = LiquifyApp(name="fail-direct")
     app.context = LiquifyContext(name="fail-direct", config_path=Path("non_existent.yaml"))
 
-    # Should raise typer.Exit
-    with pytest.raises(typer.Exit) as excinfo:
+    # Should raise SystemExit
+    with pytest.raises(SystemExit) as excinfo:
         app._bootstrap()
 
-    assert excinfo.value.exit_code == 1
+    assert excinfo.value.code == 1
 
 
 def test_bootstrap_no_context() -> None:

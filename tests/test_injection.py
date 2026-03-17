@@ -1,12 +1,11 @@
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
 import confluid
-from typer.testing import CliRunner
 
 from liquify import LiquifyApp
-
-runner = CliRunner()
+from liquify.context import set_context
 
 
 @confluid.configurable
@@ -21,7 +20,7 @@ class MyTrainer:
         self.lr = lr
 
 
-def test_command_injection(tmp_path: Path) -> None:
+def test_command_injection(tmp_path: Path, monkeypatch: Any) -> None:
     # 1. Create a config file
     config_file = tmp_path / "inject.yaml"
     config_file.write_text("MyModel:\n  layers: 100\nMyTrainer:\n  lr: 0.0001")
@@ -36,9 +35,12 @@ def test_command_injection(tmp_path: Path) -> None:
         captured["name"] = name
 
     # 2. Run app
-    result = runner.invoke(app.typer_app, ["--config", str(config_file), "train", "--name", "RealRun"])  # type: ignore
+    test_args = ["inject-app", "--config", str(config_file), "train", "--name", "RealRun"]
+    monkeypatch.setattr(sys, "argv", test_args)
+    set_context(None)  # type: ignore
 
-    assert result.exit_code == 0
+    app.run()
+
     assert captured["name"] == "RealRun"
     assert isinstance(captured["model"], MyModel)
     assert captured["model"].layers == 100
@@ -46,7 +48,7 @@ def test_command_injection(tmp_path: Path) -> None:
     assert captured["trainer"].lr == 0.0001
 
 
-def test_injection_without_config() -> None:
+def test_injection_without_config(monkeypatch: Any) -> None:
     # Should use defaults if no config provided
     app = LiquifyApp(name="default-app")
     captured: Dict[str, Any] = {}
@@ -55,6 +57,10 @@ def test_injection_without_config() -> None:
     def run(model: MyModel) -> None:
         captured["model"] = model
 
-    result = runner.invoke(app.typer_app, ["run"])  # type: ignore
-    assert result.exit_code == 0
+    test_args = ["default-app", "run"]
+    monkeypatch.setattr(sys, "argv", test_args)
+    set_context(None)  # type: ignore
+
+    app.run()
+
     assert captured["model"].layers == 3  # Default value

@@ -165,6 +165,9 @@ class LiquifyApp:
         self.context.logger = get_logger(script_name)
 
         if self.context.config_path:
+            if not self.context.config_path.exists():
+                console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
+                sys.exit(1)
             self.context.config_data = confluid.load(self.context.config_path, scopes=self.context.scopes, flow=False)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
@@ -221,6 +224,12 @@ class LiquifyApp:
                     **(config_block if isinstance(config_block, dict) else {}),
                 }
                 kwargs[name] = materialize(marker_dict, context=self.context.config_data)
+            else:
+                # Non-configurable: Resolve from context data or use default
+                if name in self.context.config_data:
+                    kwargs[name] = self.context.config_data[name]
+                elif param.default is not inspect.Parameter.empty:
+                    kwargs[name] = param.default
 
         return func(**kwargs)
 
