@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
 ## Installation
 ```bash
-pip install liquify
+pip install git+https://github.com/Gearlux/liquify.git@main
 ```
 
 ## License
