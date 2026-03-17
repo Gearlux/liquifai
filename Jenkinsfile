@@ -17,7 +17,6 @@ pipeline {
                 sh "${VENV_BIN}/pip uninstall -y logflow confluid || true"
                 sh "${VENV_BIN}/pip install --no-cache-dir git+https://github.com/Gearlux/logflow.git@main"
                 sh "${VENV_BIN}/pip install --no-cache-dir git+https://github.com/Gearlux/confluid.git@main"
-                sh "${VENV_BIN}/python3 -c 'import confluid; print(f\"Confluid file: {confluid.__file__}\"); print(f\"Has materialize: {hasattr(confluid, \"materialize\")}\")'"
                 sh "${VENV_BIN}/pip install -e .[dev]"
             }
         }
