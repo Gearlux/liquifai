@@ -1,25 +1,27 @@
+import sys
 from pathlib import Path
-
-from typer.testing import CliRunner
+from typing import Any
 
 from liquify import LiquifyApp, LiquifyContext
+from liquify.context import set_context
 
-runner = CliRunner()
 
-
-def test_app_initialization() -> None:
+def test_app_initialization(capsys: Any, monkeypatch: Any) -> None:
     app = LiquifyApp(name="test-app")
 
     @app.command()
     def hello(name: str = "World") -> None:
         print(f"Hello {name}")
 
-    result = runner.invoke(app.typer_app, ["hello"])  # type: ignore
-    assert result.exit_code == 0
-    assert "Hello World" in result.stdout
+    monkeypatch.setattr(sys, "argv", ["test-app", "hello"])
+    set_context(None)  # type: ignore
+    app.run()
+
+    captured = capsys.readouterr()
+    assert "Hello World" in captured.out
 
 
-def test_global_context_extraction(tmp_path: Path) -> None:
+def test_global_context_extraction(tmp_path: Path, monkeypatch: Any) -> None:
     app = LiquifyApp(name="test-app")
     captured_context = None
 
@@ -33,12 +35,12 @@ def test_global_context_extraction(tmp_path: Path) -> None:
         captured_context = app.context
 
     # Run with global flags
-    result = runner.invoke(
-        app.typer_app,  # type: ignore
-        ["--config", str(config_file), "--scope", "debug", "--debug", "check"],
-    )
+    test_args = ["test-app", "--config", str(config_file), "--scope", "debug", "--debug", "check"]
+    monkeypatch.setattr(sys, "argv", test_args)
+    set_context(None)  # type: ignore
 
-    assert result.exit_code == 0
+    app.run()
+
     assert captured_context is not None
     assert isinstance(captured_context, LiquifyContext)
     assert captured_context.config_path is not None

@@ -9,6 +9,23 @@
 - **Rich Integration:** Beautiful terminal output and progress reporting via **Rich**.
 - **Modular Commands:** Register and compose multiple tools into a single entry point.
 
+## Design Goals & Requirements
+
+### CLI Framework
+- **Zero-Boilerplate Startup:** Automate the bootstrapping of LogFlow and Confluid.
+- **Contextual Scripting:** Support `@app.script_command()` which promotes the first positional argument to a configuration file path.
+- **Type-Safe DI:** Inject fully-configured objects directly into command signatures based on type hints.
+- **Default Command Redirection:** Support running a default command if no subcommand is provided.
+
+### User Experience
+- **Abbreviation Support:** Allow brief aliases for the main executable (e.g. `wf` for `waivefront`).
+- **Dynamic Overrides:** Support `--KEY VAL` CLI overrides with broadcast injection into nested configurations.
+- **Observability Overrides:** Provide CLI flags for log control (`--level`, `--console-level`, `--file-level`, `--log-dir`).
+
+### Architecture
+- **Config Promotion:** Automatically look for `<arg>.yaml` if the first argument is not a registered command.
+- **Smart DI Lookup:** Search configuration blocks by both argument name and class name to ensure hydration.
+
 ## Quick Start
 
 ```python

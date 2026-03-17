@@ -1,0 +1,12 @@
+# simple.yaml
+import:
+  - simple_app
+
+MyComponent:
+  value: 42
+  message: "Hello from Root"
+
+# debug scope override
+debug:
+  MyComponent.value: 100
+  MyComponent.message: "Hello from Debug"
