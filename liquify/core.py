@@ -59,25 +59,18 @@ class LiquifyApp:
             return
 
         # 1. IDENTIFY COMMAND & PROMOTION
-        config_path = None
-        cmd_name = None
-        remaining_argv = []
+        config_path, cmd_name, remaining_argv = None, None, []
 
         i = 0
         while i < len(argv):
             arg = argv[i]
-            if arg in self._commands:
+            if arg in self._commands and not cmd_name:
                 cmd_name = arg
-                if cmd_name in self._script_cmds and i + 1 < len(argv):
-                    next_arg = argv[i + 1]
-                    if not next_arg.startswith("-"):
-                        cp = Path(next_arg)
-                        if not cp.suffix:
-                            cp = cp.with_suffix(".yaml")
-                        if cp.exists():
-                            config_path = cp
-                            i += 1
                 i += 1
+                if cmd_name in self._script_cmds and i < len(argv) and not argv[i].startswith("-"):
+                    cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
+                    if cp.exists():
+                        config_path, i = cp, i + 1
             else:
                 remaining_argv.append(arg)
                 i += 1
@@ -106,39 +99,39 @@ class LiquifyApp:
         return self.run_command(target_func)
 
     def _parse_globals(self, argv: List[str]) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
-        config_path = None
-        scopes = []
-        debug = False
-        log_overrides = {}
-        remaining = []
+        config_path, scopes, debug = None, [], False
+        log_overrides, remaining = {}, []
+
+        handlers = {
+            ("--config", "-c"): lambda v: ("config_path", Path(v)),
+            ("--scope", "-s"): lambda v: ("scopes", v.split(",")),
+            ("--level",): lambda v: ("log_level", v),
+            ("--console-level",): lambda v: ("console_level", v),
+            ("--file-level",): lambda v: ("file_level", v),
+            ("--log-dir",): lambda v: ("log_dir", Path(v)),
+        }
 
         i = 0
         while i < len(argv):
             arg = argv[i]
-            if arg in ("--config", "-c") and i + 1 < len(argv):
-                config_path = Path(argv[i + 1])
-                i += 2
-            elif arg in ("--scope", "-s") and i + 1 < len(argv):
-                scopes.extend(argv[i + 1].split(","))
-                i += 2
-            elif arg in ("--debug", "-d"):
-                debug = True
-                i += 1
-            elif arg == "--level" and i + 1 < len(argv):
-                log_overrides["log_level"] = argv[i + 1]
-                i += 2
-            elif arg == "--console-level" and i + 1 < len(argv):
-                log_overrides["console_level"] = argv[i + 1]
-                i += 2
-            elif arg == "--file-level" and i + 1 < len(argv):
-                log_overrides["file_level"] = argv[i + 1]
-                i += 2
-            elif arg == "--log-dir" and i + 1 < len(argv):
-                log_overrides["log_dir"] = Path(argv[i + 1])  # type: ignore
-                i += 2
-            else:
-                remaining.append(arg)
-                i += 1
+            found = False
+            for flags, handler in handlers.items():
+                if arg in flags and i + 1 < len(argv):
+                    key, val = handler(argv[i + 1])
+                    if key == "config_path":
+                        config_path = val
+                    elif key == "scopes":
+                        scopes.extend(val)
+                    else:
+                        log_overrides[key] = val
+                    i, found = i + 2, True
+                    break
+            if not found:
+                if arg in ("--debug", "-d"):
+                    debug, i = True, i + 1
+                else:
+                    remaining.append(arg)
+                    i += 1
         return config_path, scopes, debug, log_overrides, remaining
 
     def _bootstrap(self) -> None:
@@ -178,29 +171,24 @@ class LiquifyApp:
 
         from confluid import deep_merge, expand_dotted_keys, parse_value
 
-        overrides = {}
-        for i in range(len(args)):
-            if args[i].startswith("--") and i + 1 < len(args) and not args[i + 1].startswith("--"):
-                key = args[i][2:]
-                val = parse_value(args[i + 1])
-                overrides[key] = val
+        overrides = {
+            args[i][2:]: parse_value(args[i + 1])
+            for i in range(len(args) - 1)
+            if args[i].startswith("--") and not args[i + 1].startswith("--")
+        }
 
         if overrides:
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")
-            expanded = expand_dotted_keys(overrides)
-            self.context.config_data = deep_merge(self.context.config_data, expanded)
+            self.context.config_data = deep_merge(self.context.config_data, expand_dotted_keys(overrides))
             self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
         """Execute with Dependency Injection."""
-        print(f"!!! APP IDENTITY: {hex(id(self))} - run_command()")
         if not self.context:
             return func()
 
-        self.context.logger.info(f"DI: Resolving arguments for {func.__name__}")
-        self.context.logger.info(f"DI: Global config keys: {list(self.context.config_data.keys())}")
-        if "DatasetProcessor" in self.context.config_data:
-            self.context.logger.info(f"DI: DatasetProcessor block: {self.context.config_data['DatasetProcessor']}")
+        self.context.logger.debug(f"DI: Resolving arguments for {func.__name__}")
+        self.context.logger.trace(f"DI: Global config keys: {list(self.context.config_data.keys())}")
 
         sig = inspect.signature(func)
         kwargs = {}

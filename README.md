@@ -4,7 +4,7 @@
 
 ## Key Features
 - **Zero-Boilerplate Startup:** Automatically handles logging and hierarchical config initialization.
-- **Type-Safe CLI:** Built on top of **Typer** for strict validation and beautiful auto-generated help pages.
+- **Type-Safe CLI:** Streamlined argument parsing and validation.
 - **Dependency Injection:** Seamlessly injects configured **Confluid** objects into your commands.
 - **Rich Integration:** Beautiful terminal output and progress reporting via **Rich**.
 - **Modular Commands:** Register and compose multiple tools into a single entry point.
@@ -31,7 +31,6 @@
 ```python
 from liquify import LiquifyApp, LiquifyContext
 from confluid import configurable
-import typer
 
 @configurable
 class MyTrainer:
