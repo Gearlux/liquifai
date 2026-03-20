@@ -1,6 +1,4 @@
-import typer
-
-from liquify import LiquifyApp, LiquifyContext
+from liquify import LiquifyApp, get_context
 
 app = LiquifyApp(name="basic-app")
 
@@ -12,11 +10,12 @@ def hello(name: str = "World") -> None:
 
 
 @app.command()
-def info(ctx: typer.Context) -> None:
+def info() -> None:
     """Show information about the application context."""
-    liquify_ctx: LiquifyContext = ctx.obj
-    print(f"App Name: {liquify_ctx.name}")
-    print(f"Debug Mode: {liquify_ctx.debug}")
+    ctx = get_context()
+    if ctx:
+        print(f"App Name: {ctx.name}")
+        print(f"Debug Mode: {ctx.debug}")
 
 
 if __name__ == "__main__":

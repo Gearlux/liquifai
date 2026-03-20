@@ -1,8 +1,7 @@
 import confluid
 import logflow
-import typer
 
-from liquify import LiquifyApp, LiquifyContext
+from liquify import LiquifyApp, get_context
 
 # --- 1. Define Configurable Components ---
 
@@ -72,12 +71,13 @@ def train(trainer: Trainer, name: str = "Experiment") -> None:
 
 
 @app.command()
-def status(ctx: typer.Context) -> None:
+def status() -> None:
     """Show the current configuration status."""
-    liquify_ctx: LiquifyContext = ctx.obj
-    print(f"App: {liquify_ctx.name}")
-    print(f"Config File: {liquify_ctx.config_path}")
-    print(f"Active Scopes: {liquify_ctx.scopes}")
+    ctx = get_context()
+    if ctx:
+        print(f"App: {ctx.name}")
+        print(f"Config File: {ctx.config_path}")
+        print(f"Active Scopes: {ctx.scopes}")
 
 
 if __name__ == "__main__":

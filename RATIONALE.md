@@ -7,14 +7,14 @@
 
 ## The Landscape: Why Liquify?
 
-While libraries like **Click** and **Typer** provide excellent CLI engines, they lack the specialized "bootstrap" logic required for complex ML and HPC workloads.
+While libraries like **Click** and **Typer** provide excellent CLI engines, Liquify provides the specialized "bootstrap" logic required for complex ML and HPC workloads without external CLI dependencies.
 
 | Challenge | Liquify Solution |
 | :--- | :--- |
 | **Boilerplate Startup** | Liquify automatically initializes **LogFlow** and **Confluid** based on global CLI flags (`--config`, `--scope`). |
 | **Scattered Config** | All command arguments and configuration values are unified via **Confluid** before execution. |
 | **Manual Injection** | Liquify inspects command signatures and automatically injects configured objects (Models, Trainers) using the **Fluid** pattern. |
-| **Fragile CLI Apps** | Built on **Typer**, ensuring strict type validation for all command-line inputs. |
+| **Fragile CLI Apps** | Built as a pure-Python framework with strict type validation for all command-line inputs. |
 
 ---
 
@@ -36,7 +36,7 @@ Applications are built by composing standalone commands. This allows for a "Plug
 ---
 
 ## Design Goals
-- **Type-Safe by Design:** Leverage Typer and Pydantic for end-to-end validation.
+- **Type-Safe by Design:** Leverage modern Python type hints for end-to-end validation.
 - **Convention over Configuration:** Sensible defaults for ML projects (e.g., searching for `logflow.yaml` automatically).
 - **Beautiful UI:** Integrated with **Rich** for colored, human-readable terminal output and progress bars.
 - **Reproducibility:** Every Liquify command execution is backed by a serializable Confluid state.
