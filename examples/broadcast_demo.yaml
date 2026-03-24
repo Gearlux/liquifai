@@ -1,0 +1,7 @@
+Trainer:
+  train:
+    !class:DataLoader
+    name: train
+  test:
+    !class:DataLoader
+    name: test
