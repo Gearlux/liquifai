@@ -171,11 +171,30 @@ class LiquifyApp:
 
         from confluid import deep_merge, expand_dotted_keys, parse_value
 
-        overrides = {
-            args[i][2:]: parse_value(args[i + 1])
-            for i in range(len(args) - 1)
-            if args[i].startswith("--") and not args[i + 1].startswith("--")
-        }
+        overrides = {}
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("--"):
+                key = arg[2:]
+                # Check for polarity suffixes
+                if key.endswith("+"):
+                    overrides[key[:-1]] = True
+                    i += 1
+                elif key.endswith("-"):
+                    overrides[key[:-1]] = False
+                    i += 1
+                elif i + 1 < len(args) and not args[i + 1].startswith("--"):
+                    # Standard key-value pair
+                    overrides[key] = parse_value(args[i + 1])
+                    i += 2
+                else:
+                    # Implicit boolean True (standard CLI flag behavior)
+                    overrides[key] = True
+                    i += 1
+            else:
+                # Skip non-flag arguments (shouldn't happen in this stage usually)
+                i += 1
 
         if overrides:
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")

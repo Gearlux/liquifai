@@ -16,17 +16,23 @@ app = LiquifyApp(name="bool-demo")
 @app.command(default=True)
 def main(config: NetworkConfig, dry_run: bool = False) -> None:
     """
-    Demonstrate passing boolean values via CLI overrides.
+    Demonstrate passing boolean values via CLI overrides using Suffix Polarity.
 
     Usage Examples:
       1. Default values:
          python boolean_flags.py
 
-      2. Override configurable object fields:
-         python boolean_flags.py --config.use_ssl false --config.retry_on_failure true
+      2. Single-argument Positive polarity (+):
+         python boolean_flags.py --config.retry_on_failure+
 
-      3. Override primitive command arguments:
-         python boolean_flags.py --dry_run true
+      3. Single-argument Negative polarity (-):
+         python boolean_flags.py --config.use_ssl-
+
+      4. Implicit Positive (standard flag):
+         python boolean_flags.py --dry_run
+
+      5. Mixed:
+         python boolean_flags.py --dry_run+ --config.use_ssl-
     """
     print(f"Network Config -> use_ssl: {config.use_ssl} (type: {type(config.use_ssl).__name__})")
     print(
