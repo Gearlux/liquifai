@@ -62,8 +62,9 @@ def test_apply_overrides(tmp_path: Path, monkeypatch: Any) -> None:
     app.run()
 
     assert captured_config is not None
-    assert captured_config["model"]["layers"] == 10
-    assert captured_config["model"]["name"] == "new"
+    # In simplified mode, overrides stay flat in config_data
+    assert captured_config["model.layers"] == 10
+    assert captured_config["model.name"] == "new"
 
 
 def test_help_menu(capsys: Any, monkeypatch: Any) -> None:
