@@ -169,7 +169,7 @@ class LiquifyApp:
         if not self.context or not args:
             return
 
-        from confluid import deep_merge, expand_dotted_keys, parse_value
+        from confluid import deep_merge, parse_value
 
         overrides = {}
         i = 0
@@ -193,12 +193,13 @@ class LiquifyApp:
                     overrides[key] = True
                     i += 1
             else:
-                # Skip non-flag arguments (shouldn't happen in this stage usually)
+                # Skip non-flag arguments
                 i += 1
 
         if overrides:
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")
-            self.context.config_data = deep_merge(self.context.config_data, expand_dotted_keys(overrides))
+            # Overlay directly into config_data (materialize handles broadcasting)
+            self.context.config_data = deep_merge(self.context.config_data, overrides)
             self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
