@@ -54,10 +54,6 @@ class LiquifyApp:
         """Main entry point for the CLI."""
         argv = sys.argv[1:]
 
-        if "--help" in argv or (not argv and not self._default_cmd):
-            self._show_help()
-            return
-
         # 1. IDENTIFY COMMAND & PROMOTION
         config_path, cmd_name, remaining_argv = None, None, []
 
@@ -75,23 +71,29 @@ class LiquifyApp:
                 remaining_argv.append(arg)
                 i += 1
 
-        # 2. PARSE GLOBALS
+        target_func = self._commands.get(cmd_name) if cmd_name else self._default_cmd
+
+        # 2. Check for help
+        if "--help" in argv or (not argv and not self._default_cmd):
+            self._show_help(target_func)
+            return
+
+        # 3. PARSE GLOBALS
         final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(remaining_argv)
         if final_config_path:
             config_path = final_config_path
 
-        # 3. INITIALIZE STATE
+        # 4. INITIALIZE STATE
         self.context = LiquifyContext(
             name=self.name, config_path=config_path, scopes=scopes, debug=debug, **log_overrides
         )
         set_context(self.context)
         self._bootstrap()
 
-        # 4. APPLY OVERRIDES
+        # 5. APPLY OVERRIDES
         self._apply_overrides(final_argv)
 
-        # 5. EXECUTE
-        target_func = self._commands.get(cmd_name) if cmd_name else self._default_cmd
+        # 6. EXECUTE
         if not target_func:
             console.print(f"[red]Error:[/red] Unknown command '{cmd_name}'")
             sys.exit(1)
@@ -241,18 +243,29 @@ class LiquifyApp:
 
         return func(**kwargs)
 
-    def _show_help(self) -> None:
+    def _show_help(self, target_func: Optional[Callable[..., Any]] = None) -> None:
         """Beautiful help menu via Rich."""
-        console.print(f"\n[bold]{self.name.upper()}[/bold] - Modular Septet Framework\n")
-        table = Table(box=None, padding=(0, 2))
-        table.add_column("Command", style="cyan")
-        table.add_column("Description")
+        console.print(f"\n[bold]{self.name.upper()}[/bold] - Modular Septet Framework")
 
-        for name, func in sorted(self._commands.items()):
-            desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
-            table.add_row(name, desc)
+        if target_func:
+            desc = target_func.__doc__ or "No description."
+            console.print(f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}")
+            console.print(f"[dim]{desc.strip()}[/dim]")
 
-        console.print(table)
+            from liquify.report import show_configuration
+
+            show_configuration(target_func, title="Command Configuration Options")
+        else:
+            table = Table(box=None, padding=(0, 2))
+            table.add_column("Command", style="cyan")
+            table.add_column("Description")
+
+            for name, func in sorted(self._commands.items()):
+                desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
+                table.add_row(name, desc)
+
+            console.print(table)
+
         console.print("\n[bold]Global Options:[/bold]")
         console.print("  -c, --config PATH    Configuration file.")
         console.print("  -s, --scope NAME     Active scope(s).")

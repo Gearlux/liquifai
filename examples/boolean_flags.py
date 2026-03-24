@@ -6,6 +6,13 @@ from liquify import LiquifyApp
 @configurable
 class NetworkConfig:
     def __init__(self, use_ssl: bool = True, retry_on_failure: bool = False):
+        """
+        Configuration for network connectivity.
+
+        Args:
+            use_ssl: Enable SSL encryption for all connections.
+            retry_on_failure: Automatically retry failed requests.
+        """
         self.use_ssl = use_ssl
         self.retry_on_failure = retry_on_failure
 
@@ -18,21 +25,9 @@ def main(config: NetworkConfig, dry_run: bool = False) -> None:
     """
     Demonstrate passing boolean values via CLI overrides using Suffix Polarity.
 
-    Usage Examples:
-      1. Default values:
-         python boolean_flags.py
-
-      2. Single-argument Positive polarity (+):
-         python boolean_flags.py --config.retry_on_failure+
-
-      3. Single-argument Negative polarity (-):
-         python boolean_flags.py --config.use_ssl-
-
-      4. Implicit Positive (standard flag):
-         python boolean_flags.py --dry_run
-
-      5. Mixed:
-         python boolean_flags.py --dry_run+ --config.use_ssl-
+    Args:
+        config: Injected network settings.
+        dry_run: If enabled, no real actions will be performed.
     """
     print(f"Network Config -> use_ssl: {config.use_ssl} (type: {type(config.use_ssl).__name__})")
     print(
