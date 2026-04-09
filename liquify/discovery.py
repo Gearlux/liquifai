@@ -33,6 +33,10 @@ def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int
     current_prefix = f"{prefix}.{node_name}" if prefix and node_name else (node_name or prefix)
 
     # 2. Inspect attributes
+    from confluid import Fluid, get_registry
+
+    reg = get_registry()
+
     for attr_name in dir(obj):
         if attr_name.startswith("_"):
             continue
@@ -40,20 +44,49 @@ def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int
         try:
             attr_val = getattr(obj, attr_name)
 
-            # Check visibility markers
+            # Check visibility markers on class member and instance value
             member = getattr(cls, attr_name, None)
             if member and getattr(member, "__confluid_ignore__", False):
                 continue
             if getattr(attr_val, "__confluid_ignore__", False):
                 continue
 
-            full_path = f"{current_prefix}.{attr_name}" if current_prefix else attr_name
-
+            # 1. Handle Configurable Instances (Existing logic)
             if hasattr(attr_val.__class__, "__confluid_configurable__"):
-                # Recurse into configurable sub-objects
                 paths.update(get_configurable_paths(attr_val, current_prefix, visited))
+
+            # 2. Handle Deferred Classes (type objects registered in Confluid)
+            elif isinstance(attr_val, type) and reg.is_configurable(attr_val):
+                from confluid import get_hierarchy
+
+                hierarchy = get_hierarchy(attr_val)
+                for h_path, _ in hierarchy.items():
+                    # Hierarchy returns 'ClassName.param', we want 'current_prefix.param'
+                    # Strip the ClassName and prepend current_prefix
+                    param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
+                    full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
+                    paths[full_p] = None  # Value is unknown for a class-only default
+
+            # 3. Handle Fluid Proxies
+            elif isinstance(attr_val, Fluid):
+                # Recurse into the Fluid's target class
+                from confluid import get_hierarchy
+
+                target = attr_val.target
+                if isinstance(target, str):
+                    target = reg.get_class(target)
+
+                if target:
+                    hierarchy = get_hierarchy(target)
+                    for h_path, _ in hierarchy.items():
+                        param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
+                        full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
+                        # Use Fluid's kwarg value if present, otherwise None
+                        paths[full_p] = attr_val.kwargs.get(param_name)
+
             elif not callable(attr_val):
                 # Leaf attribute
+                full_path = f"{current_prefix}.{attr_name}" if current_prefix else attr_name
                 paths[full_path] = attr_val
 
         except Exception:
