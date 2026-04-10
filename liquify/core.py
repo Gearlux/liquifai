@@ -200,8 +200,9 @@ class LiquifyApp:
 
         if overrides:
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")
-            # Overlay directly into config_data (materialize handles broadcasting)
             self.context.config_data = deep_merge(self.context.config_data, overrides)
+            # Push overrides into Fluid kwargs (Class objects from YAML)
+            _merge_overrides_into_fluids(self.context.config_data, overrides)
             self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
@@ -222,7 +223,11 @@ class LiquifyApp:
         for name, param in sig.parameters.items():
             if reg.is_configurable(param.annotation):
                 cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
-                config_block = self.context.config_data.get(cls_name) or self.context.config_data.get(name) or {}
+                config_block = (
+                    self.context.config_data.get(cls_name)
+                    or self.context.config_data.get(name)
+                    or self.context.config_data
+                )
 
                 self.context.logger.debug(
                     f"DI: Resolving {name} ({cls_name}). Block keys: "
@@ -272,3 +277,21 @@ class LiquifyApp:
         console.print("  -d, --debug          Enable debug mode.")
         console.print("  --level LEVEL        Set log level (TRACE, DEBUG, INFO).")
         console.print("")
+
+
+def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
+    """Merge CLI overrides into Fluid kwargs throughout the config tree."""
+    from confluid.fluid import Fluid
+
+    if isinstance(data, Fluid):
+        for k, v in overrides.items():
+            if k in data.kwargs:
+                data.kwargs[k] = v
+        for v in data.kwargs.values():
+            _merge_overrides_into_fluids(v, overrides)
+    elif isinstance(data, dict):
+        for v in data.values():
+            _merge_overrides_into_fluids(v, overrides)
+    elif isinstance(data, list):
+        for item in data:
+            _merge_overrides_into_fluids(item, overrides)
