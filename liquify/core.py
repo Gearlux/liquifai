@@ -19,12 +19,19 @@ logger = get_logger("liquify.core")
 class LiquifyApp:
     """Pure Python CLI Framework without Typer/Click baggage."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, description: str = "") -> None:
         self.name = name
+        self.description = description
         self.context: Optional[LiquifyContext] = None
         self._commands: Dict[str, Callable[..., Any]] = {}
+        self._sub_apps: Dict[str, "LiquifyApp"] = {}
         self._default_cmd: Optional[Callable[..., Any]] = None
         self._script_cmds: Set[str] = set()
+
+    def add_app(self, app: "LiquifyApp", name: Optional[str] = None) -> None:
+        """Mount a sub-application to support nested command groups (infinitely sub-appable)."""
+        group_name = name or app.name
+        self._sub_apps[group_name] = app
 
     def command(
         self, name: Optional[str] = None, default: bool = False
@@ -54,16 +61,22 @@ class LiquifyApp:
         """Main entry point for the CLI."""
         argv = sys.argv[1:]
 
-        # 1. IDENTIFY COMMAND & PROMOTION
+        # 1. IDENTIFY COMMAND, GROUP & PROMOTION
         config_path, cmd_name, remaining_argv = None, None, []
+        target_app = self
+        target_func = None
 
         i = 0
         while i < len(argv):
             arg = argv[i]
-            if arg in self._commands and not cmd_name:
-                cmd_name = arg
+            if not target_func and arg in target_app._sub_apps:
+                target_app = target_app._sub_apps[arg]
                 i += 1
-                if cmd_name in self._script_cmds and i < len(argv) and not argv[i].startswith("-"):
+            elif not target_func and arg in target_app._commands:
+                cmd_name = arg
+                target_func = target_app._commands[cmd_name]
+                i += 1
+                if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
                     cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
                     if cp.exists():
                         config_path, i = cp, i + 1
@@ -71,11 +84,12 @@ class LiquifyApp:
                 remaining_argv.append(arg)
                 i += 1
 
-        target_func = self._commands.get(cmd_name) if cmd_name else self._default_cmd
+        if not target_func:
+            target_func = target_app._default_cmd
 
         # 2. Check for help
-        if "--help" in argv or (not argv and not self._default_cmd):
-            self._show_help(target_func)
+        if "--help" in argv or (not argv and not target_app._default_cmd):
+            self._show_help(target_app, target_func)
             return
 
         # 3. PARSE GLOBALS
@@ -95,7 +109,7 @@ class LiquifyApp:
 
         # 6. EXECUTE
         if not target_func:
-            console.print(f"[red]Error:[/red] Unknown command '{cmd_name}'")
+            console.print("[red]Error:[/red] Unknown command or group")
             sys.exit(1)
 
         return self.run_command(target_func)
@@ -248,9 +262,11 @@ class LiquifyApp:
 
         return func(**kwargs)
 
-    def _show_help(self, target_func: Optional[Callable[..., Any]] = None) -> None:
+    def _show_help(self, app: "LiquifyApp", target_func: Optional[Callable[..., Any]] = None) -> None:
         """Beautiful help menu via Rich."""
-        console.print(f"\n[bold]{self.name.upper()}[/bold] - Modular Septet Framework")
+        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Septet Framework")
+        if app.description:
+            console.print(f"[dim]{app.description}[/dim]")
 
         if target_func:
             desc = target_func.__doc__ or "No description."
@@ -262,10 +278,14 @@ class LiquifyApp:
             show_configuration(target_func, title="Command Configuration Options")
         else:
             table = Table(box=None, padding=(0, 2))
-            table.add_column("Command", style="cyan")
+            table.add_column("Command/Group", style="cyan")
             table.add_column("Description")
 
-            for name, func in sorted(self._commands.items()):
+            for name, sub_app in sorted(app._sub_apps.items()):
+                desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
+                table.add_row(name, desc)
+
+            for name, func in sorted(app._commands.items()):
                 desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
                 table.add_row(name, desc)
 
