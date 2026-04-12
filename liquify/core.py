@@ -87,8 +87,8 @@ class LiquifyApp:
         if not target_func:
             target_func = target_app._default_cmd
 
-        # 2. Check for help
-        if "--help" in argv or (not argv and not target_app._default_cmd):
+        # 2. Check for help (also show help when subgroup reached without a command)
+        if "--help" in argv or (not target_func and not target_app._default_cmd):
             self._show_help(target_app, target_func)
             return
 

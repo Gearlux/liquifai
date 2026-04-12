@@ -133,6 +133,26 @@ def test_default_command(monkeypatch: Any) -> None:
     assert called is True
 
 
+def test_subgroup_without_command_shows_help(monkeypatch: Any, capsys: Any) -> None:
+    app = LiquifyApp(name="test-app", description="Root app.")
+    sub = LiquifyApp(name="sub", description="Sub group.")
+    app.add_app(sub)
+
+    @sub.command()
+    def hello() -> None:
+        """Say hello."""
+        pass
+
+    monkeypatch.setattr(sys, "argv", ["test-app", "sub"])
+
+    app.run()
+
+    captured = capsys.readouterr()
+    assert "SUB" in captured.out
+    assert "hello" in captured.out
+    assert "Say hello." in captured.out
+
+
 def test_missing_config(monkeypatch: Any, capsys: Any) -> None:
     app = LiquifyApp(name="test-app")
 
