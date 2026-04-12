@@ -73,11 +73,10 @@ def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int
                 from confluid import get_hierarchy
 
                 target = attr_val.target
-                if isinstance(target, str):
-                    target = reg.get_class(target)
+                cls_to_inspect = reg.get_class(target) if isinstance(target, str) else target
 
-                if target:
-                    hierarchy = get_hierarchy(target)
+                if cls_to_inspect:
+                    hierarchy = get_hierarchy(cls_to_inspect)
                     for h_path, _ in hierarchy.items():
                         param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
                         full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
