@@ -1,7 +1,7 @@
 Trainer:
   train:
-    !class:DataLoader
+    !class:DataLoader()
     name: train
   test:
-    !class:DataLoader
+    !class:DataLoader()
     name: test
