@@ -35,8 +35,8 @@ def test_nested_di_with_overrides(tmp_path: Path, monkeypatch: Any) -> None:
     # 1. Setup Config File
     config_content = """
 MockTop:
-  mid: !class:MockMid
-    sub: !class:MockSub
+  mid: !class:MockMid()
+    sub: !class:MockSub()
       value: 10
   name: "root"
 

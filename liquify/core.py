@@ -19,12 +19,19 @@ logger = get_logger("liquify.core")
 class LiquifyApp:
     """Pure Python CLI Framework without Typer/Click baggage."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, description: str = "") -> None:
         self.name = name
+        self.description = description
         self.context: Optional[LiquifyContext] = None
         self._commands: Dict[str, Callable[..., Any]] = {}
+        self._sub_apps: Dict[str, "LiquifyApp"] = {}
         self._default_cmd: Optional[Callable[..., Any]] = None
         self._script_cmds: Set[str] = set()
+
+    def add_app(self, app: "LiquifyApp", name: Optional[str] = None) -> None:
+        """Mount a sub-application to support nested command groups (infinitely sub-appable)."""
+        group_name = name or app.name
+        self._sub_apps[group_name] = app
 
     def command(
         self, name: Optional[str] = None, default: bool = False
@@ -54,20 +61,22 @@ class LiquifyApp:
         """Main entry point for the CLI."""
         argv = sys.argv[1:]
 
-        if "--help" in argv or (not argv and not self._default_cmd):
-            self._show_help()
-            return
-
-        # 1. IDENTIFY COMMAND & PROMOTION
+        # 1. IDENTIFY COMMAND, GROUP & PROMOTION
         config_path, cmd_name, remaining_argv = None, None, []
+        target_app = self
+        target_func = None
 
         i = 0
         while i < len(argv):
             arg = argv[i]
-            if arg in self._commands and not cmd_name:
-                cmd_name = arg
+            if not target_func and arg in target_app._sub_apps:
+                target_app = target_app._sub_apps[arg]
                 i += 1
-                if cmd_name in self._script_cmds and i < len(argv) and not argv[i].startswith("-"):
+            elif not target_func and arg in target_app._commands:
+                cmd_name = arg
+                target_func = target_app._commands[cmd_name]
+                i += 1
+                if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
                     cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
                     if cp.exists():
                         config_path, i = cp, i + 1
@@ -75,25 +84,32 @@ class LiquifyApp:
                 remaining_argv.append(arg)
                 i += 1
 
-        # 2. PARSE GLOBALS
+        if not target_func:
+            target_func = target_app._default_cmd
+
+        # 2. Check for help (also show help when subgroup reached without a command)
+        if "--help" in argv or (not target_func and not target_app._default_cmd):
+            self._show_help(target_app, target_func)
+            return
+
+        # 3. PARSE GLOBALS
         final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(remaining_argv)
         if final_config_path:
             config_path = final_config_path
 
-        # 3. INITIALIZE STATE
+        # 4. INITIALIZE STATE
         self.context = LiquifyContext(
             name=self.name, config_path=config_path, scopes=scopes, debug=debug, **log_overrides
         )
         set_context(self.context)
         self._bootstrap()
 
-        # 4. APPLY OVERRIDES
+        # 5. APPLY OVERRIDES
         self._apply_overrides(final_argv)
 
-        # 5. EXECUTE
-        target_func = self._commands.get(cmd_name) if cmd_name else self._default_cmd
+        # 6. EXECUTE
         if not target_func:
-            console.print(f"[red]Error:[/red] Unknown command '{cmd_name}'")
+            console.print("[red]Error:[/red] Unknown command or group")
             sys.exit(1)
 
         return self.run_command(target_func)
@@ -169,17 +185,38 @@ class LiquifyApp:
         if not self.context or not args:
             return
 
-        from confluid import deep_merge, expand_dotted_keys, parse_value
+        from confluid import deep_merge, parse_value
 
-        overrides = {
-            args[i][2:]: parse_value(args[i + 1])
-            for i in range(len(args) - 1)
-            if args[i].startswith("--") and not args[i + 1].startswith("--")
-        }
+        overrides = {}
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("--"):
+                key = arg[2:]
+                # Check for polarity suffixes
+                if key.endswith("+"):
+                    overrides[key[:-1]] = True
+                    i += 1
+                elif key.endswith("-"):
+                    overrides[key[:-1]] = False
+                    i += 1
+                elif i + 1 < len(args) and not args[i + 1].startswith("--"):
+                    # Standard key-value pair
+                    overrides[key] = parse_value(args[i + 1])
+                    i += 2
+                else:
+                    # Implicit boolean True (standard CLI flag behavior)
+                    overrides[key] = True
+                    i += 1
+            else:
+                # Skip non-flag arguments
+                i += 1
 
         if overrides:
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")
-            self.context.config_data = deep_merge(self.context.config_data, expand_dotted_keys(overrides))
+            self.context.config_data = deep_merge(self.context.config_data, overrides)
+            # Push overrides into Fluid kwargs (Class objects from YAML)
+            _merge_overrides_into_fluids(self.context.config_data, overrides)
             self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
@@ -200,7 +237,11 @@ class LiquifyApp:
         for name, param in sig.parameters.items():
             if reg.is_configurable(param.annotation):
                 cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
-                config_block = self.context.config_data.get(cls_name) or self.context.config_data.get(name) or {}
+                config_block = (
+                    self.context.config_data.get(cls_name)
+                    or self.context.config_data.get(name)
+                    or self.context.config_data
+                )
 
                 self.context.logger.debug(
                     f"DI: Resolving {name} ({cls_name}). Block keys: "
@@ -221,21 +262,56 @@ class LiquifyApp:
 
         return func(**kwargs)
 
-    def _show_help(self) -> None:
+    def _show_help(self, app: "LiquifyApp", target_func: Optional[Callable[..., Any]] = None) -> None:
         """Beautiful help menu via Rich."""
-        console.print(f"\n[bold]{self.name.upper()}[/bold] - Modular Septet Framework\n")
-        table = Table(box=None, padding=(0, 2))
-        table.add_column("Command", style="cyan")
-        table.add_column("Description")
+        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Septet Framework")
+        if app.description:
+            console.print(f"[dim]{app.description}[/dim]")
 
-        for name, func in sorted(self._commands.items()):
-            desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
-            table.add_row(name, desc)
+        if target_func:
+            desc = target_func.__doc__ or "No description."
+            console.print(f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}")
+            console.print(f"[dim]{desc.strip()}[/dim]")
 
-        console.print(table)
+            from liquify.report import show_configuration
+
+            show_configuration(target_func, title="Command Configuration Options")
+        else:
+            table = Table(box=None, padding=(0, 2))
+            table.add_column("Command/Group", style="cyan")
+            table.add_column("Description")
+
+            for name, sub_app in sorted(app._sub_apps.items()):
+                desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
+                table.add_row(name, desc)
+
+            for name, func in sorted(app._commands.items()):
+                desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
+                table.add_row(name, desc)
+
+            console.print(table)
+
         console.print("\n[bold]Global Options:[/bold]")
         console.print("  -c, --config PATH    Configuration file.")
         console.print("  -s, --scope NAME     Active scope(s).")
         console.print("  -d, --debug          Enable debug mode.")
         console.print("  --level LEVEL        Set log level (TRACE, DEBUG, INFO).")
         console.print("")
+
+
+def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
+    """Merge CLI overrides into Fluid kwargs throughout the config tree."""
+    from confluid.fluid import Fluid
+
+    if isinstance(data, Fluid):
+        for k, v in overrides.items():
+            if k in data.kwargs:
+                data.kwargs[k] = v
+        for v in data.kwargs.values():
+            _merge_overrides_into_fluids(v, overrides)
+    elif isinstance(data, dict):
+        for v in data.values():
+            _merge_overrides_into_fluids(v, overrides)
+    elif isinstance(data, list):
+        for item in data:
+            _merge_overrides_into_fluids(item, overrides)
