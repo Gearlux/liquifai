@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 import confluid
 import logflow
 
@@ -81,4 +84,10 @@ def status() -> None:
 
 
 if __name__ == "__main__":
+    # Auto-load the companion config if not provided
+    if "--config" not in sys.argv and "-c" not in sys.argv:
+        default_yaml = Path(__file__).parent / "demo_config.yaml"
+        if default_yaml.exists():
+            sys.argv.extend(["--config", str(default_yaml)])
+
     app.run()
