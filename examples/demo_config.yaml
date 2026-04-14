@@ -5,4 +5,4 @@ Model:
 
 Trainer:
   epochs: 3
-  model: "@Model()" # Explicit dependency injection
+  model: !class:Model()
