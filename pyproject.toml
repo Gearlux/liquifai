@@ -7,7 +7,7 @@ name = "liquify"
 version = "0.1.0"
 description = "A streamlined, type-safe application framework for Python ML/HPC."
 readme = "README.md"
-authors = [{name = "gearlux"}]
+authors = [{name = "Taidal"}]
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -35,8 +35,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gearlux/liquify"
-Repository = "https://github.com/gearlux/liquify.git"
+Homepage = "https://github.com/Gearlux/liquify"
+Repository = "https://github.com/Gearlux/liquify.git"
 
 [tool.setuptools.packages.find]
 where = ["."]
