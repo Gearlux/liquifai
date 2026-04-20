@@ -2,8 +2,8 @@ from typing import Any, Optional
 
 import confluid
 
-from liquify.discovery import get_configurable_paths
-from liquify.report import show_configuration
+from liquifai.discovery import get_configurable_paths
+from liquifai.report import show_configuration
 
 
 @confluid.configurable

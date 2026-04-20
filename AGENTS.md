@@ -9,11 +9,11 @@ To run the full quality suite for Liquify, execute the following commands from t
 
 ```bash
 # From ~/source
-isort --settings-file liquify/pyproject.toml liquify
-black --config liquify/pyproject.toml liquify
-flake8 --config liquify/.flake8 liquify
-mypy --config-file mypy.ini liquify
-pytest --cov=liquify --cov-report=term-missing liquify/tests
+isort --settings-file liquifai/pyproject.toml liquifai
+black --config liquifai/pyproject.toml liquifai
+flake8 --config liquifai/.flake8 liquifai
+mypy --config-file mypy.ini liquifai
+pytest --cov=liquifai --cov-report=term-missing liquifai/tests
 ```
 
 **Note:** Always use the root `mypy.ini` for cross-project type checking, as it contains the correct `mypy_path` for all internal packages.

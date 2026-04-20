@@ -4,7 +4,7 @@ from pathlib import Path
 import confluid
 import logflow
 
-from liquify import LiquifyApp, get_context
+from liquifai import LiquifyApp, get_context
 
 # --- 1. Define Configurable Components ---
 
@@ -52,7 +52,7 @@ class Trainer:
 
 # --- 2. Initialize Liquify Application ---
 
-app = LiquifyApp(name="liquify-demo")
+app = LiquifyApp(name="liquifai-demo")
 
 
 @app.command(default=True)

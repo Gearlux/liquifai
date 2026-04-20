@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from liquify import LiquifyApp, LiquifyContext
+from liquifai import LiquifyApp, LiquifyContext
 
 
 def test_bootstrap_logic_direct(tmp_path: Path) -> None:

@@ -1,4 +1,4 @@
-from liquify import LiquifyApp, get_context
+from liquifai import LiquifyApp, get_context
 
 app = LiquifyApp(name="basic-app")
 

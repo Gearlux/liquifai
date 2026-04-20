@@ -4,8 +4,8 @@ from typing import Any
 
 from confluid import configurable
 
-from liquify import LiquifyApp
-from liquify.context import set_context
+from liquifai import LiquifyApp
+from liquifai.context import set_context
 
 
 @configurable

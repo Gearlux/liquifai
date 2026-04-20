@@ -2,8 +2,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from liquify import LiquifyApp, LiquifyContext
-from liquify.context import set_context
+from liquifai import LiquifyApp, LiquifyContext
+from liquifai.context import set_context
 
 
 def test_app_initialization(capsys: Any, monkeypatch: Any) -> None:

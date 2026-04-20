@@ -3,8 +3,8 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from liquify import LiquifyApp
-from liquify.context import set_context
+from liquifai import LiquifyApp
+from liquifai.context import set_context
 
 
 @pytest.fixture(autouse=True)
