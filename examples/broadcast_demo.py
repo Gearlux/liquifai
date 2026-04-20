@@ -3,7 +3,7 @@ from pathlib import Path
 
 from confluid import configurable
 
-from liquify import LiquifyApp
+from liquifai import LiquifyApp
 
 
 @configurable

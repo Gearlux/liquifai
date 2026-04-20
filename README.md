@@ -29,7 +29,7 @@
 ## Quick Start
 
 ```python
-from liquify import LiquifyApp, LiquifyContext
+from liquifai import LiquifyApp, LiquifyContext
 from confluid import configurable
 
 @configurable
@@ -50,7 +50,7 @@ if __name__ == "__main__":
 
 ## Installation
 ```bash
-pip install git+https://github.com/Gearlux/liquify.git@main
+pip install git+https://github.com/Gearlux/liquifai.git@main
 ```
 
 ## License

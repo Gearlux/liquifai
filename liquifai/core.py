@@ -10,10 +10,10 @@ from logflow import get_logger
 from rich.console import Console
 from rich.table import Table
 
-from liquify.context import LiquifyContext, set_context
+from liquifai.context import LiquifyContext, set_context
 
 console = Console()
-logger = get_logger("liquify.core")
+logger = get_logger("liquifai.core")
 
 
 class LiquifyApp:
@@ -273,7 +273,7 @@ class LiquifyApp:
             console.print(f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}")
             console.print(f"[dim]{desc.strip()}[/dim]")
 
-            from liquify.report import show_configuration
+            from liquifai.report import show_configuration
 
             show_configuration(target_func, title="Command Configuration Options")
         else:
