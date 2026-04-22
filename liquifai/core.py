@@ -89,7 +89,7 @@ class LiquifyApp:
 
         # 2. Check for help (also show help when subgroup reached without a command)
         if "--help" in argv or (not target_func and not target_app._default_cmd):
-            self._show_help(target_app, target_func)
+            self._show_help(target_app, target_func, config_path=config_path)
             return
 
         # 3. PARSE GLOBALS
@@ -223,16 +223,26 @@ class LiquifyApp:
         """Execute with Dependency Injection."""
         if not self.context:
             return func()
+        kwargs = self._resolve_kwargs(func)
+        return func(**kwargs)
+
+    def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
+        """DI-resolve ``func``'s parameters against ``self.context.config_data``.
+
+        Shared between :meth:`run_command` and :meth:`liquify` — the latter
+        needs the same live instances DI would produce, but without actually
+        invoking the command.
+        """
+        assert self.context is not None
 
         self.context.logger.debug(f"DI: Resolving arguments for {func.__name__}")
         self.context.logger.trace(f"DI: Global config keys: {list(self.context.config_data.keys())}")
 
-        sig = inspect.signature(func)
-        kwargs = {}
-
         from confluid import get_registry
 
         reg = get_registry()
+        sig = inspect.signature(func)
+        kwargs: Dict[str, Any] = {}
 
         for name, param in sig.parameters.items():
             if reg.is_configurable(param.annotation):
@@ -260,10 +270,60 @@ class LiquifyApp:
                 elif param.default is not inspect.Parameter.empty:
                     kwargs[name] = param.default
 
-        return func(**kwargs)
+        return kwargs
 
-    def _show_help(self, app: "LiquifyApp", target_func: Optional[Callable[..., Any]] = None) -> None:
-        """Beautiful help menu via Rich."""
+    def liquify(
+        self,
+        target_func: Callable[..., Any],
+        *,
+        config_path: Optional[Path] = None,
+        scopes: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Bootstrap + DI-resolve ``target_func`` into live instances, without calling it.
+
+        Returns the kwargs dict that ``run_command`` would pass to ``target_func`` —
+        the same flowed object graph, but produced without invoking the command.
+        Public hook for tooling that needs the flowed graph (help rendering,
+        graph export, test harnesses).
+
+        If ``config_path`` is None and a context already exists, the current
+        context's config is used verbatim. Otherwise the config is loaded
+        lazily here (no logflow / no CLI override merge — intended for
+        read-only introspection).
+        """
+        if self.context is None:
+            ctx = LiquifyContext(
+                name=self.name,
+                config_path=config_path,
+                scopes=scopes or [],
+                debug=False,
+            )
+            ctx.logger = get_logger(self.name)
+            if config_path is not None:
+                ctx.config_data = confluid.load(config_path, scopes=scopes, flow=False)
+            self.context = ctx
+            set_context(self.context)
+        kwargs = self._resolve_kwargs(target_func)
+        # Deep-flow any unflowed Fluids so callers introspect live instances
+        # all the way down the graph. Bare `flow()` leaves nested Class
+        # kwargs deferred (they flow lazily in production), but the liquify
+        # contract is "fully flowed graph" — introspection tools need every
+        # attribute resolved.
+        return {k: _deep_flow(v) for k, v in kwargs.items()}
+
+    def _show_help(
+        self,
+        app: "LiquifyApp",
+        target_func: Optional[Callable[..., Any]] = None,
+        config_path: Optional[Path] = None,
+    ) -> None:
+        """Beautiful help menu via Rich.
+
+        When a ``config_path`` is known and a ``target_func`` is selected,
+        the help path flows the DI graph via :meth:`liquify` and shows every
+        configurable kwarg reachable through the flowed instance tree. A
+        flow failure downgrades to the static-type view with a brief note.
+        """
         console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Septet Framework")
         if app.description:
             console.print(f"[dim]{app.description}[/dim]")
@@ -275,7 +335,25 @@ class LiquifyApp:
 
             from liquifai.report import show_configuration
 
-            show_configuration(target_func, title="Command Configuration Options")
+            flowed_kwargs: Optional[Dict[str, Any]] = None
+            if config_path is not None:
+                try:
+                    flowed_kwargs = self.liquify(target_func, config_path=config_path)
+                except Exception as exc:
+                    console.print("[dim]Config failed to flow; showing command signature only. " f"Reason: {exc}[/dim]")
+
+            if flowed_kwargs is not None and config_path is not None:
+                console.print(
+                    "[dim]Plain --<name> overrides broadcast to every matching ctor kwarg "
+                    "across the flowed graph.[/dim]"
+                )
+                show_configuration(
+                    target_func,
+                    config_map=flowed_kwargs,
+                    title=f"Command Configuration (flowed from {config_path.name})",
+                )
+            else:
+                show_configuration(target_func, title="Command Configuration Options")
         else:
             table = Table(box=None, padding=(0, 2))
             table.add_column("Command/Group", style="cyan")
@@ -301,13 +379,59 @@ class LiquifyApp:
         console.print("")
 
 
+def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
+    """Recursively flow any ``Fluid`` stubs embedded in ``value``.
+
+    Walks lists, tuples, dicts, and live instances' ``vars()``; any attribute
+    that is still a ``Fluid`` is replaced in-place with the flowed instance.
+    Cycle-safe via ``id(obj)`` tracking. Primitives pass through unchanged.
+    """
+    from confluid import flow
+    from confluid.fluid import Fluid
+
+    if _visited is None:
+        _visited = set()
+
+    if isinstance(value, Fluid):
+        return _deep_flow(flow(value), _visited)
+
+    if isinstance(value, (list, tuple)):
+        out = [_deep_flow(v, _visited) for v in value]
+        return type(value)(out) if isinstance(value, tuple) else out
+
+    if isinstance(value, dict):
+        return {k: _deep_flow(v, _visited) for k, v in value.items()}
+
+    # Live instance: walk its __dict__ and replace any Fluid attrs in place.
+    if hasattr(value, "__dict__") and not isinstance(value, type):
+        vid = id(value)
+        if vid in _visited:
+            return value
+        _visited.add(vid)
+        for attr_name, attr_value in list(vars(value).items()):
+            resolved = _deep_flow(attr_value, _visited)
+            if resolved is not attr_value:
+                try:
+                    setattr(value, attr_name, resolved)
+                except (AttributeError, TypeError):
+                    pass
+    return value
+
+
 def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
     """Merge CLI overrides into Fluid kwargs throughout the config tree."""
     from confluid.fluid import Fluid
 
     if isinstance(data, Fluid):
+        accepted = _accepted_override_keys(data.target)
         for k, v in overrides.items():
-            if k in data.kwargs:
+            # Apply the override if the kwarg is already in YAML (catches the
+            # post-construction setattr pattern like `Enable.visualize`) OR
+            # if the target class accepts it (ctor params always; for
+            # ``@configurable`` classes, also public class-level attributes
+            # that Confluid would setattr at flow time — e.g. @property
+            # setters, plain class attrs).
+            if k in data.kwargs or k in accepted:
                 data.kwargs[k] = v
         for v in data.kwargs.values():
             _merge_overrides_into_fluids(v, overrides)
@@ -317,3 +441,56 @@ def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
     elif isinstance(data, list):
         for item in data:
             _merge_overrides_into_fluids(item, overrides)
+
+
+def _accepted_override_keys(target: Any) -> Set[str]:
+    """Return every attribute name ``target`` accepts as an override.
+
+    For any class: the set of ``__init__`` parameter names.
+
+    For ``@configurable`` classes additionally: every public class-level
+    attribute — that is, any non-dunder, non-underscore name on the class
+    that is not a method, is not a read-only ``@property``, and is not
+    ``__confluid_ignore__``'d. This mirrors Confluid's post-construction
+    setattr pattern — ``flow()`` accepts any extra kwarg that targets a
+    public attribute, so overrides must too.
+
+    ``target`` can be a class, an instance, or the dotted string Confluid
+    uses for deferred class resolution (``!class:module.Cls``). Returns an
+    empty set if the target can't be resolved or introspected.
+    """
+    from confluid.registry import resolve_class
+
+    cls: Any = target
+    if isinstance(cls, str):
+        cls = resolve_class(cls)
+    if cls is None:
+        return set()
+    if not isinstance(cls, type):
+        cls = cls.__class__
+    init = getattr(cls, "__init__", None)
+    if init is None:
+        return set()
+    try:
+        sig = inspect.signature(init)
+    except (ValueError, TypeError):
+        return set()
+    accepted: Set[str] = {p for p in sig.parameters if p not in ("self", "cls", "args", "kwargs")}
+
+    if not getattr(cls, "__confluid_configurable__", False):
+        return accepted
+
+    # @configurable: Confluid setattr-applies any extra kwarg whose target is
+    # a public class attribute. Include those in the accepted set.
+    for name in dir(cls):
+        if name.startswith("_"):
+            continue
+        member = getattr(cls, name, None)
+        if getattr(member, "__confluid_ignore__", False):
+            continue
+        if callable(member) and not isinstance(member, property):
+            continue  # skip bound methods / functions
+        if isinstance(member, property) and member.fset is None:
+            continue  # read-only properties can't accept overrides
+        accepted.add(name)
+    return accepted
