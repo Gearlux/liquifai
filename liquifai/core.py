@@ -292,10 +292,12 @@ class LiquifyApp:
             console.print(table)
 
         console.print("\n[bold]Global Options:[/bold]")
-        console.print("  -c, --config PATH    Configuration file.")
-        console.print("  -s, --scope NAME     Active scope(s).")
-        console.print("  -d, --debug          Enable debug mode.")
-        console.print("  --level LEVEL        Set log level (TRACE, DEBUG, INFO).")
+        console.print("  -c, --config PATH      Configuration file.")
+        console.print("  -s, --scope NAME       Active scope(s).")
+        console.print("  -d, --debug            Enable debug mode.")
+        console.print("  --level LEVEL          Set log level for both sinks (TRACE, DEBUG, INFO).")
+        console.print("  --console-level LEVEL  Set console log level (overrides --level).")
+        console.print("  --file-level LEVEL     Set file log level (overrides --level).")
         console.print("")
 
 
