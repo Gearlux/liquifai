@@ -424,10 +424,19 @@ def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
 
     if isinstance(data, Fluid):
         accepted = _accepted_override_keys(data.target)
+        # If this Fluid has a YAML-set `name: "<id>"`, dotted keys like
+        # `"overlay.visualize"` land here by suffix — targeting this
+        # instance only. Flat keys still broadcast as before.
+        fluid_name = data.kwargs.get("name") if isinstance(data.kwargs, dict) else None
         for k, v in overrides.items():
-            # Apply the override if the kwarg is already in YAML (catches the
+            if fluid_name and "." in k:
+                head, _, tail = k.partition(".")
+                if head == str(fluid_name) and (tail in data.kwargs or tail in accepted):
+                    data.kwargs[tail] = v
+                    continue  # dotted form handled — don't also broadcast-match.
+            # Flat form: apply when the kwarg is already in YAML (catches the
             # post-construction setattr pattern like `Enable.visualize`) OR
-            # if the target class accepts it (ctor params always; for
+            # when the target class accepts it (ctor params always; for
             # ``@configurable`` classes, also public class-level attributes
             # that Confluid would setattr at flow time — e.g. @property
             # setters, plain class attrs).
