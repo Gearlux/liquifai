@@ -106,6 +106,53 @@ def test_merge_preserves_existing_kwarg_override_path() -> None:
     assert fluid.kwargs["max_packs"] == 1
 
 
+def test_dotted_override_targets_instance_by_name() -> None:
+    """`--overlay.visualize true` lands only on the Fluid whose `name: overlay`."""
+    overlay = Class(_WithDefaultKwarg, root="/a", name="overlay")
+    ls = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    _merge_overrides_into_fluids(
+        {"o": overlay, "l": ls},
+        {"overlay.max_packs": 1},
+    )
+    assert overlay.kwargs.get("max_packs") == 1
+    # labelstudio unaffected.
+    assert "max_packs" not in ls.kwargs
+
+
+def test_flat_override_still_broadcasts_to_named_instances() -> None:
+    """Plain `--max_packs 1` continues to broadcast (legacy behaviour preserved)."""
+    a = Class(_WithDefaultKwarg, root="/a", name="overlay")
+    b = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    _merge_overrides_into_fluids(
+        {"a": a, "b": b},
+        {"max_packs": 5},
+    )
+    assert a.kwargs["max_packs"] == 5
+    assert b.kwargs["max_packs"] == 5
+
+
+def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
+    """Unknown names don't fall back to broadcast — avoid surprise matches."""
+    fluid = Class(_WithDefaultKwarg, root="/a", name="overlay")
+    _merge_overrides_into_fluids(
+        {"o": fluid},
+        {"wrong_name.max_packs": 99},
+    )
+    # The dotted head "wrong_name" doesn't match "overlay" — the tail is NOT
+    # applied flatly either, because the user intended a targeted override.
+    assert "max_packs" not in fluid.kwargs
+
+
+def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
+    """Without a YAML `name`, dotted keys can't target the instance."""
+    fluid = Class(_WithDefaultKwarg, root="/a")  # no name
+    _merge_overrides_into_fluids(
+        {"o": fluid},
+        {"overlay.max_packs": 1},
+    )
+    assert "max_packs" not in fluid.kwargs
+
+
 def test_merge_broadcasts_to_nested_fluids() -> None:
     inner = Class(_WithDefaultKwarg, root="/inner")
     outer = Class(_WithDefaultKwarg, root="/outer", sub=inner)
