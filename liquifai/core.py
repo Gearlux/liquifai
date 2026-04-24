@@ -239,6 +239,7 @@ class LiquifyApp:
         self.context.logger.trace(f"DI: Global config keys: {list(self.context.config_data.keys())}")
 
         from confluid import get_registry
+        from confluid.fluid import Fluid
 
         reg = get_registry()
         sig = inspect.signature(func)
@@ -258,11 +259,17 @@ class LiquifyApp:
                     f"{list(config_block.keys()) if isinstance(config_block, dict) else 'N/A'}"
                 )
 
-                marker_dict = {
-                    "_confluid_class_": cls_name,
-                    **(config_block if isinstance(config_block, dict) else {}),
-                }
-                kwargs[name] = materialize(marker_dict, context=self.context.config_data)
+                if isinstance(config_block, Fluid):
+                    # User wrote `name: !class:...` — the Fluid already carries
+                    # the full kwargs; materialize it directly so its payload
+                    # isn't discarded by the marker-dict path below.
+                    kwargs[name] = materialize(config_block, context=self.context.config_data)
+                else:
+                    marker_dict = {
+                        "_confluid_class_": cls_name,
+                        **(config_block if isinstance(config_block, dict) else {}),
+                    }
+                    kwargs[name] = materialize(marker_dict, context=self.context.config_data)
             else:
                 # Non-configurable: Resolve from context data or use default
                 if name in self.context.config_data:
