@@ -69,12 +69,7 @@ def test_injection_without_config(monkeypatch: Any) -> None:
 def test_injection_from_tagged_top_level_fluid(tmp_path: Path, monkeypatch: Any) -> None:
     """``trainer: !class:...`` binds the Fluid's kwargs instead of dropping them."""
     config_file = tmp_path / "inject_tagged.yaml"
-    config_file.write_text(
-        "trainer: !class:MyTrainer\n"
-        "  lr: 0.0007\n"
-        "model: !class:MyModel\n"
-        "  layers: 42\n"
-    )
+    config_file.write_text("trainer: !class:MyTrainer\n" "  lr: 0.0007\n" "model: !class:MyModel\n" "  layers: 42\n")
 
     app = LiquifyApp(name="tagged-app")
     captured: Dict[str, Any] = {}
