@@ -64,3 +64,28 @@ def test_injection_without_config(monkeypatch: Any) -> None:
     app.run()
 
     assert captured["model"].layers == 3  # Default value
+
+
+def test_injection_from_tagged_top_level_fluid(tmp_path: Path, monkeypatch: Any) -> None:
+    """``trainer: !class:...`` binds the Fluid's kwargs instead of dropping them."""
+    config_file = tmp_path / "inject_tagged.yaml"
+    config_file.write_text("trainer: !class:MyTrainer\n" "  lr: 0.0007\n" "model: !class:MyModel\n" "  layers: 42\n")
+
+    app = LiquifyApp(name="tagged-app")
+    captured: Dict[str, Any] = {}
+
+    @app.command()
+    def train(trainer: MyTrainer, model: MyModel) -> None:
+        captured["trainer"] = trainer
+        captured["model"] = model
+
+    test_args = ["tagged-app", "--config", str(config_file), "train"]
+    monkeypatch.setattr(sys, "argv", test_args)
+    set_context(None)  # type: ignore
+
+    app.run()
+
+    assert isinstance(captured["trainer"], MyTrainer)
+    assert captured["trainer"].lr == 0.0007
+    assert isinstance(captured["model"], MyModel)
+    assert captured["model"].layers == 42
