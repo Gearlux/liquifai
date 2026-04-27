@@ -1,7 +1,8 @@
 import inspect
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
 
 import confluid
 import logflow
@@ -11,6 +12,8 @@ from rich.console import Console
 from rich.table import Table
 
 from liquifai.context import LiquifyContext, set_context
+
+FlowMode = Literal["manual", "auto"]
 
 console = Console()
 logger = get_logger("liquifai.core")
@@ -47,12 +50,38 @@ class LiquifyApp:
 
         return decorator
 
-    def script_command(self, name: Optional[str] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register a command that supports config-promotion."""
+    def script_command(
+        self,
+        name: Optional[str] = None,
+        flow_mode: FlowMode = "manual",
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a command that supports config-promotion.
+
+        Args:
+            name: Override the CLI name. Defaults to the function name with
+                underscores replaced by hyphens.
+            flow_mode: How aggressively to flow injected objects before the
+                command runs.
+
+                * ``"manual"`` (default): pass injected kwargs unchanged. Nested
+                  ``!class:`` stubs stay deferred — domain code is responsible
+                  for flowing them.
+                * ``"auto"``: deep-flow every kwarg before calling the command.
+                  Attributes annotated with :class:`confluid.Lazy` stay deferred
+                  so domain code can still flow them at runtime with extra
+                  kwargs (the marainer ``configure_optimizers`` pattern). Any
+                  non-``Lazy`` Class stub that can't be instantiated raises
+                  immediately.
+        """
+        if flow_mode not in ("manual", "auto"):
+            raise ValueError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             cmd_name = name or f.__name__.replace("_", "-")
             self._script_cmds.add(cmd_name)
+            # Store the mode on the function itself; run_command looks it up
+            # via getattr, no per-app registry needed.
+            setattr(f, "__liquifai_flow_mode__", flow_mode)
             return self.command(name=cmd_name)(f)
 
         return decorator
@@ -224,6 +253,10 @@ class LiquifyApp:
         if not self.context:
             return func()
         kwargs = self._resolve_kwargs(func)
+        flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
+        if flow_mode == "auto":
+            with _confluid_active_context(self.context.config_data):
+                kwargs = {k: _deep_flow(v) for k, v in kwargs.items()}
         return func(**kwargs)
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
@@ -386,12 +419,44 @@ class LiquifyApp:
         console.print("")
 
 
+@contextmanager
+def _confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
+    """Activate confluid's thread-local context so bare ``flow()`` resolves ``!ref:``.
+
+    ``materialize()`` already does this internally, but liquifai's deep-flow
+    runs *after* ``_resolve_kwargs`` has returned (with confluid's context
+    restored). For non-configurable parameters whose YAML values contain
+    nested ``!ref:`` markers, we need the context active again during the
+    deep-flow walk — otherwise references silently fail to resolve.
+    """
+    from confluid.loader import _state
+
+    old_ctx = getattr(_state, "context", None)
+    old_flow_memo = getattr(_state, "flow_memo", None)
+    old_instance_memo = getattr(_state, "instance_memo", None)
+    _state.context = context_data
+    _state.flow_memo = {}
+    _state.instance_memo = {}
+    try:
+        yield
+    finally:
+        _state.context = old_ctx
+        _state.flow_memo = old_flow_memo
+        _state.instance_memo = old_instance_memo
+
+
 def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
     """Recursively flow any ``Fluid`` stubs embedded in ``value``.
 
     Walks lists, tuples, dicts, and live instances' ``vars()``; any attribute
     that is still a ``Fluid`` is replaced in-place with the flowed instance.
     Cycle-safe via ``id(obj)`` tracking. Primitives pass through unchanged.
+
+    Skips dunder attrs (``__*__``) on instances — those are framework
+    bookkeeping (e.g. confluid's ``__confluid_kwargs__`` round-trip mirror,
+    Python internals) that shouldn't be re-flowed by an external walker.
+    Honors :func:`confluid.lazy.lazy_param_names` to leave attrs marked
+    ``Lazy[T]`` deferred.
     """
     from confluid import flow
     from confluid.fluid import Fluid
@@ -415,7 +480,14 @@ def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
         if vid in _visited:
             return value
         _visited.add(vid)
+        from confluid.lazy import lazy_param_names
+
+        lazy = lazy_param_names(type(value))
         for attr_name, attr_value in list(vars(value).items()):
+            if attr_name.startswith("__") and attr_name.endswith("__"):
+                continue  # framework bookkeeping (e.g. __confluid_kwargs__)
+            if attr_name in lazy:
+                continue  # honor Lazy[T]: leave runtime-injection attrs deferred
             resolved = _deep_flow(attr_value, _visited)
             if resolved is not attr_value:
                 try:
