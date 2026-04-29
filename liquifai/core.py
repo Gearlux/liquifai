@@ -206,7 +206,11 @@ class LiquifyApp:
             if not self.context.config_path.exists():
                 console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
                 sys.exit(1)
-            self.context.config_data = confluid.load(self.context.config_path, scopes=self.context.scopes, flow=False)
+            from liquifai.scopes import resolve_scopes
+
+            raw = confluid.load_config(self.context.config_path)
+            unwrapped = resolve_scopes(raw, self.context.scopes) if self.context.scopes else raw
+            self.context.config_data = confluid.load(unwrapped, flow=False)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
 
@@ -340,7 +344,11 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                ctx.config_data = confluid.load(config_path, scopes=scopes, flow=False)
+                from liquifai.scopes import resolve_scopes
+
+                raw = confluid.load_config(config_path)
+                unwrapped = resolve_scopes(raw, scopes) if scopes else raw
+                ctx.config_data = confluid.load(unwrapped, flow=False)
             self.context = ctx
             set_context(self.context)
         kwargs = self._resolve_kwargs(target_func)
@@ -471,7 +479,7 @@ def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
         out = [_deep_flow(v, _visited) for v in value]
         return type(value)(out) if isinstance(value, tuple) else out
 
-    if isinstance(value, dict):
+    if type(value) is dict:
         return {k: _deep_flow(v, _visited) for k, v in value.items()}
 
     # Live instance: walk its __dict__ and replace any Fluid attrs in place.
