@@ -477,7 +477,17 @@ def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
 
     if isinstance(value, (list, tuple)):
         out = [_deep_flow(v, _visited) for v in value]
-        return type(value)(out) if isinstance(value, tuple) else out
+        if isinstance(value, tuple):
+            # NamedTuple subclasses take their fields as POSITIONAL args, not
+            # as a single iterable. Without the splat, e.g.
+            # ``Sample([input, target, metadata])`` wraps the entire triplet
+            # into the ``input`` field with target/metadata at their defaults
+            # — silently breaking any dataset whose elements are NamedTuples
+            # (most notably ``dataflux.sample.Sample``).
+            if hasattr(type(value), "_fields"):
+                return type(value)(*out)
+            return type(value)(out)
+        return out
 
     if type(value) is dict:
         return {k: _deep_flow(v, _visited) for k, v in value.items()}
