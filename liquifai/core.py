@@ -1,4 +1,5 @@
 import inspect
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -211,6 +212,7 @@ class LiquifyApp:
             raw = confluid.load_config(self.context.config_path)
             unwrapped = resolve_scopes(raw, self.context.scopes) if self.context.scopes else raw
             self.context.config_data = confluid.load(unwrapped, flow=False)
+            self.context.config_data = _expand_strings(self.context.config_data)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
 
@@ -246,6 +248,7 @@ class LiquifyApp:
                 i += 1
 
         if overrides:
+            overrides = _expand_strings(overrides)
             self.context.logger.debug(f"Applying CLI overrides: {overrides}")
             self.context.config_data = deep_merge(self.context.config_data, overrides)
             # Push overrides into Fluid kwargs (Class objects from YAML)
@@ -349,6 +352,7 @@ class LiquifyApp:
                 raw = confluid.load_config(config_path)
                 unwrapped = resolve_scopes(raw, scopes) if scopes else raw
                 ctx.config_data = confluid.load(unwrapped, flow=False)
+                ctx.config_data = _expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)
         kwargs = self._resolve_kwargs(target_func)
@@ -600,3 +604,39 @@ def _accepted_override_keys(target: Any) -> Set[str]:
             continue  # read-only properties can't accept overrides
         accepted.add(name)
     return accepted
+
+
+def _expand_strings(data: Any, _visited: Optional[Set[int]] = None) -> Any:
+    """Recursively expand environment variables and ~ in strings."""
+    from confluid.fluid import Fluid
+
+    if isinstance(data, str):
+        if "$" in data or "~" in data:
+            return os.path.expanduser(os.path.expandvars(data))
+        return data
+
+    if isinstance(data, (int, float, bool, type(None))):
+        return data
+
+    if _visited is None:
+        _visited = set()
+
+    vid = id(data)
+    if vid in _visited:
+        return data
+    _visited.add(vid)
+
+    if isinstance(data, dict):
+        return {k: _expand_strings(v, _visited) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_expand_strings(v, _visited) for v in data]
+    if isinstance(data, tuple):
+        out = [_expand_strings(v, _visited) for v in data]
+        if hasattr(type(data), "_fields"):
+            return type(data)(*out)
+        return type(data)(out)
+    if isinstance(data, Fluid):
+        if isinstance(data.kwargs, dict):
+            data.kwargs = {k: _expand_strings(v, _visited) for k, v in data.kwargs.items()}
+
+    return data
