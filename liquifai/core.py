@@ -87,8 +87,69 @@ class LiquifyApp:
 
         return decorator
 
+    def _completion_env_var(self) -> str:
+        return f"_{self.name.upper().replace('-', '_')}_COMPLETE"
+
+    def _maybe_emit_completion(self) -> bool:
+        """If the shell is asking for completions, print them and return True."""
+        if self._completion_env_var() not in os.environ:
+            return False
+        from liquifai.completion import complete
+
+        words = os.environ.get("COMP_WORDS", "").split()
+        try:
+            cword = int(os.environ.get("COMP_CWORD", "0"))
+        except ValueError:
+            cword = 0
+        for cand in complete(self, words, cword):
+            print(cand)
+        sys.exit(0)
+
+    def _maybe_handle_completion_install(self, argv: List[str]) -> bool:
+        """Handle ``--show-completion`` / ``--install-completion`` early.
+
+        Both must run before Confluid bootstrap (no config required) and
+        before help rendering. ``--install-completion`` also primes the
+        on-disk command-tree cache so the very first TAB after installing
+        is fast (the user does not have to invoke the slow app once first).
+        Returns True if one was handled.
+        """
+        for special in ("--show-completion", "--install-completion"):
+            if special not in argv:
+                continue
+            from liquifai.completion import SHELLS, detect_shell, install_script, render_script, write_cache
+
+            idx = argv.index(special)
+            shell = argv[idx + 1] if idx + 1 < len(argv) and argv[idx + 1] in SHELLS else detect_shell()
+            if special == "--show-completion":
+                print(render_script(self.name, shell))
+            else:
+                target = install_script(self.name, shell)
+                cache_target = write_cache(self)
+                console.print(f"[green]Installed[/green] {self.name} {shell} completion in [cyan]{target}[/cyan]")
+                console.print(f"[dim]Cached command tree: {cache_target}[/dim]")
+                console.print(f"[dim]Restart your shell or `source {target}` to activate.[/dim]")
+            return True
+        return False
+
+    def _refresh_completion_cache(self) -> None:
+        """Best-effort refresh of the on-disk command-tree cache."""
+        try:
+            from liquifai.completion import write_cache
+
+            write_cache(self)
+        except Exception:
+            pass
+
     def run(self) -> Any:
         """Main entry point for the CLI."""
+        # 0. SHELL COMPLETION — must short-circuit before any bootstrap so
+        # tab completion stays fast and side-effect-free.
+        if self._maybe_emit_completion():
+            return None
+        if self._maybe_handle_completion_install(sys.argv[1:]):
+            return None
+
         argv = sys.argv[1:]
 
         # 1. IDENTIFY COMMAND, GROUP & PROMOTION
@@ -142,7 +203,13 @@ class LiquifyApp:
             console.print("[red]Error:[/red] Unknown command or group")
             sys.exit(1)
 
-        return self.run_command(target_func)
+        result = self.run_command(target_func)
+
+        # Refresh the completion cache so plugin/command changes propagate
+        # to the next TAB. Best-effort: never let this break a real run.
+        self._refresh_completion_cache()
+
+        return result
 
     def _parse_globals(self, argv: List[str]) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
         config_path, scopes, debug = None, [], False
@@ -276,7 +343,12 @@ class LiquifyApp:
         assert self.context is not None
 
         self.context.logger.debug(f"DI: Resolving arguments for {func.__name__}")
-        self.context.logger.trace(f"DI: Global config keys: {list(self.context.config_data.keys())}")
+        # config_data may be a Fluid when the YAML's root is a single
+        # `!class:` document — guard the introspection so DI stays usable
+        # for commands that don't depend on top-level keys.
+        cfg = self.context.config_data
+        cfg_keys = list(cfg.keys()) if isinstance(cfg, dict) else "<root-Fluid>"
+        self.context.logger.trace(f"DI: Global config keys: {cfg_keys}")
 
         from confluid import get_registry
         from confluid.fluid import Fluid
@@ -288,11 +360,13 @@ class LiquifyApp:
         for name, param in sig.parameters.items():
             if reg.is_configurable(param.annotation):
                 cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
-                config_block = (
-                    self.context.config_data.get(cls_name)
-                    or self.context.config_data.get(name)
-                    or self.context.config_data
-                )
+                if isinstance(cfg, dict):
+                    config_block = cfg.get(cls_name) or cfg.get(name) or cfg
+                else:
+                    # Root-level Fluid: there is no surrounding dict to look
+                    # up by class- or param-name, so the Fluid itself is the
+                    # candidate block.
+                    config_block = cfg
 
                 self.context.logger.debug(
                     f"DI: Resolving {name} ({cls_name}). Block keys: "
@@ -312,8 +386,8 @@ class LiquifyApp:
                     kwargs[name] = materialize(marker_dict, context=self.context.config_data)
             else:
                 # Non-configurable: Resolve from context data or use default
-                if name in self.context.config_data:
-                    kwargs[name] = self.context.config_data[name]
+                if isinstance(cfg, dict) and name in cfg:
+                    kwargs[name] = cfg[name]
                 elif param.default is not inspect.Parameter.empty:
                     kwargs[name] = param.default
 
@@ -428,6 +502,8 @@ class LiquifyApp:
         console.print("  --level LEVEL          Set log level for both sinks (TRACE, DEBUG, INFO).")
         console.print("  --console-level LEVEL  Set console log level (overrides --level).")
         console.print("  --file-level LEVEL     Set file log level (overrides --level).")
+        console.print("  --install-completion [SHELL]  Install tab completion (bash/zsh/fish).")
+        console.print("  --show-completion [SHELL]     Print the completion script to stdout.")
         console.print("")
 
 

@@ -42,6 +42,41 @@ def test_script_command_promotion(tmp_path: Path, monkeypatch: Any, capsys: Any)
     assert app.context.config_path.name == "mycfg.yaml"
 
 
+def test_script_command_with_root_class_yaml(tmp_path: Path, monkeypatch: Any) -> None:
+    """`script_command` must accept a YAML whose root is a single `!class:` doc.
+
+    Confluid's path-loader and text-loader are symmetric (both wrap a
+    root `!class:` as a Fluid), so liquifai's bootstrap and DI must be
+    able to handle ``context.config_data`` being a Fluid rather than a
+    dict — used by FluxStudio's ``fluxstudio run <pipeline>.yaml``.
+    """
+    app = LiquifyApp(name="test-app")
+
+    config_file = tmp_path / "pipeline.yaml"
+    config_file.write_text("!class:Pipeline\nname: tiny\nlayers: 2\n")
+
+    captured: Dict[str, Any] = {}
+
+    @app.script_command(name="run", flow_mode="manual")
+    def run_cmd() -> None:
+        captured["config_path"] = app.context.config_path if app.context else None
+        captured["config_data"] = app.context.config_data if app.context else None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["test-app", "run", "pipeline"])
+
+    app.run()
+
+    from confluid.fluid import Fluid
+
+    assert captured["config_path"] is not None
+    assert captured["config_path"].name == "pipeline.yaml"
+    # Root-level !class: stays as a Fluid; the command body opts into how
+    # to materialize it (matches FluxStudio's run-then-flow workflow).
+    assert isinstance(captured["config_data"], Fluid)
+    assert captured["config_data"].kwargs["name"] == "tiny"
+
+
 def test_apply_overrides(tmp_path: Path, monkeypatch: Any) -> None:
     app = LiquifyApp(name="test-app")
 

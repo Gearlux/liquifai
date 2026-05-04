@@ -53,5 +53,37 @@ if __name__ == "__main__":
 pip install git+https://github.com/Gearlux/liquifai.git@main
 ```
 
+## Shell Completion
+
+Every LiquifyApp ships with bash, zsh, and fish tab completion. Candidates
+include sub-commands, sub-app names, global flags, YAML files for
+`@script_command` configuration arguments, and `--<key>` override
+suggestions derived from the loaded config.
+
+```bash
+my-app --install-completion          # auto-detects $SHELL, appends to your rc file
+my-app --install-completion zsh      # explicit shell
+my-app --show-completion bash        # print the script to stdout (manual install)
+```
+
+After installing, restart your shell (or `source ~/.zshrc` / `~/.bashrc`).
+For fish the script is written to `~/.config/fish/completions/<app>.fish`
+and auto-loads in the next session.
+
+### Aliases
+
+Shell aliases don't inherit completion automatically (bash and zsh bind
+completion to specific command names, not to alias expansions). Use
+`liquifai-bind-alias` to wire any alias up:
+
+```bash
+alias mt='marainer train'
+liquifai-bind-alias mt marainer train
+```
+
+The first argument is the alias name; the rest is what the alias expands
+to. `mt cfg.yaml<TAB>` then completes with the same `--key` suggestions
+you'd get from `marainer train cfg.yaml<TAB>`.
+
 ## License
 MIT

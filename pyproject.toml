@@ -34,6 +34,9 @@ dev = [
     "pytest-cov>=4.0.0,<7.0.0",
 ]
 
+[project.scripts]
+liquifai-complete = "liquifai._fast_complete:main"
+
 [project.urls]
 Homepage = "https://github.com/Gearlux/liquifai"
 Repository = "https://github.com/Gearlux/liquifai.git"
