@@ -43,3 +43,8 @@ mypy.txt
 coverage.xml
 test-report.xml
 coverage/
+
+# Training/runtime artifacts
+logs/
+checkpoints/
+runs/
