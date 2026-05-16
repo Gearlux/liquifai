@@ -41,6 +41,13 @@ liquifai-complete = "liquifai._fast_complete:main"
 Homepage = "https://github.com/Gearlux/liquifai"
 Repository = "https://github.com/Gearlux/liquifai.git"
 
+[tool.aisland.sys-dependencies]
+# bash: macOS ships bash 3.2 which lacks the `compopt` builtin used by the
+# generated bash completion shim (liquifai/completion.py:_BASH_TEMPLATE).
+# The shim is guarded so it works on 3.2 minus the no-trailing-space UX;
+# installing modern bash via Homebrew unlocks the full behavior.
+brew = ["bash"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["liquifai*"]

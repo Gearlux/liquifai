@@ -97,9 +97,13 @@ def test_apply_overrides(tmp_path: Path, monkeypatch: Any) -> None:
     app.run()
 
     assert captured_config is not None
-    # In simplified mode, overrides stay flat in config_data
-    assert captured_config["model.layers"] == 10
-    assert captured_config["model.name"] == "new"
+    # Dotted overrides expand into the existing config tree — ``--model.layers
+    # 10`` lands inside ``config["model"]`` instead of polluting the top
+    # level with a literal ``"model.layers"`` key. This is what makes the
+    # override actually reach a Fluid at ``config["model"]`` in
+    # ``flow_mode="auto"`` paths.
+    assert captured_config["model"]["layers"] == 10
+    assert captured_config["model"]["name"] == "new"
 
 
 def test_help_menu(capsys: Any, monkeypatch: Any) -> None:

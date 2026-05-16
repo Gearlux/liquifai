@@ -181,6 +181,11 @@ class LiquifyApp:
         # 2. Check for help (also show help when subgroup reached without a command)
         if "--help" in argv or (not target_func and not target_app._default_cmd):
             self._show_help(target_app, target_func, config_path=config_path)
+            # Refresh the completion cache so freshly added commands appear under
+            # TAB without first requiring a successful real run — a hidden
+            # papercut otherwise, since --help is the natural way to discover
+            # what's new after editing the CLI.
+            self._refresh_completion_cache()
             return
 
         # 3. PARSE GLOBALS
@@ -287,40 +292,41 @@ class LiquifyApp:
         if not self.context or not args:
             return
 
-        from confluid import deep_merge, parse_value
+        overrides, deletions = _parse_override_args(args)
 
-        overrides = {}
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            if arg.startswith("--"):
-                key = arg[2:]
-                # Check for polarity suffixes
-                if key.endswith("+"):
-                    overrides[key[:-1]] = True
-                    i += 1
-                elif key.endswith("-"):
-                    overrides[key[:-1]] = False
-                    i += 1
-                elif i + 1 < len(args) and not args[i + 1].startswith("--"):
-                    # Standard key-value pair
-                    overrides[key] = parse_value(args[i + 1])
-                    i += 2
-                else:
-                    # Implicit boolean True (standard CLI flag behavior)
-                    overrides[key] = True
-                    i += 1
-            else:
-                # Skip non-flag arguments
-                i += 1
+        if not overrides and not deletions:
+            return
 
-        if overrides:
-            overrides = _expand_strings(overrides)
-            self.context.logger.debug(f"Applying CLI overrides: {overrides}")
-            self.context.config_data = deep_merge(self.context.config_data, overrides)
-            # Push overrides into Fluid kwargs (Class objects from YAML)
-            _merge_overrides_into_fluids(self.context.config_data, overrides)
-            self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
+        from confluid import deep_merge, expand_dotted_keys
+
+        overrides = _expand_strings(overrides)
+        self.context.logger.debug(f"Applying CLI overrides: {overrides}; deletions: {deletions}")
+        self.context.config_data = deep_merge(self.context.config_data, overrides)
+        # ``deep_merge`` leaves dotted-key overrides as literal-string keys
+        # at the top level (``{"processor.lookback_days": 5}``). We need to
+        # collapse them INTO the existing config tree so a CLI
+        # ``--processor.lookback_days 5`` actually reaches the Fluid at
+        # ``config["processor"]``. ``expand_dotted_keys`` walks dicts AND
+        # Fluid.kwargs, so the override lands in the Fluid's kwargs dict
+        # before any later ``flow()`` reads from it. This step is critical
+        # for the ``flow_mode="auto"`` + ``Any``-typed param path, where
+        # the Fluid is consumed directly without going through
+        # ``materialize()`` (which internally does the same expansion on
+        # its context).
+        if isinstance(self.context.config_data, dict):
+            self.context.config_data = expand_dotted_keys(self.context.config_data)
+        for path in deletions:
+            _delete_dotted_key(self.context.config_data, path)
+        # Second-pass: flat overrides still need to broadcast to nested
+        # Fluids by name (``--max_epochs 10`` reaching every Fluid whose
+        # accept-list includes ``max_epochs``) and dotted overrides need to
+        # match Fluids by their ``name:`` kwarg (``--overlay.visualize
+        # true`` reaching the Fluid with ``name: overlay`` even when it
+        # isn't at ``config["overlay"]``). New ``+key=val`` adds also
+        # need this pass because the new key isn't yet in any Fluid's
+        # kwargs.
+        _merge_overrides_into_fluids(self.context.config_data, overrides)
+        self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
         """Execute with Dependency Injection."""
@@ -450,7 +456,7 @@ class LiquifyApp:
         configurable kwarg reachable through the flowed instance tree. A
         flow failure downgrades to the static-type view with a brief note.
         """
-        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Septet Framework")
+        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Framework")
         if app.description:
             console.print(f"[dim]{app.description}[/dim]")
 
@@ -545,12 +551,21 @@ def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
     Python internals) that shouldn't be re-flowed by an external walker.
     Honors :func:`confluid.lazy.lazy_param_names` to leave attrs marked
     ``Lazy[T]`` deferred.
+
+    ``confluid.fluid.Lazy`` (YAML ``!lazy:``) Fluids are likewise left
+    deferred at every level — they are runtime-injection points (e.g. an
+    optimizer needing ``params=model.parameters()``) and must be flowed
+    later by domain code with the missing runtime kwargs.
     """
     from confluid import flow
     from confluid.fluid import Fluid
+    from confluid.fluid import Lazy as LazyFluid
 
     if _visited is None:
         _visited = set()
+
+    if isinstance(value, LazyFluid):
+        return value
 
     if isinstance(value, Fluid):
         return _deep_flow(flow(value), _visited)
@@ -586,6 +601,8 @@ def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
                 continue  # framework bookkeeping (e.g. __confluid_kwargs__)
             if attr_name in lazy:
                 continue  # honor Lazy[T]: leave runtime-injection attrs deferred
+            if isinstance(attr_value, LazyFluid):
+                continue  # YAML !lazy: stays deferred even without the Lazy[T] mirror
             resolved = _deep_flow(attr_value, _visited)
             if resolved is not attr_value:
                 try:
@@ -716,3 +733,140 @@ def _expand_strings(data: Any, _visited: Optional[Set[int]] = None) -> Any:
             data.kwargs = {k: _expand_strings(v, _visited) for k, v in data.kwargs.items()}
 
     return data
+
+
+def _parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str]]:
+    """Tokenize ``args`` into a (overrides, deletions) pair.
+
+    Supported forms (order-independent; longest match wins per token):
+
+    * ``--key value``           — legacy space-separated form (still primary).
+    * ``--key=value``           — equals form.
+    * ``key=value``             — bare equals form, no ``--`` prefix.
+    * ``--key+`` / ``--key-``   — polarity (True / False).
+    * ``--key``                 — implicit ``True`` flag.
+    * ``+key=value`` / ``+--key=value`` — add a new key (today merged with
+      same semantics as a normal override; future: fail if key exists).
+    * ``~key`` / ``~--key``     — delete the dotted key from the config.
+
+    Any token that doesn't match a recognised form is silently dropped
+    (matches the prior behaviour where loose non-flag args were skipped).
+    """
+    from confluid import parse_value
+
+    overrides: Dict[str, Any] = {}
+    deletions: List[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+
+        if arg.startswith("~"):
+            key = arg[1:]
+            if key.startswith("--"):
+                key = key[2:]
+            if key:
+                deletions.append(key)
+            i += 1
+            continue
+
+        if arg.startswith("+"):
+            body = arg[1:]
+            if body.startswith("--"):
+                body = body[2:]
+            if "=" in body:
+                k, v = body.split("=", 1)
+                if k:
+                    overrides[k] = parse_value(v)
+            elif body and i + 1 < len(args) and not _looks_like_arg(args[i + 1]):
+                overrides[body] = parse_value(args[i + 1])
+                i += 1
+            elif body:
+                overrides[body] = True
+            i += 1
+            continue
+
+        if arg.startswith("--"):
+            key = arg[2:]
+            if "=" in key:
+                k, v = key.split("=", 1)
+                if k:
+                    overrides[k] = parse_value(v)
+                i += 1
+                continue
+            if key.endswith("+"):
+                overrides[key[:-1]] = True
+                i += 1
+                continue
+            if key.endswith("-"):
+                overrides[key[:-1]] = False
+                i += 1
+                continue
+            if i + 1 < len(args) and not _looks_like_arg(args[i + 1]):
+                overrides[key] = parse_value(args[i + 1])
+                i += 2
+                continue
+            overrides[key] = True
+            i += 1
+            continue
+
+        # Bare ``key=value`` (no ``--``). Lets users drop the dashes when
+        # they want — common ergonomics ask from the user.
+        if "=" in arg and not arg.startswith("="):
+            k, v = arg.split("=", 1)
+            # Filter out random tokens that contain ``=`` but aren't shaped
+            # like a config key (e.g. JSON-ish blobs, file paths).
+            if k and _looks_like_key(k):
+                overrides[k] = parse_value(v)
+                i += 1
+                continue
+
+        # Unrecognised token — skip (matches legacy behaviour).
+        i += 1
+
+    return overrides, deletions
+
+
+def _looks_like_arg(token: str) -> bool:
+    """True if the token looks like the *start* of another CLI option, so
+    it should NOT be consumed as the value for a preceding ``--key``.
+
+    Catches ``--foo``, ``+foo=bar``, ``~foo`` — anything that ``_parse_override_args``
+    would itself parse as a new option in the next iteration.
+    """
+    if not token:
+        return False
+    return token.startswith("--") or token.startswith("+") or token.startswith("~")
+
+
+def _looks_like_key(token: str) -> bool:
+    """Conservative shape check for the bare ``key=value`` form.
+
+    Keys are word characters + dots (``trainer.max_epochs``). Anything
+    else (slashes, colons inside the head) probably isn't an override.
+    """
+    import re
+
+    return bool(re.fullmatch(r"[A-Za-z_][\w.\-]*", token))
+
+
+def _delete_dotted_key(config: Any, path: str) -> None:
+    """Best-effort deletion of ``config[path[0]][path[1]]...``.
+
+    Walks the dotted path through nested dicts and Fluid ``kwargs``. Silent
+    no-op if any segment is missing or the leaf can't be removed.
+    """
+    from confluid.fluid import Fluid
+
+    parts = path.split(".")
+    current: Any = config
+    for part in parts[:-1]:
+        if isinstance(current, Fluid):
+            current = current.kwargs
+        if not isinstance(current, dict) or part not in current:
+            return
+        current = current[part]
+    leaf = parts[-1]
+    if isinstance(current, Fluid):
+        current = current.kwargs
+    if isinstance(current, dict):
+        current.pop(leaf, None)

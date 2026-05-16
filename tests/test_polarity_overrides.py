@@ -47,9 +47,13 @@ def test_polarity_overrides(monkeypatch: Any) -> None:
     assert captured_config["pos"] is True
     assert captured_config["neg"] is False
     assert captured_config["implicit"] is True
-    # In simplified mode, overrides stay flat in config_data
-    # Materialize will find "model.enabled" during broadcast search
-    assert captured_config["model.enabled"] is False
+    # Dotted overrides are expanded into nested dicts (and pushed into
+    # Fluid.kwargs when the path lands on a Fluid). Without this, an
+    # override like ``--processor.lookback_days 5`` reaches a top-level
+    # ``processor`` Fluid only via ``materialize()``'s internal
+    # ``expand_dotted_keys`` — and ``flow_mode="auto"`` paths that read
+    # ``fluid.kwargs`` directly silently drop the override.
+    assert captured_config["model"] == {"enabled": False}
 
 
 def test_polarity_override_yaml_state(monkeypatch: Any, tmp_path: Any) -> None:

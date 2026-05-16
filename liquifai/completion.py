@@ -90,6 +90,13 @@ _{prog}_completion() {
     for item in $raw; do
         COMPREPLY+=("$item")
     done
+    # If the sole auto-insert candidate is a directory (ends in `/`),
+    # suppress bash's trailing space so the user can keep tabbing deeper.
+    # `compopt` is bash 4+; macOS ships bash 3.2, so guard the call (the
+    # trailing space silently returns on old bash — acceptable degradation).
+    if [[ ${#COMPREPLY[@]} -eq 1 && "${COMPREPLY[0]}" == */ ]]; then
+        command -v compopt >/dev/null 2>&1 && compopt -o nospace
+    fi
     return 0
 }
 complete -o default -F _{prog}_completion {prog}
@@ -114,7 +121,16 @@ _{prog}_completion() {
         _files
         return
     fi
-    compadd -U -- "${response[@]}"
+    # Directory candidates (ending in `/`) get `-S ''` so zsh doesn't
+    # add a trailing space — lets the user keep tabbing into the dir.
+    local item
+    for item in "${response[@]}"; do
+        if [[ "$item" == */ ]]; then
+            compadd -U -S '' -- "$item"
+        else
+            compadd -U -- "$item"
+        fi
+    done
 }
 compdef _{prog}_completion {prog}
 """

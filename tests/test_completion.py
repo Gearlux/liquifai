@@ -184,6 +184,32 @@ def test_render_script_unknown_shell_raises() -> None:
         comp.render_script("x", "tcsh")
 
 
+def test_bash_script_suppresses_trailing_space_for_directories() -> None:
+    """Bash auto-inserts a space after every completion; for directory
+    candidates we need `compopt -o nospace` so the user can keep tabbing in.
+    """
+    script = comp.render_script("marainer", "bash")
+    assert "compopt -o nospace" in script
+    # Guard: the suppression must be conditional on the candidate ending in `/`
+    # (suppressing unconditionally would break file completion).
+    assert "*/" in script
+    # macOS ships bash 3.2 which has no `compopt` builtin — the call MUST be
+    # guarded so old-bash users don't see "compopt: command not found" on
+    # every TAB. The fix degrades gracefully (trailing space returns).
+    assert "command -v compopt" in script
+
+
+def test_zsh_script_suppresses_trailing_space_for_directories() -> None:
+    """Zsh's `compadd` adds a trailing space by default; for directory
+    candidates we need `-S ''` so the user can keep tabbing in.
+    """
+    script = comp.render_script("marainer", "zsh")
+    assert "compadd -U -S '' --" in script
+    # Conditional on `*/` so non-directory candidates still get a trailing
+    # space (the normal "ready for next arg" UX).
+    assert "*/" in script
+
+
 # ----------------------------- install_script -----------------------------
 
 
@@ -421,3 +447,45 @@ def test_fast_complete_main_silent_on_cache_miss(capsys: Any, monkeypatch: Any, 
 
     _fast_complete.main()
     assert capsys.readouterr().out == ""
+
+
+def test_help_refreshes_stale_completion_cache(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    """Adding a new command then running --help must update the on-disk cache.
+
+    Regression test: prior to this fix, --help short-circuited before the
+    cache write at the end of run(), so freshly added commands didn't appear
+    under TAB until a real (non-help) invocation succeeded.
+    """
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    set_context(None)  # type: ignore
+
+    # 1) Build a smaller app and prime the cache with just its commands.
+    small = LiquifyApp(name="freshapp")
+
+    @small.command()
+    def alpha() -> None:
+        pass
+
+    comp.write_cache(small)
+    tree_before = comp.read_cache("freshapp")
+    assert tree_before is not None
+    assert set(tree_before["commands"]) == {"alpha"}
+
+    # 2) Build a larger app under the same name (simulates adding a command).
+    big = LiquifyApp(name="freshapp")
+
+    @big.command()
+    def alpha2() -> None:
+        pass
+
+    @big.command()
+    def beta() -> None:
+        pass
+
+    # 3) Invoking --help on the larger app should refresh the cache.
+    monkeypatch.setattr(sys, "argv", ["freshapp", "--help"])
+    big.run()
+
+    tree_after = comp.read_cache("freshapp")
+    assert tree_after is not None
+    assert set(tree_after["commands"]) == {"alpha2", "beta"}
