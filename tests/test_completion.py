@@ -385,7 +385,8 @@ def test_app_emits_completion_via_env(app: LiquifyApp, capsys: Any, monkeypatch:
     assert "train" not in lines
 
 
-def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
+def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
     monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
@@ -394,6 +395,29 @@ def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeyp
     captured = capsys.readouterr()
     assert "_myapp_completion" in captured.out
     assert "liquifai-complete myapp" in captured.out
+    # --show-completion must also prime the per-app cache. Without this,
+    # liquifai-install-completions's auto-discovery probe leaves apps
+    # registered for tab completion but with no command tree to suggest
+    # from, so TAB silently returns nothing.
+    cache = tmp_path / "cache" / "liquifai" / "myapp.json"
+    assert cache.exists()
+
+
+def test_app_show_completion_tolerates_cache_write_failure(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
+    """If write_cache raises (e.g. read-only XDG_CACHE_HOME), the script
+    must still be printed — script output is the primary contract,
+    cache-priming is a best-effort side effect."""
+    monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
+    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
+    set_context(None)  # type: ignore[arg-type]
+
+    def boom(_self: Any) -> Path:
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(comp, "write_cache", boom)
+    app.run()
+    captured = capsys.readouterr()
+    assert "_myapp_completion" in captured.out
 
 
 def test_app_install_completion_writes_rc_and_cache(

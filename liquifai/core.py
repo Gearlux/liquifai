@@ -123,6 +123,18 @@ class LiquifyApp:
             shell = argv[idx + 1] if idx + 1 < len(argv) and argv[idx + 1] in SHELLS else detect_shell()
             if special == "--show-completion":
                 print(render_script(self.name, shell))
+                # Side effect: prime the cache while the app is loaded.
+                # liquifai-install-completions auto-discovers apps by
+                # probing them with `<app> --show-completion bash`; the
+                # cache is what makes the resulting `complete` calls
+                # actually return suggestions, so we MUST seed it here
+                # — otherwise tab-completion is registered but silent.
+                # Best-effort: never fail the script output on a cache
+                # write error.
+                try:
+                    write_cache(self)
+                except Exception:
+                    pass
             else:
                 target = install_script(self.name, shell)
                 cache_target = write_cache(self)
