@@ -36,6 +36,7 @@ dev = [
 
 [project.scripts]
 liquifai-complete = "liquifai._fast_complete:main"
+liquifai-install-completions = "liquifai.completion:_cli_install_completions"
 
 [project.urls]
 Homepage = "https://github.com/Gearlux/liquifai"
