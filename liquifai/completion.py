@@ -25,9 +25,11 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set
 
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
@@ -289,7 +291,12 @@ def _splice_block(text: str, start_marker: str, end_marker: str, new_block: str)
     return text + prefix + "\n" + new_block
 
 
-def install_script(prog: str, shell: str, home: Optional[Path] = None) -> Path:
+def install_script(
+    prog: str,
+    shell: str,
+    home: Optional[Path] = None,
+    target_rc: Optional[Path] = None,
+) -> Path:
     """Install completion for ``prog`` in ``shell``. Idempotent.
 
     Embeds the rendered script directly in the rc file (bash/zsh) or the
@@ -298,6 +305,14 @@ def install_script(prog: str, shell: str, home: Optional[Path] = None) -> Path:
     startup. For bash/zsh, also installs (or refreshes) a single shared
     ``# >>> liquifai shared helpers >>>`` block providing
     :func:`liquifai-bind-alias` so user aliases can opt in to completion.
+
+    When ``target_rc`` is provided (bash/zsh only), the helpers + per-app
+    block are written into that file instead of ``home/.bashrc`` (or
+    ``.zshrc``). This lets a project-level bootstrap install completion
+    into a workspace-local rc file (e.g. sourced from ``project.bashrc``)
+    without polluting the user's global shell rc. ``target_rc`` is
+    ignored for fish, which always uses the per-completion file layout
+    under ``~/.config/fish/completions``.
 
     Returns the path that was created or modified.
     """
@@ -311,7 +326,11 @@ def install_script(prog: str, shell: str, home: Optional[Path] = None) -> Path:
         target.write_text(render_script(prog, shell))
         return target
 
-    rc = home / (".bashrc" if shell == "bash" else ".zshrc")
+    if target_rc is not None:
+        rc = Path(target_rc)
+        rc.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        rc = home / (".bashrc" if shell == "bash" else ".zshrc")
     existing = rc.read_text() if rc.exists() else ""
 
     helpers_body = render_helpers(shell).rstrip("\n")
@@ -326,6 +345,161 @@ def install_script(prog: str, shell: str, home: Optional[Path] = None) -> Path:
 
     rc.write_text(existing)
     return rc
+
+
+# ---------------------------------------------------------------------------
+# Workspace bootstrap helpers
+# ---------------------------------------------------------------------------
+
+
+# Entries in `sys.prefix/bin/` we never want to probe — neither plausible
+# Liquifai apps nor cheap to invoke. Patterns are matched as prefixes.
+_NON_APP_BIN_PREFIXES: List[str] = [
+    "python",
+    "pip",
+    "activate",
+    "deactivate",
+    "liquifai-",  # liquifai-complete, liquifai-install-completions
+    "uv",
+    "ruff",
+    "black",
+    "isort",
+    "flake8",
+    "mypy",
+    "pytest",
+    "coverage",
+    "wheel",
+    "twine",
+    "jupyter",
+    "ipython",
+    "tensorboard",
+    "mlflow",
+    "f2py",
+    "normalizer",
+    "httpx",
+    "tqdm",
+    "huggingface-cli",
+    "transformers-cli",
+    "torch",
+    "convert-",
+]
+
+
+def discover_liquifai_apps(prefix: Optional[Path] = None, timeout: float = 5.0) -> List[str]:
+    """Return the names of Liquifai apps installed in ``prefix``'s bin dir.
+
+    Iterates ``<prefix>/bin/*`` (defaulting to ``sys.prefix``), skips
+    obvious non-CLI / non-Liquifai entries, and probes each remaining
+    executable with ``<script> --show-completion bash``. Liquifai apps
+    short-circuit that flag before any heavy bootstrap (see
+    ``LiquifyApp._maybe_handle_completion_install``), so probing is fast
+    (~50 ms each).
+
+    An entry is treated as a Liquifai app iff the probe exits 0 AND the
+    output contains the Liquifai-specific marker ``liquifai-complete <name>``
+    that :func:`render_script` always emits. Click/Typer apps also accept
+    ``--show-completion`` but emit their own dispatch logic — they're
+    filtered out by the marker check.
+    """
+    bindir = Path(prefix or sys.prefix) / "bin"
+    if not bindir.is_dir():
+        return []
+    found: List[str] = []
+    for entry in sorted(bindir.iterdir()):
+        if not entry.is_file() or not os.access(entry, os.X_OK):
+            continue
+        name = entry.name
+        if any(name.startswith(p) for p in _NON_APP_BIN_PREFIXES):
+            continue
+        try:
+            res = subprocess.run(
+                [str(entry), "--show-completion", "bash"],
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if res.returncode != 0:
+            continue
+        # The marker is the literal token `liquifai-complete <name>`, which
+        # is unique to Liquifai's render_script output. Decode loosely so
+        # binary noise from a non-Liquifai responder doesn't crash us.
+        out = res.stdout.decode("utf-8", errors="replace")
+        if f"liquifai-complete {name}" in out:
+            found.append(name)
+    return found
+
+
+def install_for_apps(
+    target_rc: Path,
+    apps: Optional[Iterable[str]] = None,
+    shell: Optional[str] = None,
+    prefix: Optional[Path] = None,
+) -> List[str]:
+    """Install completion for a set of Liquifai apps into ``target_rc``.
+
+    When ``apps`` is ``None``, auto-discover them via
+    :func:`discover_liquifai_apps` against ``prefix`` (default
+    ``sys.prefix``). Returns the list of app names that were installed
+    (in install order). The same ``target_rc`` accumulates one helpers
+    block + one per-app completion block per call; re-running is
+    idempotent because :func:`install_script` splices by markers.
+    """
+    shell = shell or detect_shell()
+    names = list(apps) if apps is not None else discover_liquifai_apps(prefix=prefix)
+    rc = Path(target_rc)
+    installed: List[str] = []
+    for name in names:
+        install_script(name, shell, target_rc=rc)
+        installed.append(name)
+    return installed
+
+
+def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
+    """Console-script entry for ``liquifai-install-completions``.
+
+    Usage::
+
+        liquifai-install-completions --target-rc <path> [--shell <bash|zsh|fish>] [apps...]
+
+    With no positional ``apps``, auto-discover every Liquifai app in the
+    current venv and install completion for each into ``--target-rc``.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="liquifai-install-completions",
+        description="Install liquifai shell completion for one or more apps into a target rc file.",
+    )
+    parser.add_argument(
+        "--target-rc",
+        required=True,
+        type=Path,
+        help="Path to the rc file to write completion into (e.g. project-local .bashrc fragment).",
+    )
+    parser.add_argument(
+        "--shell",
+        choices=SHELLS,
+        default=None,
+        help="Shell to install completion for (default: detect from $SHELL).",
+    )
+    parser.add_argument(
+        "apps",
+        nargs="*",
+        help="App names to install. Empty → auto-discover all Liquifai apps in the active venv.",
+    )
+    args = parser.parse_args(argv)
+
+    shell = args.shell or detect_shell()
+    apps = args.apps or None
+    installed = install_for_apps(target_rc=args.target_rc, apps=apps, shell=shell)
+    if not installed:
+        print(f"liquifai-install-completions: no Liquifai apps found to install into {args.target_rc}")
+        return 0
+    for name in installed:
+        print(f"installed {name} ({shell}) → {args.target_rc}")
+    return 0
 
 
 # ---------------------------------------------------------------------------

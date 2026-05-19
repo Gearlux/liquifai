@@ -418,6 +418,169 @@ def test_completion_env_var_normalizes_dashes() -> None:
     assert a._completion_env_var() == "_MY_APP_COMPLETE"
 
 
+# ------------- install_script with target_rc (workspace-local rc) -------------
+
+
+def test_install_script_target_rc_writes_target_not_home(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    target_rc = tmp_path / "ws" / ".project.bashrc.completion"
+    rc = comp.install_script("marainer", "bash", home=home, target_rc=target_rc)
+    assert rc == target_rc
+    assert target_rc.exists()
+    # ~/.bashrc must remain pristine — this is the whole point of target_rc.
+    assert not (home / ".bashrc").exists()
+    body = target_rc.read_text()
+    assert "_marainer_completion()" in body
+    assert comp._HELPERS_MARKER in body
+
+
+def test_install_script_target_rc_idempotent(tmp_path: Path) -> None:
+    target_rc = tmp_path / ".project.bashrc.completion"
+    comp.install_script("marainer", "bash", target_rc=target_rc)
+    comp.install_script("marainer", "bash", target_rc=target_rc)
+    body = target_rc.read_text()
+    assert body.count(comp._HELPERS_MARKER) == 1
+    assert body.count("# >>> liquifai completion for marainer >>>") == 1
+
+
+def test_install_script_target_rc_two_apps_share_helpers(tmp_path: Path) -> None:
+    target_rc = tmp_path / ".project.bashrc.completion"
+    comp.install_script("marainer", "bash", target_rc=target_rc)
+    comp.install_script("annotaide", "bash", target_rc=target_rc)
+    body = target_rc.read_text()
+    assert body.count(comp._HELPERS_MARKER) == 1
+    assert "_marainer_completion()" in body
+    assert "_annotaide_completion()" in body
+
+
+def test_install_script_target_rc_creates_parent(tmp_path: Path) -> None:
+    target_rc = tmp_path / "nested" / "dir" / "rc"
+    comp.install_script("marainer", "bash", target_rc=target_rc)
+    assert target_rc.exists()
+
+
+# --------------------- install_for_apps + auto-discovery ----------------------
+
+
+def test_install_for_apps_explicit_list(tmp_path: Path) -> None:
+    target_rc = tmp_path / "rc"
+    installed = comp.install_for_apps(target_rc=target_rc, apps=["foo", "bar"], shell="bash")
+    assert installed == ["foo", "bar"]
+    body = target_rc.read_text()
+    assert "_foo_completion()" in body
+    assert "_bar_completion()" in body
+    # Single helpers block even with multiple apps.
+    assert body.count(comp._HELPERS_MARKER) == 1
+
+
+def test_install_for_apps_empty_list_is_noop(tmp_path: Path) -> None:
+    target_rc = tmp_path / "rc"
+    installed = comp.install_for_apps(target_rc=target_rc, apps=[], shell="bash")
+    assert installed == []
+    assert not target_rc.exists()
+
+
+def _make_stub_script(path: Path, exit_code: int, stdout: str) -> None:
+    """Write a tiny POSIX shell stub that mimics a Liquifai --show-completion probe."""
+    body = "#!/bin/sh\n"
+    if stdout:
+        body += f'printf "%s" "{stdout}"\n'
+    body += f"exit {exit_code}\n"
+    path.write_text(body)
+    path.chmod(0o755)
+
+
+def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> None:
+    prefix = tmp_path / "venv"
+    bindir = prefix / "bin"
+    bindir.mkdir(parents=True)
+    # A real Liquifai-shaped responder — output must contain the marker
+    # `liquifai-complete <name>` that render_script always emits.
+    _make_stub_script(
+        bindir / "marainer",
+        exit_code=0,
+        stdout="_marainer_completion() { :; }; liquifai-complete marainer 2>/dev/null",
+    )
+    # Non-Liquifai CLI (exits non-zero on --show-completion).
+    _make_stub_script(bindir / "some-other-tool", exit_code=2, stdout="")
+    # Click/Typer-style responder: exits 0 with output but NO liquifai marker
+    # — must be filtered out.
+    _make_stub_script(
+        bindir / "click-app",
+        exit_code=0,
+        stdout="_CLICK_APP_COMPLETE=complete_bash click-app",
+    )
+    # Liquifai responder but in the skip-list — must still be excluded.
+    _make_stub_script(bindir / "python3.12", exit_code=0, stdout="liquifai-complete python3.12")
+    # liquifai-* helpers must also be excluded.
+    _make_stub_script(bindir / "liquifai-complete", exit_code=0, stdout="liquifai-complete liquifai-complete")
+    found = comp.discover_liquifai_apps(prefix=prefix)
+    assert found == ["marainer"]
+
+
+def test_install_for_apps_auto_discover(tmp_path: Path) -> None:
+    prefix = tmp_path / "venv"
+    bindir = prefix / "bin"
+    bindir.mkdir(parents=True)
+    _make_stub_script(
+        bindir / "marainer",
+        exit_code=0,
+        stdout="_marainer_completion() { :; }; liquifai-complete marainer",
+    )
+    _make_stub_script(
+        bindir / "annotaide",
+        exit_code=0,
+        stdout="_annotaide_completion() { :; }; liquifai-complete annotaide",
+    )
+    _make_stub_script(bindir / "ls-fake", exit_code=1, stdout="")
+
+    target_rc = tmp_path / "rc"
+    installed = comp.install_for_apps(target_rc=target_rc, shell="bash", prefix=prefix)
+    assert sorted(installed) == ["annotaide", "marainer"]
+    body = target_rc.read_text()
+    assert "_marainer_completion()" in body
+    assert "_annotaide_completion()" in body
+    assert "_ls-fake_completion" not in body
+
+
+def test_discover_liquifai_apps_missing_bindir(tmp_path: Path) -> None:
+    assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == []
+
+
+# --------------------------- CLI: --target-rc entry ---------------------------
+
+
+def test_cli_install_completions_explicit_apps(tmp_path: Path, capsys: Any) -> None:
+    target_rc = tmp_path / "rc"
+    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash", "marainer", "annotaide"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "marainer" in out and "annotaide" in out
+    body = target_rc.read_text()
+    assert "_marainer_completion()" in body
+    assert "_annotaide_completion()" in body
+
+
+def test_cli_install_completions_auto_discover_empty(tmp_path: Path, capsys: Any) -> None:
+    target_rc = tmp_path / "rc"
+    # No apps to discover (no prefix override; sys.prefix's bin probably has
+    # non-Liquifai stuff that exits non-zero on --show-completion bash). We
+    # only assert the no-op message + clean exit, not the specific contents.
+    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # Either some apps were installed (rare in test env) or the no-op message
+    # was printed. Both are acceptable; assert clean exit.
+    if not target_rc.exists():
+        assert "no Liquifai apps found" in out
+
+
+def test_cli_install_completions_requires_target_rc() -> None:
+    with pytest.raises(SystemExit):
+        comp._cli_install_completions(["--shell", "bash"])
+
+
 # ----------------- _fast_complete (the standalone entry) -----------------
 
 

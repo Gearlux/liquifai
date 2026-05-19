@@ -85,5 +85,30 @@ The first argument is the alias name; the rest is what the alias expands
 to. `mt cfg.yaml<TAB>` then completes with the same `--key` suggestions
 you'd get from `marainer train cfg.yaml<TAB>`.
 
+### Workspace-local installation (avoid touching `~/.bashrc`)
+
+`<app> --install-completion` writes into the user's global rc file. For
+multi-project workspaces it's often nicer to keep completion confined to
+a project-local rc that your `project.bashrc` sources, so a fresh checkout
+gets working completion without polluting `~/.bashrc`. Use the bundled
+`liquifai-install-completions` console script:
+
+```bash
+# Discover every Liquifai app in the active venv and install completion
+# blocks for all of them into a single project-local rc fragment.
+liquifai-install-completions --target-rc ./.project.bashrc.completion
+
+# Or pin to a specific list of apps.
+liquifai-install-completions --target-rc ./.project.bashrc.completion marainer annotaide
+
+# Then in your project.bashrc:
+#   [ -f ./.project.bashrc.completion ] && source ./.project.bashrc.completion
+```
+
+Auto-discovery probes each executable in `sys.prefix/bin` with
+`--show-completion bash`; Liquifai apps short-circuit that flag before any
+heavy import, so probing is cheap. The aisland workspace runs this step
+as part of `bash aisland/setup.sh`.
+
 ## License
 MIT
