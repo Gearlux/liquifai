@@ -680,6 +680,10 @@ def _file_candidates(incomplete: str, exts: Optional[List[str]]) -> List[str]:
 def _resolve_override_keys(config_path: Path) -> List[str]:
     """Walk ``config_path`` and return dotted keys for ``--<key>`` overrides.
 
+    Also surfaces scope-dimension keys (any ``KEY`` mentioned by a
+    ``!scope:KEY=VAL`` block) so the implicit ``--KEY VAL`` activation form
+    completes alongside config overrides.
+
     Lazily imports confluid so the fast path stays ~stdlib-only when no
     config is on the command line.
     """
@@ -688,8 +692,9 @@ def _resolve_override_keys(config_path: Path) -> List[str]:
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with redirect_stdout(buf_out), redirect_stderr(buf_err):
         raw = confluid.load_config(config_path)
+        dimensions = confluid.discover_dimensions(raw)
         cfg = confluid.load(raw, flow=False)
-    keys: List[str] = []
+    keys: List[str] = list(dimensions)
     _walk_keys(cfg, prefix="", out=keys)
     return sorted(set(keys))
 

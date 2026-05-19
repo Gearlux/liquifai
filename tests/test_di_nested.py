@@ -40,7 +40,7 @@ MockTop:
       value: 10
   name: "root"
 
-debug:
+if_debug: !scope:debug
   MockTop.mid.sub.value: 99
   MockTop.name: "debug-mode"
 """
@@ -104,7 +104,7 @@ def test_late_registration_di(tmp_path: Path, monkeypatch: Any) -> None:
     config_content = """
 TargetClass:
   value: 10
-debug:
+if_debug: !scope:debug
   TargetClass.value: 50
 """
     config_file = tmp_path / "late_config.yaml"

@@ -23,7 +23,7 @@ def test_bootstrap_logic_direct(tmp_path: Path) -> None:
 
 def test_bootstrap_with_scopes_direct(tmp_path: Path) -> None:
     config_file = tmp_path / "scoped_direct.yaml"
-    config_file.write_text("val: 1\ndebug:\n  val: 10")
+    config_file.write_text("val: 1\nif_debug: !scope:debug\n  val: 10\n")
 
     app = LiquifyApp(name="scope-direct")
     app.context = LiquifyContext(name="scope-direct", config_path=config_file, scopes=["debug"])
