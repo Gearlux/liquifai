@@ -193,12 +193,21 @@ class LiquifyApp:
         if final_config_path:
             config_path = final_config_path
 
+        # 3b. BIND DIMENSION FLAGS — raw-load the config (if any) to discover
+        # which `--KEY` flags should activate scope dimensions, then re-parse
+        # `final_argv` so those flags are routed into `scopes` instead of
+        # being treated as config overrides.
+        raw_config: Optional[Any] = None
+        if config_path is not None and config_path.exists():
+            raw_config = confluid.load_config(config_path)
+            scopes, final_argv = self._bind_dimension_flags(scopes, raw_config, final_argv)
+
         # 4. INITIALIZE STATE
         self.context = LiquifyContext(
             name=self.name, config_path=config_path, scopes=scopes, debug=debug, **log_overrides
         )
         set_context(self.context)
-        self._bootstrap()
+        self._bootstrap(raw_config=raw_config)
 
         # 5. APPLY OVERRIDES
         self._apply_overrides(final_argv)
@@ -252,8 +261,52 @@ class LiquifyApp:
                     i += 1
         return config_path, scopes, debug, log_overrides, remaining
 
-    def _bootstrap(self) -> None:
-        """Standard Trio Bootstrap."""
+    def _bind_dimension_flags(self, scopes: List[str], raw_config: Any, argv: List[str]) -> Tuple[List[str], List[str]]:
+        """Promote ``--KEY VAL`` / ``--KEY=VAL`` flags into ``scopes`` when ``KEY``
+        is a declared scope dimension in the raw config.
+
+        After globals are parsed, the raw YAML is walked once by
+        :func:`confluid.discover_dimensions` to learn which keys appear in any
+        ``!scope:KEY=VAL`` / ``!scope:KEY(VAL)`` block. Those keys then bind to
+        implicit CLI flags so users can write ``--task classification`` in
+        addition to ``--scope task=classification``. Non-dimension flags pass
+        through unchanged and continue down the normal CLI-override path.
+        """
+        dimensions = confluid.discover_dimensions(raw_config)
+        if not dimensions:
+            return scopes, argv
+
+        remaining: List[str] = []
+        i = 0
+        while i < len(argv):
+            arg = argv[i]
+            if arg.startswith("--"):
+                # ``--KEY=VAL`` form.
+                if "=" in arg:
+                    key, value = arg[2:].split("=", 1)
+                    if key in dimensions:
+                        scopes.append(f"{key}={value}")
+                        i += 1
+                        continue
+                # ``--KEY VAL`` form — requires a non-flag follower.
+                else:
+                    key = arg[2:]
+                    if key in dimensions and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                        scopes.append(f"{key}={argv[i + 1]}")
+                        i += 2
+                        continue
+            remaining.append(arg)
+            i += 1
+        return scopes, remaining
+
+    def _bootstrap(self, raw_config: Optional[Any] = None) -> None:
+        """Standard Trio Bootstrap.
+
+        ``raw_config`` is the pre-loaded raw dict (or Fluid) — passed in from
+        the CLI path so we don't re-read the file. Internal callers (the
+        public ``liquify`` shortcut) may also pass it; everyone else gets a
+        fresh ``load_config`` here.
+        """
         if not self.context:
             return
 
@@ -279,11 +332,8 @@ class LiquifyApp:
             if not self.context.config_path.exists():
                 console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
                 sys.exit(1)
-            from liquifai.scopes import resolve_scopes
-
-            raw = confluid.load_config(self.context.config_path)
-            unwrapped = resolve_scopes(raw, self.context.scopes) if self.context.scopes else raw
-            self.context.config_data = confluid.load(unwrapped, flow=False)
+            data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
+            self.context.config_data = confluid.load(data, flow=False, scopes=self.context.scopes or None)
             self.context.config_data = _expand_strings(self.context.config_data)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
@@ -427,11 +477,7 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                from liquifai.scopes import resolve_scopes
-
-                raw = confluid.load_config(config_path)
-                unwrapped = resolve_scopes(raw, scopes) if scopes else raw
-                ctx.config_data = confluid.load(unwrapped, flow=False)
+                ctx.config_data = confluid.load(config_path, flow=False, scopes=scopes or None)
                 ctx.config_data = _expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)
@@ -503,7 +549,9 @@ class LiquifyApp:
 
         console.print("\n[bold]Global Options:[/bold]")
         console.print("  -c, --config PATH      Configuration file.")
-        console.print("  -s, --scope NAME       Active scope(s).")
+        console.print("  -s, --scope NAME       Active boolean scope(s); accepts `NAME` or `KEY=VAL`.")
+        console.print("  --KEY VAL              Implicit per-dimension flag for any `!scope:KEY=…` block")
+        console.print("                         declared in the YAML (e.g. `--task classification`).")
         console.print("  -d, --debug            Enable debug mode.")
         console.print("  --level LEVEL          Set log level for both sinks (TRACE, DEBUG, INFO).")
         console.print("  --console-level LEVEL  Set console log level (overrides --level).")
