@@ -26,9 +26,7 @@ def test_bootstrap_with_scopes_direct(tmp_path: Path) -> None:
     config_file.write_text("val: 1\nif_debug: !scope:debug\n  val: 10\n")
 
     app = LiquifyApp(name="scope-direct")
-    app.context = LiquifyContext(
-        name="scope-direct", config_path=config_file, scopes=["debug"]
-    )
+    app.context = LiquifyContext(name="scope-direct", config_path=config_file, scopes=["debug"])
 
     app._bootstrap()
     assert app.context.config_data["val"] == 10
@@ -36,9 +34,7 @@ def test_bootstrap_with_scopes_direct(tmp_path: Path) -> None:
 
 def test_bootstrap_invalid_config_direct() -> None:
     app = LiquifyApp(name="fail-direct")
-    app.context = LiquifyContext(
-        name="fail-direct", config_path=Path("non_existent.yaml")
-    )
+    app.context = LiquifyContext(name="fail-direct", config_path=Path("non_existent.yaml"))
 
     # Should raise SystemExit
     with pytest.raises(SystemExit) as excinfo:

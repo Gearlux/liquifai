@@ -8,6 +8,7 @@ The receiving code is responsible for calling ``confluid.flow(value,
 from typing import Any
 
 from confluid import LazyClass, configurable, flow, register
+
 from liquifai.core import _deep_flow
 
 

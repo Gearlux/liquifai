@@ -1,6 +1,7 @@
 from confluid import configurable
-from liquifai import LiquifyApp
 from logflow import get_logger
+
+from liquifai import LiquifyApp
 
 logger = get_logger("simple_app")
 

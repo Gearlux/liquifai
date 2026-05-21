@@ -1,6 +1,7 @@
 from typing import Any, Optional
 
 import confluid
+
 from liquifai.discovery import get_configurable_paths
 from liquifai.report import show_configuration
 

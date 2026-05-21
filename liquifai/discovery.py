@@ -1,9 +1,7 @@
 from typing import Any, Dict, Optional, Set
 
 
-def get_configurable_paths(
-    obj: Any, prefix: str = "", visited: Optional[Set[int]] = None
-) -> Dict[str, Any]:
+def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int]] = None) -> Dict[str, Any]:
     """
     Recursively discover all configurable paths in an object hierarchy.
     Returns a mapping of dotted_path -> current_value.
@@ -32,9 +30,7 @@ def get_configurable_paths(
     else:
         node_name = getattr(obj, "name", None)
 
-    current_prefix = (
-        f"{prefix}.{node_name}" if prefix and node_name else (node_name or prefix)
-    )
+    current_prefix = f"{prefix}.{node_name}" if prefix and node_name else (node_name or prefix)
 
     # 2. Inspect attributes
     from confluid import Fluid, get_registry
@@ -68,11 +64,7 @@ def get_configurable_paths(
                     # Hierarchy returns 'ClassName.param', we want 'current_prefix.param'
                     # Strip the ClassName and prepend current_prefix
                     param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
-                    full_p = (
-                        f"{current_prefix}.{param_name}"
-                        if current_prefix
-                        else param_name
-                    )
+                    full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
                     paths[full_p] = None  # Value is unknown for a class-only default
 
             # 3. Handle Fluid Proxies
@@ -81,29 +73,19 @@ def get_configurable_paths(
                 from confluid import get_hierarchy
 
                 target = attr_val.target
-                cls_to_inspect = (
-                    reg.get_class(target) if isinstance(target, str) else target
-                )
+                cls_to_inspect = reg.get_class(target) if isinstance(target, str) else target
 
                 if cls_to_inspect:
                     hierarchy = get_hierarchy(cls_to_inspect)
                     for h_path, _ in hierarchy.items():
-                        param_name = (
-                            h_path.split(".", 1)[-1] if "." in h_path else h_path
-                        )
-                        full_p = (
-                            f"{current_prefix}.{param_name}"
-                            if current_prefix
-                            else param_name
-                        )
+                        param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
+                        full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
                         # Use Fluid's kwarg value if present, otherwise None
                         paths[full_p] = attr_val.kwargs.get(param_name)
 
             elif not callable(attr_val):
                 # Leaf attribute
-                full_path = (
-                    f"{current_prefix}.{attr_name}" if current_prefix else attr_name
-                )
+                full_path = f"{current_prefix}.{attr_name}" if current_prefix else attr_name
                 paths[full_path] = attr_val
 
         except Exception:
