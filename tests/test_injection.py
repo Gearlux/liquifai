@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any, Dict
 
 import confluid
-
 from liquifai import LiquifyApp
 from liquifai.context import set_context
 
@@ -35,7 +34,14 @@ def test_command_injection(tmp_path: Path, monkeypatch: Any) -> None:
         captured["name"] = name
 
     # 2. Run app
-    test_args = ["inject-app", "--config", str(config_file), "train", "--name", "RealRun"]
+    test_args = [
+        "inject-app",
+        "--config",
+        str(config_file),
+        "train",
+        "--name",
+        "RealRun",
+    ]
     monkeypatch.setattr(sys, "argv", test_args)
     set_context(None)  # type: ignore
 
@@ -66,10 +72,17 @@ def test_injection_without_config(monkeypatch: Any) -> None:
     assert captured["model"].layers == 3  # Default value
 
 
-def test_injection_from_tagged_top_level_fluid(tmp_path: Path, monkeypatch: Any) -> None:
+def test_injection_from_tagged_top_level_fluid(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     """``trainer: !class:...`` binds the Fluid's kwargs instead of dropping them."""
     config_file = tmp_path / "inject_tagged.yaml"
-    config_file.write_text("trainer: !class:MyTrainer\n" "  lr: 0.0007\n" "model: !class:MyModel\n" "  layers: 42\n")
+    config_file.write_text(
+        "trainer: !class:MyTrainer\n"
+        "  lr: 0.0007\n"
+        "model: !class:MyModel\n"
+        "  layers: 42\n"
+    )
 
     app = LiquifyApp(name="tagged-app")
     captured: Dict[str, Any] = {}

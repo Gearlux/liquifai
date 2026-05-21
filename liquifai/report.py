@@ -43,7 +43,9 @@ def show_configuration(
     table.add_column("Current/Default Value", style="green")
     table.add_column("Documentation", style="dim white")
 
-    sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
+    sorted_paths = sorted(
+        all_paths, key=lambda p: (display_map[p].count("."), display_map[p])
+    )
 
     for path in sorted_paths:
         short_path = display_map[path]
@@ -70,7 +72,9 @@ def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
     table.add_column("Current Value", style="green")
     table.add_column("Description", style="dim white")
 
-    sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
+    sorted_paths = sorted(
+        all_paths, key=lambda p: (display_map[p].count("."), display_map[p])
+    )
 
     for path in sorted_paths:
         short_path = display_map[path]

@@ -103,7 +103,9 @@ def test_script_command_expects_yaml(app: LiquifyApp, tmp_path: Path) -> None:
     assert any(d.endswith("sub/") for d in dirs)
 
 
-def test_script_command_after_config_dashdash_lists_flags(app: LiquifyApp, tmp_path: Path) -> None:
+def test_script_command_after_config_dashdash_lists_flags(
+    app: LiquifyApp, tmp_path: Path
+) -> None:
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text("layers: 5\nlearning_rate: 0.01\n")
 
@@ -113,7 +115,9 @@ def test_script_command_after_config_dashdash_lists_flags(app: LiquifyApp, tmp_p
     assert "--learning_rate" in out
 
 
-def test_script_command_after_config_dashprefix_filters_keys(app: LiquifyApp, tmp_path: Path) -> None:
+def test_script_command_after_config_dashprefix_filters_keys(
+    app: LiquifyApp, tmp_path: Path
+) -> None:
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text("layers: 5\nlearning_rate: 0.01\n")
 
@@ -121,7 +125,9 @@ def test_script_command_after_config_dashprefix_filters_keys(app: LiquifyApp, tm
     assert out == ["--layers"]
 
 
-def test_script_command_after_config_empty_word_lists_overrides(app: LiquifyApp, tmp_path: Path) -> None:
+def test_script_command_after_config_empty_word_lists_overrides(
+    app: LiquifyApp, tmp_path: Path
+) -> None:
     """`myapp train cfg.yaml <TAB>` (empty incomplete) should still suggest
     overrides — without this branch the shell falls back to file completion,
     which is the wrong default once the config slot is filled."""
@@ -133,7 +139,9 @@ def test_script_command_after_config_empty_word_lists_overrides(app: LiquifyApp,
     assert "--config" in out
 
 
-def test_script_command_after_override_flag_silent(app: LiquifyApp, tmp_path: Path) -> None:
+def test_script_command_after_override_flag_silent(
+    app: LiquifyApp, tmp_path: Path
+) -> None:
     """`myapp train cfg.yaml --layers <TAB>` expects a value; we have no type
     info so we stay silent (let the shell do default filename completion)."""
     cfg = tmp_path / "cfg.yaml"
@@ -333,7 +341,9 @@ def test_serialize_app_round_trip(app: LiquifyApp) -> None:
     assert set(sub["script_cmds"]) == {"beta"}
 
 
-def test_write_then_read_cache(app: LiquifyApp, tmp_path: Path, monkeypatch: Any) -> None:
+def test_write_then_read_cache(
+    app: LiquifyApp, tmp_path: Path, monkeypatch: Any
+) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     target = comp.write_cache(app)
     assert target == tmp_path / "liquifai" / "myapp.json"
@@ -351,7 +361,9 @@ def test_read_cache_missing_returns_none(tmp_path: Path, monkeypatch: Any) -> No
     assert comp.read_cache("nonexistent") is None
 
 
-def test_read_cache_wrong_version_returns_none(tmp_path: Path, monkeypatch: Any) -> None:
+def test_read_cache_wrong_version_returns_none(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     target = tmp_path / "liquifai" / "stale.json"
     target.parent.mkdir(parents=True)
@@ -368,7 +380,9 @@ def test_complete_from_tree_works_without_app(app: LiquifyApp) -> None:
 # ------------------------ end-to-end via LiquifyApp ----------------------
 
 
-def test_app_emits_completion_via_env(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
+def test_app_emits_completion_via_env(
+    app: LiquifyApp, capsys: Any, monkeypatch: Any
+) -> None:
     monkeypatch.setenv("_MYAPP_COMPLETE", "complete_bash")
     monkeypatch.setenv("COMP_WORDS", "myapp gr")
     monkeypatch.setenv("COMP_CWORD", "1")
@@ -385,7 +399,9 @@ def test_app_emits_completion_via_env(app: LiquifyApp, capsys: Any, monkeypatch:
     assert "train" not in lines
 
 
-def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+def test_app_show_completion_prints_script(
+    app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
     monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
@@ -403,7 +419,9 @@ def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeyp
     assert cache.exists()
 
 
-def test_app_show_completion_tolerates_cache_write_failure(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
+def test_app_show_completion_tolerates_cache_write_failure(
+    app: LiquifyApp, capsys: Any, monkeypatch: Any
+) -> None:
     """If write_cache raises (e.g. read-only XDG_CACHE_HOME), the script
     must still be printed — script output is the primary contract,
     cache-priming is a best-effort side effect."""
@@ -489,7 +507,9 @@ def test_install_script_target_rc_creates_parent(tmp_path: Path) -> None:
 
 def test_install_for_apps_explicit_list(tmp_path: Path) -> None:
     target_rc = tmp_path / "rc"
-    installed = comp.install_for_apps(target_rc=target_rc, apps=["foo", "bar"], shell="bash")
+    installed = comp.install_for_apps(
+        target_rc=target_rc, apps=["foo", "bar"], shell="bash"
+    )
     assert installed == ["foo", "bar"]
     body = target_rc.read_text()
     assert "_foo_completion()" in body
@@ -536,9 +556,15 @@ def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> Non
         stdout="_CLICK_APP_COMPLETE=complete_bash click-app",
     )
     # Liquifai responder but in the skip-list — must still be excluded.
-    _make_stub_script(bindir / "python3.12", exit_code=0, stdout="liquifai-complete python3.12")
+    _make_stub_script(
+        bindir / "python3.12", exit_code=0, stdout="liquifai-complete python3.12"
+    )
     # liquifai-* helpers must also be excluded.
-    _make_stub_script(bindir / "liquifai-complete", exit_code=0, stdout="liquifai-complete liquifai-complete")
+    _make_stub_script(
+        bindir / "liquifai-complete",
+        exit_code=0,
+        stdout="liquifai-complete liquifai-complete",
+    )
     found = comp.discover_liquifai_apps(prefix=prefix)
     assert found == ["marainer"]
 
@@ -577,7 +603,9 @@ def test_discover_liquifai_apps_missing_bindir(tmp_path: Path) -> None:
 
 def test_cli_install_completions_explicit_apps(tmp_path: Path, capsys: Any) -> None:
     target_rc = tmp_path / "rc"
-    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash", "marainer", "annotaide"])
+    rc = comp._cli_install_completions(
+        ["--target-rc", str(target_rc), "--shell", "bash", "marainer", "annotaide"]
+    )
     assert rc == 0
     out = capsys.readouterr().out
     assert "marainer" in out and "annotaide" in out
@@ -586,12 +614,16 @@ def test_cli_install_completions_explicit_apps(tmp_path: Path, capsys: Any) -> N
     assert "_annotaide_completion()" in body
 
 
-def test_cli_install_completions_auto_discover_empty(tmp_path: Path, capsys: Any) -> None:
+def test_cli_install_completions_auto_discover_empty(
+    tmp_path: Path, capsys: Any
+) -> None:
     target_rc = tmp_path / "rc"
     # No apps to discover (no prefix override; sys.prefix's bin probably has
     # non-Liquifai stuff that exits non-zero on --show-completion bash). We
     # only assert the no-op message + clean exit, not the specific contents.
-    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash"])
+    rc = comp._cli_install_completions(
+        ["--target-rc", str(target_rc), "--shell", "bash"]
+    )
     assert rc == 0
     out = capsys.readouterr().out
     # Either some apps were installed (rare in test env) or the no-op message
@@ -608,7 +640,9 @@ def test_cli_install_completions_requires_target_rc() -> None:
 # ----------------- _fast_complete (the standalone entry) -----------------
 
 
-def test_fast_complete_main_serves_from_cache(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+def test_fast_complete_main_serves_from_cache(
+    app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     comp.write_cache(app)
 
@@ -624,7 +658,9 @@ def test_fast_complete_main_serves_from_cache(app: LiquifyApp, capsys: Any, monk
     assert "group" in out
 
 
-def test_fast_complete_main_silent_on_cache_miss(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+def test_fast_complete_main_silent_on_cache_miss(
+    capsys: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "argv", ["liquifai-complete", "nonexistent"])
     monkeypatch.setenv("COMP_WORDS", "nonexistent ")
@@ -636,7 +672,9 @@ def test_fast_complete_main_silent_on_cache_miss(capsys: Any, monkeypatch: Any, 
     assert capsys.readouterr().out == ""
 
 
-def test_help_refreshes_stale_completion_cache(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+def test_help_refreshes_stale_completion_cache(
+    capsys: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
     """Adding a new command then running --help must update the on-disk cache.
 
     Regression test: prior to this fix, --help short-circuited before the

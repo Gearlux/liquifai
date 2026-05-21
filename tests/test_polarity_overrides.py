@@ -70,7 +70,14 @@ def test_polarity_override_yaml_state(monkeypatch: Any, tmp_path: Any) -> None:
         captured_config = app.context.config_data if app.context else None
 
     # Override: a -> true, b -> false
-    test_args = ["yaml-app", "--config", str(config_file), "run", "--feature_a+", "--feature_b-"]
+    test_args = [
+        "yaml-app",
+        "--config",
+        str(config_file),
+        "run",
+        "--feature_a+",
+        "--feature_b-",
+    ]
     monkeypatch.setattr(sys, "argv", test_args)
 
     app.run()

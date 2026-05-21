@@ -5,14 +5,14 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple
 
-import confluid
-import logflow
-from confluid import materialize
-from logflow import get_logger
 from rich.console import Console
 from rich.table import Table
 
+import confluid
+import logflow
+from confluid import materialize
 from liquifai.context import LiquifyContext, set_context
+from logflow import get_logger
 
 FlowMode = Literal["manual", "auto"]
 
@@ -117,10 +117,20 @@ class LiquifyApp:
         for special in ("--show-completion", "--install-completion"):
             if special not in argv:
                 continue
-            from liquifai.completion import SHELLS, detect_shell, install_script, render_script, write_cache
+            from liquifai.completion import (
+                SHELLS,
+                detect_shell,
+                install_script,
+                render_script,
+                write_cache,
+            )
 
             idx = argv.index(special)
-            shell = argv[idx + 1] if idx + 1 < len(argv) and argv[idx + 1] in SHELLS else detect_shell()
+            shell = (
+                argv[idx + 1]
+                if idx + 1 < len(argv) and argv[idx + 1] in SHELLS
+                else detect_shell()
+            )
             if special == "--show-completion":
                 print(render_script(self.name, shell))
                 # Side effect: prime the cache while the app is loaded.
@@ -138,9 +148,13 @@ class LiquifyApp:
             else:
                 target = install_script(self.name, shell)
                 cache_target = write_cache(self)
-                console.print(f"[green]Installed[/green] {self.name} {shell} completion in [cyan]{target}[/cyan]")
+                console.print(
+                    f"[green]Installed[/green] {self.name} {shell} completion in [cyan]{target}[/cyan]"
+                )
                 console.print(f"[dim]Cached command tree: {cache_target}[/dim]")
-                console.print(f"[dim]Restart your shell or `source {target}` to activate.[/dim]")
+                console.print(
+                    f"[dim]Restart your shell or `source {target}` to activate.[/dim]"
+                )
             return True
         return False
 
@@ -179,8 +193,16 @@ class LiquifyApp:
                 cmd_name = arg
                 target_func = target_app._commands[cmd_name]
                 i += 1
-                if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
-                    cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
+                if (
+                    cmd_name in target_app._script_cmds
+                    and i < len(argv)
+                    and not argv[i].startswith("-")
+                ):
+                    cp = (
+                        Path(argv[i])
+                        if Path(argv[i]).suffix
+                        else Path(argv[i]).with_suffix(".yaml")
+                    )
                     if cp.exists():
                         config_path, i = cp, i + 1
             else:
@@ -201,7 +223,9 @@ class LiquifyApp:
             return
 
         # 3. PARSE GLOBALS
-        final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(remaining_argv)
+        final_config_path, scopes, debug, log_overrides, final_argv = (
+            self._parse_globals(remaining_argv)
+        )
         if final_config_path:
             config_path = final_config_path
 
@@ -212,11 +236,17 @@ class LiquifyApp:
         raw_config: Optional[Any] = None
         if config_path is not None and config_path.exists():
             raw_config = confluid.load_config(config_path)
-            scopes, final_argv = self._bind_dimension_flags(scopes, raw_config, final_argv)
+            scopes, final_argv = self._bind_dimension_flags(
+                scopes, raw_config, final_argv
+            )
 
         # 4. INITIALIZE STATE
         self.context = LiquifyContext(
-            name=self.name, config_path=config_path, scopes=scopes, debug=debug, **log_overrides
+            name=self.name,
+            config_path=config_path,
+            scopes=scopes,
+            debug=debug,
+            **log_overrides,
         )
         set_context(self.context)
         self._bootstrap(raw_config=raw_config)
@@ -237,7 +267,9 @@ class LiquifyApp:
 
         return result
 
-    def _parse_globals(self, argv: List[str]) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
+    def _parse_globals(
+        self, argv: List[str]
+    ) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
         config_path, scopes, debug = None, [], False
         log_overrides, remaining = {}, []
 
@@ -273,7 +305,9 @@ class LiquifyApp:
                     i += 1
         return config_path, scopes, debug, log_overrides, remaining
 
-    def _bind_dimension_flags(self, scopes: List[str], raw_config: Any, argv: List[str]) -> Tuple[List[str], List[str]]:
+    def _bind_dimension_flags(
+        self, scopes: List[str], raw_config: Any, argv: List[str]
+    ) -> Tuple[List[str], List[str]]:
         """Promote ``--KEY VAL`` / ``--KEY=VAL`` flags into ``scopes`` when ``KEY``
         is a declared scope dimension in the raw config.
 
@@ -303,7 +337,11 @@ class LiquifyApp:
                 # ``--KEY VAL`` form — requires a non-flag follower.
                 else:
                     key = arg[2:]
-                    if key in dimensions and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                    if (
+                        key in dimensions
+                        and i + 1 < len(argv)
+                        and not argv[i + 1].startswith("-")
+                    ):
                         scopes.append(f"{key}={argv[i + 1]}")
                         i += 2
                         continue
@@ -327,7 +365,9 @@ class LiquifyApp:
             script_name = self.context.config_path.stem
 
         console_level = (
-            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+            self.context.console_level
+            or self.context.log_level
+            or ("DEBUG" if self.context.debug else "INFO")
         )
         file_level = self.context.file_level or self.context.log_level or "DEBUG"
 
@@ -342,13 +382,25 @@ class LiquifyApp:
 
         if self.context.config_path:
             if not self.context.config_path.exists():
-                console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
+                console.print(
+                    f"[red]Error:[/red] Configuration file not found: {self.context.config_path}"
+                )
                 sys.exit(1)
-            data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
-            self.context.config_data = confluid.load(data, flow=False, scopes=self.context.scopes or None)
+            data = (
+                raw_config
+                if raw_config is not None
+                else confluid.load_config(self.context.config_path)
+            )
+            self.context.config_data = confluid.load(
+                data, flow=False, scopes=self.context.scopes or None
+            )
             self.context.config_data = _expand_strings(self.context.config_data)
-            self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
-            self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
+            self.context.logger.info(
+                f"Loaded configuration from: {self.context.config_path}"
+            )
+            self.context.logger.trace(
+                f"BOOTSTRAP CONFIG STATE: {self.context.config_data}"
+            )
 
     def _apply_overrides(self, args: List[str]) -> None:
         if not self.context or not args:
@@ -362,7 +414,9 @@ class LiquifyApp:
         from confluid import deep_merge, expand_dotted_keys
 
         overrides = _expand_strings(overrides)
-        self.context.logger.debug(f"Applying CLI overrides: {overrides}; deletions: {deletions}")
+        self.context.logger.debug(
+            f"Applying CLI overrides: {overrides}; deletions: {deletions}"
+        )
         self.context.config_data = deep_merge(self.context.config_data, overrides)
         # ``deep_merge`` leaves dotted-key overrides as literal-string keys
         # at the top level (``{"processor.lookback_days": 5}``). We need to
@@ -388,7 +442,9 @@ class LiquifyApp:
         # need this pass because the new key isn't yet in any Fluid's
         # kwargs.
         _merge_overrides_into_fluids(self.context.config_data, overrides)
-        self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
+        self.context.logger.trace(
+            f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}"
+        )
 
     def run_command(self, func: Callable[..., Any]) -> Any:
         """Execute with Dependency Injection."""
@@ -427,7 +483,9 @@ class LiquifyApp:
 
         for name, param in sig.parameters.items():
             if reg.is_configurable(param.annotation):
-                cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
+                cls_name = getattr(
+                    param.annotation, "__confluid_name__", param.annotation.__name__
+                )
                 if isinstance(cfg, dict):
                     config_block = cfg.get(cls_name) or cfg.get(name) or cfg
                 else:
@@ -445,13 +503,17 @@ class LiquifyApp:
                     # User wrote `name: !class:...` — the Fluid already carries
                     # the full kwargs; materialize it directly so its payload
                     # isn't discarded by the marker-dict path below.
-                    kwargs[name] = materialize(config_block, context=self.context.config_data)
+                    kwargs[name] = materialize(
+                        config_block, context=self.context.config_data
+                    )
                 else:
                     marker_dict = {
                         "_confluid_class_": cls_name,
                         **(config_block if isinstance(config_block, dict) else {}),
                     }
-                    kwargs[name] = materialize(marker_dict, context=self.context.config_data)
+                    kwargs[name] = materialize(
+                        marker_dict, context=self.context.config_data
+                    )
             else:
                 # Non-configurable: Resolve from context data or use default
                 if isinstance(cfg, dict) and name in cfg:
@@ -489,7 +551,9 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                ctx.config_data = confluid.load(config_path, flow=False, scopes=scopes or None)
+                ctx.config_data = confluid.load(
+                    config_path, flow=False, scopes=scopes or None
+                )
                 ctx.config_data = _expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)
@@ -520,7 +584,9 @@ class LiquifyApp:
 
         if target_func:
             desc = target_func.__doc__ or "No description."
-            console.print(f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}")
+            console.print(
+                f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}"
+            )
             console.print(f"[dim]{desc.strip()}[/dim]")
 
             from liquifai.report import show_configuration
@@ -530,7 +596,10 @@ class LiquifyApp:
                 try:
                     flowed_kwargs = self.liquify(target_func, config_path=config_path)
                 except Exception as exc:
-                    console.print("[dim]Config failed to flow; showing command signature only. " f"Reason: {exc}[/dim]")
+                    console.print(
+                        "[dim]Config failed to flow; showing command signature only. "
+                        f"Reason: {exc}[/dim]"
+                    )
 
             if flowed_kwargs is not None and config_path is not None:
                 console.print(
@@ -550,26 +619,50 @@ class LiquifyApp:
             table.add_column("Description")
 
             for name, sub_app in sorted(app._sub_apps.items()):
-                desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
+                desc = (
+                    f"[bold]Group:[/bold] {sub_app.description}"
+                    if sub_app.description
+                    else "Group."
+                )
                 table.add_row(name, desc)
 
             for name, func in sorted(app._commands.items()):
-                desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
+                desc = (
+                    func.__doc__.strip().split("\n")[0]
+                    if func.__doc__
+                    else "No description."
+                )
                 table.add_row(name, desc)
 
             console.print(table)
 
         console.print("\n[bold]Global Options:[/bold]")
         console.print("  -c, --config PATH      Configuration file.")
-        console.print("  -s, --scope NAME       Active boolean scope(s); accepts `NAME` or `KEY=VAL`.")
-        console.print("  --KEY VAL              Implicit per-dimension flag for any `!scope:KEY=…` block")
-        console.print("                         declared in the YAML (e.g. `--task classification`).")
+        console.print(
+            "  -s, --scope NAME       Active boolean scope(s); accepts `NAME` or `KEY=VAL`."
+        )
+        console.print(
+            "  --KEY VAL              Implicit per-dimension flag for any `!scope:KEY=…` block"
+        )
+        console.print(
+            "                         declared in the YAML (e.g. `--task classification`)."
+        )
         console.print("  -d, --debug            Enable debug mode.")
-        console.print("  --level LEVEL          Set log level for both sinks (TRACE, DEBUG, INFO).")
-        console.print("  --console-level LEVEL  Set console log level (overrides --level).")
-        console.print("  --file-level LEVEL     Set file log level (overrides --level).")
-        console.print("  --install-completion [SHELL]  Install tab completion (bash/zsh/fish).")
-        console.print("  --show-completion [SHELL]     Print the completion script to stdout.")
+        console.print(
+            "  --level LEVEL          Set log level for both sinks (TRACE, DEBUG, INFO)."
+        )
+        console.print(
+            "  --console-level LEVEL  Set console log level (overrides --level)."
+        )
+        console.print(
+            "  --file-level LEVEL     Set file log level (overrides --level)."
+        )
+        console.print(
+            "  --install-completion [SHELL]  Install tab completion (bash/zsh/fish)."
+        )
+        console.print(
+            "  --show-completion [SHELL]     Print the completion script to stdout."
+        )
         console.print("")
 
 
@@ -685,7 +778,9 @@ def _merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
         for k, v in overrides.items():
             if fluid_name and "." in k:
                 head, _, tail = k.partition(".")
-                if head == str(fluid_name) and (tail in data.kwargs or tail in accepted):
+                if head == str(fluid_name) and (
+                    tail in data.kwargs or tail in accepted
+                ):
                     data.kwargs[tail] = v
                     continue  # dotted form handled — don't also broadcast-match.
             # Flat form: apply when the kwarg is already in YAML (catches the
@@ -738,7 +833,9 @@ def _accepted_override_keys(target: Any) -> Set[str]:
         sig = inspect.signature(init)
     except (ValueError, TypeError):
         return set()
-    accepted: Set[str] = {p for p in sig.parameters if p not in ("self", "cls", "args", "kwargs")}
+    accepted: Set[str] = {
+        p for p in sig.parameters if p not in ("self", "cls", "args", "kwargs")
+    }
 
     if not getattr(cls, "__confluid_configurable__", False):
         return accepted
@@ -790,7 +887,9 @@ def _expand_strings(data: Any, _visited: Optional[Set[int]] = None) -> Any:
         return type(data)(out)
     if isinstance(data, Fluid):
         if isinstance(data.kwargs, dict):
-            data.kwargs = {k: _expand_strings(v, _visited) for k, v in data.kwargs.items()}
+            data.kwargs = {
+                k: _expand_strings(v, _visited) for k, v in data.kwargs.items()
+            }
 
     return data
 

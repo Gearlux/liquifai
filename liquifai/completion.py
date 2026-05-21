@@ -57,7 +57,9 @@ GLOBAL_FLAGS: List[str] = [
 PATH_VALUE_FLAGS: Set[str] = {"--config", "-c", "--log-dir"}
 SHELL_VALUE_FLAGS: Set[str] = {"--install-completion", "--show-completion"}
 GLOBAL_VALUE_FLAGS: Set[str] = (
-    PATH_VALUE_FLAGS | SHELL_VALUE_FLAGS | {"--scope", "-s", "--level", "--console-level", "--file-level"}
+    PATH_VALUE_FLAGS
+    | SHELL_VALUE_FLAGS
+    | {"--scope", "-s", "--level", "--console-level", "--file-level"}
 )
 
 
@@ -263,7 +265,9 @@ def render_script(prog: str, shell: str) -> str:
     """Render the shell completion script for ``prog`` in ``shell``."""
     if shell not in SHELLS:
         raise ValueError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
-    template = {"bash": _BASH_TEMPLATE, "zsh": _ZSH_TEMPLATE, "fish": _FISH_TEMPLATE}[shell]
+    template = {"bash": _BASH_TEMPLATE, "zsh": _ZSH_TEMPLATE, "fish": _FISH_TEMPLATE}[
+        shell
+    ]
     return template.replace("{prog}", prog)
 
 
@@ -335,7 +339,9 @@ def install_script(
 
     helpers_body = render_helpers(shell).rstrip("\n")
     helpers_block = f"{_HELPERS_MARKER}\n{helpers_body}\n{_HELPERS_END_MARKER}\n"
-    existing = _splice_block(existing, _HELPERS_MARKER, _HELPERS_END_MARKER, helpers_block)
+    existing = _splice_block(
+        existing, _HELPERS_MARKER, _HELPERS_END_MARKER, helpers_block
+    )
 
     marker = f"# >>> liquifai completion for {prog} >>>"
     end_marker = f"# <<< liquifai completion for {prog} <<<"
@@ -385,7 +391,9 @@ _NON_APP_BIN_PREFIXES: List[str] = [
 ]
 
 
-def discover_liquifai_apps(prefix: Optional[Path] = None, timeout: float = 5.0) -> List[str]:
+def discover_liquifai_apps(
+    prefix: Optional[Path] = None, timeout: float = 5.0
+) -> List[str]:
     """Return the names of Liquifai apps installed in ``prefix``'s bin dir.
 
     Iterates ``<prefix>/bin/*`` (defaulting to ``sys.prefix``), skips
@@ -495,7 +503,9 @@ def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
     apps = args.apps or None
     installed = install_for_apps(target_rc=args.target_rc, apps=apps, shell=shell)
     if not installed:
-        print(f"liquifai-install-completions: no Liquifai apps found to install into {args.target_rc}")
+        print(
+            f"liquifai-install-completions: no Liquifai apps found to install into {args.target_rc}"
+        )
         return 0
     for name in installed:
         print(f"installed {name} ({shell}) → {args.target_rc}")
@@ -589,7 +599,11 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         if cmd_name is None and tok in cur["commands"]:
             cmd_name = tok
             i += 1
-            if cmd_name in cur["script_cmds"] and i < len(parsed) and not parsed[i].startswith("-"):
+            if (
+                cmd_name in cur["script_cmds"]
+                and i < len(parsed)
+                and not parsed[i].startswith("-")
+            ):
                 p = Path(parsed[i])
                 if not p.suffix:
                     p = p.with_suffix(".yaml")
@@ -610,7 +624,9 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     if cmd_name is None:
         if incomplete.startswith("-"):
             return _filter_prefix(GLOBAL_FLAGS, incomplete)
-        return _filter_prefix(list(cur["commands"]) + list(cur["sub_apps"].keys()), incomplete)
+        return _filter_prefix(
+            list(cur["commands"]) + list(cur["sub_apps"].keys()), incomplete
+        )
 
     is_script_cmd = cmd_name in cur["script_cmds"]
 
@@ -621,7 +637,12 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     # is typing a flag), suggest globals + dotted override keys. Empty
     # incomplete is included so the user gets a hint even before typing
     # the first dash.
-    if is_script_cmd and consumed_config and prev.startswith("--") and prev not in GLOBAL_VALUE_FLAGS:
+    if (
+        is_script_cmd
+        and consumed_config
+        and prev.startswith("--")
+        and prev not in GLOBAL_VALUE_FLAGS
+    ):
         # User just typed `--<key>`; the next token is its value. We don't
         # know the value type, so stay silent and let the shell's default
         # filename completion kick in.
@@ -699,7 +720,9 @@ def _resolve_override_keys(config_path: Path) -> List[str]:
     return sorted(set(keys))
 
 
-def _walk_keys(obj: Any, prefix: str, out: List[str], depth: int = 0, max_depth: int = 8) -> None:
+def _walk_keys(
+    obj: Any, prefix: str, out: List[str], depth: int = 0, max_depth: int = 8
+) -> None:
     if depth > max_depth:
         return
     if isinstance(obj, dict):

@@ -16,9 +16,9 @@ Other Fluids are left alone — no typo broadcasting.
 from typing import Optional
 
 import pytest
+
 from confluid import configurable
 from confluid.fluid import Class
-
 from liquifai.core import _accepted_override_keys, _merge_overrides_into_fluids
 
 

@@ -2,7 +2,6 @@ import sys
 from pathlib import Path
 
 from confluid import configurable
-
 from liquifai import LiquifyApp
 
 
