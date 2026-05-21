@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from confluid import configurable
 from rich.console import Console
 
-from confluid import configurable
 from liquifai import LiquifyApp
 from liquifai.report import show_configuration
 

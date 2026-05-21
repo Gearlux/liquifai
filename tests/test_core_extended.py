@@ -14,9 +14,7 @@ def reset_context() -> Any:
     yield
 
 
-def test_script_command_promotion(
-    tmp_path: Path, monkeypatch: Any, capsys: Any
-) -> None:
+def test_script_command_promotion(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
     app = LiquifyApp(name="test-app")
 
     # Create a config file named "mycfg.yaml"
@@ -210,9 +208,7 @@ def test_missing_config(monkeypatch: Any, capsys: Any) -> None:
     def run() -> None:
         pass
 
-    monkeypatch.setattr(
-        sys, "argv", ["test-app", "--config", "nonexistent.yaml", "run"]
-    )
+    monkeypatch.setattr(sys, "argv", ["test-app", "--config", "nonexistent.yaml", "run"])
 
     with pytest.raises(SystemExit) as exc:
         app.run()
