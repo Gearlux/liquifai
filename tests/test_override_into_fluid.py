@@ -22,13 +22,17 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 import pytest
+
 from confluid import configurable
 from confluid.fluid import Class
 from confluid.merger import deep_merge, expand_dotted_keys
-
 from liquifai import LiquifyApp
 from liquifai.context import set_context
-from liquifai.core import _confluid_active_context, _deep_flow, _merge_overrides_into_fluids
+from liquifai.core import (
+    _confluid_active_context,
+    _deep_flow,
+    _merge_overrides_into_fluids,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -80,7 +84,9 @@ def test_dotted_override_reaches_fluid_kwargs_via_expand() -> None:
     assert fluid.kwargs["skip_if_fresh"] is False
 
 
-def test_flow_mode_auto_applies_dotted_overrides_to_processor_fluid(tmp_path: Path, monkeypatch: Any) -> None:
+def test_flow_mode_auto_applies_dotted_overrides_to_processor_fluid(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     """End-to-end through a real LiquifyApp: ``--processor.lookback_days 5``
     must reach the live ``_DownloadFearGreed`` instance.
 
@@ -128,7 +134,9 @@ def test_flow_mode_auto_applies_dotted_overrides_to_processor_fluid(tmp_path: Pa
 def test_dotted_list_override_reaches_fluid(tmp_path: Path, monkeypatch: Any) -> None:
     """Lists work too: ``--processor.symbols '[a,b]'`` must land as a list."""
     yaml = tmp_path / "smoke_list.yaml"
-    yaml.write_text("processor:\n" "  !class:_DownloadFearGreed\n" "  symbols: [original]\n")
+    yaml.write_text(
+        "processor:\n" "  !class:_DownloadFearGreed\n" "  symbols: [original]\n"
+    )
 
     app = LiquifyApp(name="dl-list-app")
     captured: dict[str, Any] = {}
@@ -154,10 +162,14 @@ def test_dotted_list_override_reaches_fluid(tmp_path: Path, monkeypatch: Any) ->
     assert proc.symbols == ["BTCUSDT", "ETHUSDT"]
 
 
-def test_equals_form_dotted_override_reaches_fluid(tmp_path: Path, monkeypatch: Any) -> None:
+def test_equals_form_dotted_override_reaches_fluid(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     """The new ``=`` grammar (``--key=value``) also routes through the fix."""
     yaml = tmp_path / "smoke_eq.yaml"
-    yaml.write_text("processor:\n" "  !class:_DownloadFearGreed\n" "  lookback_days: 365\n")
+    yaml.write_text(
+        "processor:\n" "  !class:_DownloadFearGreed\n" "  lookback_days: 365\n"
+    )
 
     app = LiquifyApp(name="dl-eq-app")
     captured: dict[str, Any] = {}
@@ -175,10 +187,14 @@ def test_equals_form_dotted_override_reaches_fluid(tmp_path: Path, monkeypatch: 
     assert captured["processor"].lookback_days == 7
 
 
-def test_bare_equals_form_dotted_override_reaches_fluid(tmp_path: Path, monkeypatch: Any) -> None:
+def test_bare_equals_form_dotted_override_reaches_fluid(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
     """Bare ``key=value`` (no ``--``) also routes through the fix."""
     yaml = tmp_path / "smoke_bare.yaml"
-    yaml.write_text("processor:\n" "  !class:_DownloadFearGreed\n" "  lookback_days: 365\n")
+    yaml.write_text(
+        "processor:\n" "  !class:_DownloadFearGreed\n" "  lookback_days: 365\n"
+    )
 
     app = LiquifyApp(name="dl-bare-app")
     captured: dict[str, Any] = {}

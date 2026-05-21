@@ -4,10 +4,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-import confluid
 import pytest
-from confluid import Lazy
 
+import confluid
+from confluid import Lazy
 from liquifai import LiquifyApp
 from liquifai.context import set_context
 
@@ -40,7 +40,9 @@ class _NeedsRuntimeKwarg:
 class _ContainerWithLazy:
     """Holds a ``_NeedsRuntimeKwarg`` declared ``Lazy[Any]``."""
 
-    def __init__(self, name: str, optimizer: Lazy[Any] = None, model: Any = None) -> None:
+    def __init__(
+        self, name: str, optimizer: Lazy[Any] = None, model: Any = None
+    ) -> None:
         self.name = name
         self.optimizer = optimizer  # stays a Class stub under flow_mode="auto"
         self.model = model  # eagerly flowed
@@ -64,7 +66,12 @@ def _run(app: LiquifyApp, argv: List[str], monkeypatch: Any) -> None:
 def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
     """Default ``manual`` mode preserves nested Class stubs as Fluids."""
     config = tmp_path / "manual.yaml"
-    config.write_text("exporter: !class:_Exporter\n" "  name: m1\n" "  store: !class:_Store\n" "    path: /tmp/x\n")
+    config.write_text(
+        "exporter: !class:_Exporter\n"
+        "  name: m1\n"
+        "  store: !class:_Store\n"
+        "    path: /tmp/x\n"
+    )
     app = LiquifyApp(name="manual-app")
     captured: Dict[str, Any] = {}
 
@@ -79,13 +86,20 @@ def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -
     exporter = captured["exporter"]
     assert isinstance(exporter, _Exporter)
     assert exporter.name == "m1"
-    assert isinstance(exporter.store, Fluid), "manual mode must leave nested Class as a Fluid"
+    assert isinstance(
+        exporter.store, Fluid
+    ), "manual mode must leave nested Class as a Fluid"
 
 
 def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
     """``auto`` mode deep-flows nested Class stubs into live instances."""
     config = tmp_path / "auto.yaml"
-    config.write_text("exporter: !class:_Exporter\n" "  name: m1\n" "  store: !class:_Store\n" "    path: /tmp/y\n")
+    config.write_text(
+        "exporter: !class:_Exporter\n"
+        "  name: m1\n"
+        "  store: !class:_Store\n"
+        "    path: /tmp/y\n"
+    )
     app = LiquifyApp(name="auto-app")
     captured: Dict[str, Any] = {}
 
@@ -105,7 +119,10 @@ def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -
     """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Lazy."""
     config = tmp_path / "auto_fail.yaml"
     config.write_text(
-        "container: !class:_ContainerEager\n" "  name: c1\n" "  optimizer: !class:_NeedsRuntimeKwarg\n" "    lr: 0.5\n"
+        "container: !class:_ContainerEager\n"
+        "  name: c1\n"
+        "  optimizer: !class:_NeedsRuntimeKwarg\n"
+        "    lr: 0.5\n"
     )
     app = LiquifyApp(name="auto-fail-app")
 

@@ -57,7 +57,9 @@ def test_scope_flag_boolean(tmp_path: Path) -> None:
 def test_scope_flag_keyed(tmp_path: Path) -> None:
     cfg = _write_cfg(tmp_path / "c.yaml", "x: 1\n")
     app = _make_app()
-    assert _run(app, [str(cfg), "--scope", "task=classification"]) == ["task=classification"]
+    assert _run(app, [str(cfg), "--scope", "task=classification"]) == [
+        "task=classification"
+    ]
 
 
 def test_scope_short_flag(tmp_path: Path) -> None:

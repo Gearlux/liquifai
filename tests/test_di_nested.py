@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Any
 
 from confluid import configurable
-
 from liquifai import LiquifyApp
 from liquifai.context import set_context
 
@@ -59,7 +58,14 @@ if_debug: !scope:debug
 
     # 3. Simulate CLI execution: wf run-test --config ... --scope debug
     # We must patch sys.argv
-    test_args = ["test_app", "--config", str(config_file), "--scope", "debug", "run-test"]
+    test_args = [
+        "test_app",
+        "--config",
+        str(config_file),
+        "--scope",
+        "debug",
+        "run-test",
+    ]
     monkeypatch.setattr(sys, "argv", test_args)
 
     # Reset singleton context for clean test
@@ -111,7 +117,11 @@ if_debug: !scope:debug
     config_file.write_text(config_content)
 
     # 3. Execute
-    monkeypatch.setattr(sys, "argv", ["late_app", "--config", str(config_file), "--scope", "debug", "late-test"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["late_app", "--config", str(config_file), "--scope", "debug", "late-test"],
+    )
     set_context(None)  # type: ignore
     app.run()
 

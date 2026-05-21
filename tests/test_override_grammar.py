@@ -87,7 +87,9 @@ def test_dotted_keys_supported_in_all_forms() -> None:
 
 def test_string_values_parsed_correctly() -> None:
     """Values are run through ``confluid.parse_value`` for type coercion."""
-    overrides, _ = _parse_override_args(["--name=test_model", "--count=5", "--ratio=0.7"])
+    overrides, _ = _parse_override_args(
+        ["--name=test_model", "--count=5", "--ratio=0.7"]
+    )
     assert overrides == {"name": "test_model", "count": 5, "ratio": 0.7}
 
 
@@ -105,7 +107,9 @@ def test_value_starting_with_tilde_is_not_consumed() -> None:
 
 def test_unrecognised_token_is_skipped() -> None:
     """Loose non-flag tokens are dropped (legacy behaviour preserved)."""
-    overrides, deletions = _parse_override_args(["bare_token_no_equals", "--key", "value"])
+    overrides, deletions = _parse_override_args(
+        ["bare_token_no_equals", "--key", "value"]
+    )
     assert overrides == {"key": "value"}
     assert deletions == []
 

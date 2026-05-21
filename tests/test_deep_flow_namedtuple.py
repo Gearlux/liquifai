@@ -43,7 +43,9 @@ def test_deep_flow_preserves_namedtuple_field_layout() -> None:
     for i, expected in enumerate(items):
         actual = holder.items[i]
         assert isinstance(actual, _Sample)
-        assert actual.input == expected.input, f"item[{i}].input was rewrapped: {actual!r}"
+        assert (
+            actual.input == expected.input
+        ), f"item[{i}].input was rewrapped: {actual!r}"
         assert actual.target == expected.target
         assert actual.metadata == expected.metadata
 

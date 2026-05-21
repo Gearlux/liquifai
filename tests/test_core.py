@@ -35,7 +35,15 @@ def test_global_context_extraction(tmp_path: Path, monkeypatch: Any) -> None:
         captured_context = app.context
 
     # Run with global flags
-    test_args = ["test-app", "--config", str(config_file), "--scope", "debug", "--debug", "check"]
+    test_args = [
+        "test-app",
+        "--config",
+        str(config_file),
+        "--scope",
+        "debug",
+        "--debug",
+        "check",
+    ]
     monkeypatch.setattr(sys, "argv", test_args)
     set_context(None)  # type: ignore
 
