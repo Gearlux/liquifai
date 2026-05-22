@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 SHELLS: List[str] = ["bash", "zsh", "fish"]
-CACHE_VERSION: int = 1
+CACHE_VERSION: int = 2
 
 GLOBAL_FLAGS: List[str] = [
     "--config",
@@ -385,15 +385,17 @@ _NON_APP_BIN_PREFIXES: List[str] = [
 ]
 
 
-def discover_liquifai_apps(prefix: Optional[Path] = None, timeout: float = 5.0) -> List[str]:
+def discover_liquifai_apps(prefix: Optional[Path] = None, timeout: float = 15.0) -> List[str]:
     """Return the names of Liquifai apps installed in ``prefix``'s bin dir.
 
     Iterates ``<prefix>/bin/*`` (defaulting to ``sys.prefix``), skips
     obvious non-CLI / non-Liquifai entries, and probes each remaining
     executable with ``<script> --show-completion bash``. Liquifai apps
-    short-circuit that flag before any heavy bootstrap (see
-    ``LiquifyApp._maybe_handle_completion_install``), so probing is fast
-    (~50 ms each).
+    short-circuit that flag before Confluid bootstrap, but module-import
+    side effects in heavy apps (e.g. marainer pulling in PyTorch Lightning
+    at the top of ``cli.py``) still run before ``app.run()`` is entered.
+    The timeout is therefore sized for the slowest known import chain,
+    not the bare short-circuit cost.
 
     An entry is treated as a Liquifai app iff the probe exits 0 AND the
     output contains the Liquifai-specific marker ``liquifai-complete <name>``
@@ -508,13 +510,172 @@ def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
 
 
 def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
-    """Snapshot the static command tree of ``app`` to a JSON-friendly dict."""
+    """Snapshot the static command tree of ``app`` to a JSON-friendly dict.
+
+    ``signature_keys`` records, per script_command, the dotted override keys
+    inferred from each parameter's annotation (when the annotation resolves
+    to a ``@configurable`` class). It is computed at snapshot time — when
+    the app module is already loaded, so the confluid import is free —
+    and consumed by :func:`complete_from_tree` so TAB can offer
+    ``--<param>.<sub_key>`` flags even before a YAML config is on the line.
+    """
     return {
         "name": app.name,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
         "sub_apps": {n: serialize_app(s) for n, s in app._sub_apps.items()},
+        "signature_keys": {
+            cmd: _introspect_function_keys(func) for cmd, func in app._commands.items() if cmd in app._script_cmds
+        },
     }
+
+
+def _introspect_function_keys(func: Any, max_depth: int = 4) -> Dict[str, List[str]]:
+    """Return per-parameter dotted sub-keys derived from confluid annotations.
+
+    For each parameter of ``func`` whose annotation unwraps to a
+    ``@configurable`` class, walk that class's accept-list (recursively into
+    nested ``@configurable`` types up to ``max_depth``) and return the keys.
+
+    Result shape: ``{param_name: [sub_key, sub_key.nested, ...]}``. Params
+    whose annotation isn't ``@configurable`` produce an empty list — kept in
+    the map so callers can still emit ``--<param>`` for explicit overrides.
+    Returns ``{}`` on any import / introspection failure so a broken
+    annotation never breaks completion.
+
+    Uses :func:`typing.get_type_hints` rather than reading raw annotations
+    off the signature so PEP 563 (``from __future__ import annotations``)
+    callers — where annotations are kept as strings — resolve correctly.
+    """
+    import inspect
+    import typing
+
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return {}
+    try:
+        hints = typing.get_type_hints(func, include_extras=True)
+    except Exception:
+        hints = {}
+
+    out: Dict[str, List[str]] = {}
+    for name, param in sig.parameters.items():
+        if name in ("self", "cls"):
+            continue
+        ann = hints.get(name, param.annotation)
+        leaf = _unwrap_annotation(ann)
+        if leaf is None or not getattr(leaf, "__confluid_configurable__", False):
+            out[name] = []
+            continue
+        try:
+            out[name] = _walk_configurable_keys(leaf, depth=0, max_depth=max_depth)
+        except Exception:
+            out[name] = []
+    return out
+
+
+def _unwrap_annotation(ann: Any) -> Optional[Any]:
+    """Strip ``Annotated[...]``, ``Optional[...]``, ``Lazy[...]`` wrappers.
+
+    Returns the inner type or ``None`` for ``Any`` / un-annotated / unions
+    that don't reduce to a single non-None type.
+    """
+    import inspect
+    import typing
+
+    if ann is inspect.Parameter.empty or ann is Any or ann is type(None):
+        return None
+    origin = typing.get_origin(ann)
+    # Annotated[T, ...] (includes Lazy[T] which is Annotated[T, _LAZY_MARKER])
+    if origin is not None and getattr(typing, "Annotated", None) is not None:
+        # typing.get_origin returns the type T for Annotated[T, ...].
+        args = typing.get_args(ann)
+        if args:
+            return _unwrap_annotation(args[0])
+    # Union / Optional — keep the first non-None arm.
+    if origin is typing.Union:
+        non_none = [a for a in typing.get_args(ann) if a is not type(None)]
+        if len(non_none) == 1:
+            return _unwrap_annotation(non_none[0])
+        return None
+    return ann
+
+
+def _walk_configurable_keys(cls: Any, depth: int, max_depth: int) -> List[str]:
+    """Recursively collect dotted override-keys for a ``@configurable`` class.
+
+    Returns the keys a user would plausibly want to override via the CLI:
+    ``__init__`` parameters plus class-level annotated attributes. We do
+    NOT reuse ``confluid.loader._get_acceptable_keys`` because that walks
+    ``dir(cls)`` to surface every non-callable class attribute — including
+    everything inherited from base classes (e.g. ``LightningModule`` adds
+    ~25 attrs like ``CHECKPOINT_HYPER_PARAMS_KEY``, ``dump_patches``,
+    ``automatic_optimization``). That's appropriate for the config loader
+    (any of them is technically bindable) but useless noise in TAB output.
+
+    For each key whose annotation itself resolves to a ``@configurable``
+    class, recurse and prefix with ``"<key>."``. Returns a sorted,
+    deduplicated list.
+    """
+    if depth > max_depth:
+        return []
+
+    sub_annotations = _gather_annotations(cls)
+    # _gather_annotations already covers both __init__ params (init slot)
+    # and class-level annotations. Restrict to keys that have annotations —
+    # for fields the user couldn't reasonably override blindly, completion
+    # is more confusing than helpful.
+    accept = {k for k in sub_annotations if not k.startswith("_")}
+    if not accept:
+        return []
+
+    keys: List[str] = []
+    for k in sorted(accept):
+        keys.append(k)
+        sub = _unwrap_annotation(sub_annotations.get(k))
+        if sub is not None and getattr(sub, "__confluid_configurable__", False):
+            for nested in _walk_configurable_keys(sub, depth + 1, max_depth):
+                keys.append(f"{k}.{nested}")
+    return keys
+
+
+def _gather_annotations(cls: Any) -> Dict[str, Any]:
+    """Collect annotations for ``cls`` from both ``__init__`` and class body.
+
+    Resolves PEP 563 stringified annotations via :func:`typing.get_type_hints`,
+    but restricts class-level annotations to the class's OWN ``__annotations__``
+    rather than the inherited merged view. Without this, subclasses of
+    framework bases like ``pytorch_lightning.LightningModule`` or
+    ``torch.nn.Module`` pull in dozens of annotated-but-irrelevant attrs
+    (``training``, ``forward``, ``call_super_init``, ``dump_patches``, …)
+    that would otherwise pollute every ``--<param>.<TAB>`` listing.
+    """
+    import typing
+
+    out: Dict[str, Any] = {}
+    init = getattr(cls, "__init__", None)
+    if init is not None:
+        try:
+            hints = typing.get_type_hints(init, include_extras=True)
+            for name, ann in hints.items():
+                if name in ("self", "cls", "return"):
+                    continue
+                out[name] = ann
+        except Exception:
+            pass
+
+    own = cls.__dict__.get("__annotations__", {}) if hasattr(cls, "__dict__") else {}
+    if own:
+        try:
+            resolved = typing.get_type_hints(cls, include_extras=True)
+        except Exception:
+            resolved = {}
+        for k in own:
+            if k.startswith("_"):
+                continue
+            out[k] = resolved.get(k, own[k])
+    return out
 
 
 def write_cache(app: "LiquifyApp") -> Path:
@@ -613,6 +774,7 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         return _filter_prefix(list(cur["commands"]) + list(cur["sub_apps"].keys()), incomplete)
 
     is_script_cmd = cmd_name in cur["script_cmds"]
+    signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {}) if is_script_cmd else {}
 
     if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
         return _file_candidates(incomplete, exts=["yaml", "yml"])
@@ -629,6 +791,12 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
 
     if incomplete.startswith("-") or (is_script_cmd and consumed_config):
         candidates = list(GLOBAL_FLAGS)
+        # Signature-derived keys: cheap, baked into the cache at serialize_app
+        # time. Surfaced both when no config is on the line (so `train --` is
+        # useful in isolation) and when one is (union with the YAML's own
+        # keys — the user may want to override fields the YAML doesn't set).
+        if signature_keys:
+            candidates.extend(_signature_flag_candidates(signature_keys))
         if is_script_cmd and config_path is not None and config_path.exists():
             try:
                 candidates.extend(f"--{k}" for k in _resolve_override_keys(config_path))
@@ -637,6 +805,16 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         return _filter_prefix(candidates, incomplete)
 
     return []
+
+
+def _signature_flag_candidates(signature_keys: Dict[str, List[str]]) -> List[str]:
+    """Flatten ``{param: [sub_keys]}`` to ``--param`` + ``--param.sub_key`` flags."""
+    out: List[str] = []
+    for param, subs in signature_keys.items():
+        out.append(f"--{param}")
+        for sub in subs:
+            out.append(f"--{param}.{sub}")
+    return out
 
 
 def _filter_prefix(items: List[str], prefix: str) -> List[str]:

@@ -331,6 +331,13 @@ def test_serialize_app_round_trip(app: LiquifyApp) -> None:
     sub = tree["sub_apps"]["group"]
     assert set(sub["commands"]) == {"alpha", "beta"}
     assert set(sub["script_cmds"]) == {"beta"}
+    # Only script_commands get signature_keys entries (non-script commands
+    # don't take a YAML config and thus don't take dotted overrides).
+    assert set(tree["signature_keys"].keys()) == {"train"}
+    # `train(layers: int = 1)` — `int` isn't @configurable, so the entry
+    # is present-but-empty; callers can still surface `--layers` later if
+    # they want, but the recursive walk has nothing to descend into.
+    assert tree["signature_keys"]["train"] == {"layers": []}
 
 
 def test_write_then_read_cache(app: LiquifyApp, tmp_path: Path, monkeypatch: Any) -> None:
@@ -363,6 +370,112 @@ def test_complete_from_tree_works_without_app(app: LiquifyApp) -> None:
     tree = comp.serialize_app(app)
     out = comp.complete_from_tree(tree, ["myapp", "tr"], cword=1)
     assert out == ["train"]
+
+
+# ----------------- signature-derived completion (no config) --------------
+#
+# Helper @configurable classes are declared at module scope (not inside the
+# test bodies) because `typing.get_type_hints` resolves PEP 563 string
+# annotations against the function's __globals__ — local-scoped classes
+# inside a test wouldn't be reachable, but real-world Liquifai apps always
+# import their @configurable types at the top of their CLI module (e.g.
+# marainer/cli.py imports LightningTrainer), so module-scope helpers mirror
+# the production shape exactly.
+
+from confluid import configurable as _configurable  # noqa: E402
+
+
+@_configurable
+class _CompTestOptim:
+    def __init__(self, lr: float = 1e-3, weight_decay: float = 0.0) -> None:
+        self.lr = lr
+        self.weight_decay = weight_decay
+
+
+@_configurable
+class _CompTestTrainer:
+    def __init__(self, optimizer: _CompTestOptim, epochs: int = 10, name: str = "run") -> None:
+        self.optimizer = optimizer
+        self.epochs = epochs
+        self.name = name
+
+
+def _configurable_app() -> LiquifyApp:
+    """An app whose script_command's annotated arg is a @configurable class.
+
+    Mirrors the marainer pattern: ``train(trainer: LightningTrainer)``.
+    """
+    root = LiquifyApp(name="myapp")
+
+    @root.script_command()
+    def train(trainer: _CompTestTrainer) -> None:
+        pass
+
+    return root
+
+
+def _walking_cmd(outer: _CompTestTrainer) -> None:
+    pass
+
+
+def _plain_cmd(layers: int = 1, name: str = "x") -> None:
+    pass
+
+
+def test_introspect_function_keys_walks_configurable() -> None:
+    """Signature introspection should descend one level into @configurable types."""
+    keys = comp._introspect_function_keys(_walking_cmd)
+    assert "outer" in keys
+    assert "name" in keys["outer"]
+    assert "optimizer" in keys["outer"]
+    assert "optimizer.lr" in keys["outer"]
+    assert "optimizer.weight_decay" in keys["outer"]
+
+
+def test_introspect_function_keys_plain_annotation_returns_empty_list() -> None:
+    """Non-@configurable annotations leave the param's sub-key list empty."""
+    keys = comp._introspect_function_keys(_plain_cmd)
+    assert keys == {"layers": [], "name": []}
+
+
+def test_complete_signature_keys_without_config() -> None:
+    """`myapp train --` with no YAML still surfaces `--trainer.<key>` flags."""
+    app = _configurable_app()
+    out = comp.complete(app, ["myapp", "train", "--"], cword=2)
+    assert "--trainer" in out
+    assert "--trainer.epochs" in out
+    assert "--trainer.optimizer" in out
+    assert "--trainer.optimizer.lr" in out
+    # Globals must remain available alongside signature keys.
+    assert "--config" in out
+
+
+def test_complete_signature_keys_filtered_by_prefix() -> None:
+    """Prefix filtering applies to signature flags the same as global flags."""
+    app = _configurable_app()
+    out = comp.complete(app, ["myapp", "train", "--trainer.opt"], cword=2)
+    assert "--trainer.optimizer" in out
+    assert "--trainer.optimizer.lr" in out
+    assert "--trainer.optimizer.weight_decay" in out
+    # Sibling key starts with `--trainer.` but not `--trainer.opt`:
+    assert "--trainer.epochs" not in out
+
+
+def test_complete_signature_union_with_config(tmp_path: Path) -> None:
+    """When a YAML is on the line, completion unions config keys + signature keys.
+
+    The YAML sets `trainer.epochs`; signature introspection knows
+    `trainer.optimizer.lr` exists even though the YAML doesn't set it.
+    Both must be present so the user can override either.
+    """
+    app = _configurable_app()
+    cfg = tmp_path / "train.yaml"
+    cfg.write_text("trainer:\n  epochs: 5\n")
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--trainer."], cword=3)
+    # From the YAML (via _resolve_override_keys):
+    assert "--trainer.epochs" in out
+    # From the signature (not in YAML):
+    assert "--trainer.optimizer.lr" in out
 
 
 # ------------------------ end-to-end via LiquifyApp ----------------------
