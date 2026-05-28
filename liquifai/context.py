@@ -16,6 +16,11 @@ class LiquifyContext:
     file_level: Optional[str] = None
     log_dir: Optional[Path] = None
     config_data: Dict[str, Any] = field(default_factory=dict)
+    # Resolved YAML tree: ``config_path`` plus every transitively
+    # ``include:``-d file in load order. Populated by the CLI bootstrap when
+    # confluid resolves the include graph; consumers (e.g. marainer's
+    # trainer) read this to log the full configuration as a run artifact.
+    included_paths: List[Path] = field(default_factory=list)
 
     # The loaded logger instance
     logger: Any = None

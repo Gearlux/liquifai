@@ -27,11 +27,16 @@ def test_discovery() -> None:
 
     paths = get_configurable_paths(root)
 
-    # Discovery starts with the class name for the root
-    assert "RootModel.lr" in paths
-    assert "RootModel.threshold" in paths
-    assert "RootModel.sub.size" in paths
-    assert paths["RootModel.sub.size"] == 20
+    # Top-level call returns shortest-unique paths — non-colliding leaves
+    # reduce to just the leaf name.
+    assert "lr" in paths
+    assert "threshold" in paths
+    assert "size" in paths
+    assert paths["size"] == 20
+    assert paths["lr"] == 0.01
+    assert paths["threshold"] == 0.5
+    # Inherited / class-level prefix is gone.
+    assert not any(k.startswith("RootModel.") for k in paths)
 
 
 def test_discovery_extended() -> None:
@@ -62,11 +67,12 @@ def test_discovery_extended() -> None:
     obj.other = IgnoredVal()  # type: ignore
 
     paths = get_configurable_paths(obj)
-    # val should be ignored (class member ignore), other should be ignored (value ignore)
-    # _internal ignored (starts with _)
-    assert "IgnoredModel.val" not in paths
-    assert "IgnoredModel.other" not in paths
-    assert "IgnoredModel._internal" not in paths
+    # val ignored (class member), other ignored (value), _internal ignored (private).
+    assert "val" not in paths
+    assert "other" not in paths
+    assert "_internal" not in paths
+    assert not any(k.endswith(".val") for k in paths)
+    assert not any(k.endswith(".other") for k in paths)
 
 
 def test_discovery_named_objects() -> None:
@@ -84,9 +90,10 @@ def test_discovery_named_objects() -> None:
     parent = Parent(child=Child(name="mychild", value=42))
     paths = get_configurable_paths(parent)
 
-    # child has a .name, so it should be used in the path
-    assert "Parent.mychild.value" in paths
-    assert paths["Parent.mychild.value"] == 42
+    # Child's .name is used as the path segment internally; shortest-unique
+    # reduces the leaf to just "value" since nothing else collides.
+    assert "value" in paths
+    assert paths["value"] == 42
 
 
 def test_discovery_cycle() -> None:
@@ -102,7 +109,9 @@ def test_discovery_cycle() -> None:
     b.child = a  # Cycle
 
     paths = get_configurable_paths(a)
-    assert "Node.name" in paths
+    # Two ``name`` leaves collide → shortest-unique extends the suffix.
+    assert any("name" in k for k in paths)
+    assert paths.get("Node.name") == "a" or paths.get("a.name") == "a"
 
 
 def test_discovery_exception() -> None:
@@ -117,6 +126,50 @@ def test_discovery_exception() -> None:
 
     paths = get_configurable_paths(BadModel())
     assert "boom" not in paths
+
+
+def test_inherited_class_constants_not_surfaced() -> None:
+    """Class-level constants on a non-``@configurable`` parent must not leak."""
+
+    class NonConfigBase:
+        LEAKY_CONSTANT = "noise"
+        OTHER_CONSTANT = 42
+
+    @confluid.configurable
+    class ChildConfig(NonConfigBase):
+        def __init__(self, real_param: int = 7) -> None:
+            self.real_param = real_param
+
+    paths = get_configurable_paths(ChildConfig(real_param=99))
+    assert "real_param" in paths
+    assert paths["real_param"] == 99
+    assert not any("LEAKY_CONSTANT" in k for k in paths)
+    assert not any("OTHER_CONSTANT" in k for k in paths)
+
+
+def test_parent_init_instance_attrs_filtered() -> None:
+    """Non-underscore instance attrs planted by a non-``@configurable`` parent's ``__init__``
+    must not leak — mimics ``torch.nn.Module.__init__`` setting ``self.training = True``."""
+
+    class LeakyParent:
+        def __init__(self) -> None:
+            self.training = True  # parent plants this on every instance
+            self.parent_only = "should_not_appear"
+
+    @confluid.configurable
+    class ChildConfig(LeakyParent):
+        def __init__(self, user_param: str = "x") -> None:
+            super().__init__()
+            self.user_param = user_param
+            self.post_init = "user_set"
+
+    paths = get_configurable_paths(ChildConfig(user_param="abc"))
+    assert "user_param" in paths
+    assert "post_init" in paths
+    assert paths["user_param"] == "abc"
+    assert paths["post_init"] == "user_set"
+    assert not any("training" in k for k in paths)
+    assert not any("parent_only" in k for k in paths)
 
 
 def test_report_truncation(capsys: Any) -> None:

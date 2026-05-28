@@ -32,9 +32,11 @@ def show_configuration(
         return
 
     # Static-type path (legacy behaviour)
+    from confluid import shortest_unique_paths
+
     hierarchy = get_hierarchy(target)
     all_paths = list(hierarchy.keys())
-    display_map = _shortest_unique_paths(all_paths)
+    display_map = shortest_unique_paths(all_paths)
 
     console = Console()
     table = Table(title=title, box=None, show_header=True, header_style="bold cyan")
@@ -59,8 +61,10 @@ def show_configuration(
 
 def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
     """Render the flowed-instance hierarchy with shortest-unique paths and a host-class column."""
+    from confluid import shortest_unique_paths
+
     all_paths = list(hierarchy.keys())
-    display_map = _shortest_unique_paths(all_paths)
+    display_map = shortest_unique_paths(all_paths)
 
     console = Console()
     table = Table(title=title, box=None, show_header=True, header_style="bold cyan")
@@ -83,22 +87,6 @@ def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
         val_str = _short_repr(value)
         table.add_row(f"--{short_path}", host, type_str, val_str, doc)
     console.print(table)
-
-
-def _shortest_unique_paths(all_paths: list) -> Dict[str, str]:
-    """For each full path, pick the shortest trailing dotted-suffix that is unique across ``all_paths``."""
-    display_map: Dict[str, str] = {}
-    for full_path in all_paths:
-        parts = full_path.split(".")
-        for i in range(1, len(parts) + 1):
-            suffix = ".".join(parts[-i:])
-            matches = [p for p in all_paths if p.endswith(f".{suffix}") or p == suffix]
-            if len(matches) == 1:
-                display_map[full_path] = suffix
-                break
-        else:
-            display_map[full_path] = full_path
-    return display_map
 
 
 def _looks_like_flowed_graph(config_map: Any) -> bool:

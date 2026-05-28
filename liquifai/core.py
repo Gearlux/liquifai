@@ -209,9 +209,16 @@ class LiquifyApp:
         # which `--KEY` flags should activate scope dimensions, then re-parse
         # `final_argv` so those flags are routed into `scopes` instead of
         # being treated as config overrides.
+        #
+        # We use ``load_config_with_paths`` here (instead of plain
+        # ``load_config``) so the resolved tree of YAML files — entrypoint
+        # plus every transitively ``include:``-d file — is captured for
+        # downstream consumers (e.g. marainer's trainer logs them as
+        # artifacts to every wired Lightning logger).
         raw_config: Optional[Any] = None
+        included_paths: List[Path] = []
         if config_path is not None and config_path.exists():
-            raw_config = confluid.load_config(config_path)
+            raw_config, included_paths = confluid.load_config_with_paths(config_path)
             scopes, final_argv = self._bind_dimension_flags(scopes, raw_config, final_argv)
 
         # 4. INITIALIZE STATE
@@ -220,6 +227,7 @@ class LiquifyApp:
             config_path=config_path,
             scopes=scopes,
             debug=debug,
+            included_paths=included_paths,
             **log_overrides,
         )
         set_context(self.context)
