@@ -1,15 +1,39 @@
+import inspect
 from typing import Any, Dict, Optional, Set
 
 
 def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int]] = None) -> Dict[str, Any]:
-    """
-    Recursively discover all configurable paths in an object hierarchy.
-    Returns a mapping of dotted_path -> current_value.
+    """Recursively discover the configurable surface of an object as ``{dotted_path: live_value}``.
 
-    Path rules:
-    - Root: Class Name
-    - Intermediate: .name attribute if defined, otherwise skipped.
-    - Leaf: Attribute name.
+    Iteration is bounded to attributes the user actually declared:
+
+    * Constructor parameters from ``inspect.signature(cls.__init__)`` (skipping
+      ``self`` / ``cls`` / ``args`` / ``kwargs`` / ``name`` per the schema-walker
+      convention).
+    * Live instance attributes from :func:`confluid.get_configurable_attrs`
+      — ``vars(obj)`` minus everything non-``@configurable`` ancestors
+      contributed (class annotations like ``training: bool`` on
+      ``torch.nn.Module``, class-level constants like
+      ``CHECKPOINT_HYPER_PARAMS_KEY`` on
+      ``pytorch_lightning.LightningModule``, and ``__init__``-body setattrs
+      like ``self.prepare_data_per_node: bool = True`` on
+      ``pytorch_lightning.core.hooks.DataHooks``). What's left is the
+      ``@configurable`` class's own constructor params, its own post-init
+      setattrs, and any post-construction setattrs done externally by
+      Confluid's broadcast mechanism or the user's own code (the Enable
+      wrapper pattern).
+
+    :class:`confluid.Fluid` proxies (``Class`` / ``Lazy`` / ``Instance`` /
+    ``Reference`` / ``Clone``) are handled specially: the walker descends into
+    the underlying *target* class's hierarchy with values from
+    ``fluid.kwargs`` rather than surfacing the Fluid's own ``target`` /
+    ``kwargs`` scaffolding fields.
+
+    At the top of the recursion (``prefix == ""``) the resulting paths are
+    rewritten to their shortest unique trailing suffix via
+    :func:`confluid.shortest_unique_paths`, so the noisy root-class prefix
+    (e.g. ``LightningTrainer.``) is dropped unless it is needed to
+    disambiguate two values.
     """
     if visited is None:
         visited = set()
@@ -19,76 +43,80 @@ def get_configurable_paths(obj: Any, prefix: str = "", visited: Optional[Set[int
         return {}
     visited.add(obj_id)
 
-    paths = {}
+    from confluid import Fluid, get_configurable_attrs, get_hierarchy, get_registry, shortest_unique_paths
+    from confluid.registry import resolve_class
+
+    reg = get_registry()
     cls = obj.__class__
 
-    # 1. Determine the name for this node
-    # Root starts with class name.
-    # Sub-objects use their .name if available.
     if not prefix:
         node_name = getattr(cls, "__confluid_name__", cls.__name__)
     else:
         node_name = getattr(obj, "name", None)
-
     current_prefix = f"{prefix}.{node_name}" if prefix and node_name else (node_name or prefix)
 
-    # 2. Inspect attributes
-    from confluid import Fluid, get_registry
+    paths: Dict[str, Any] = {}
 
-    reg = get_registry()
+    if isinstance(obj, Fluid):
+        target_cls = resolve_class(obj.target)
+        if isinstance(target_cls, type):
+            hierarchy = get_hierarchy(target_cls)
+            for h_path in hierarchy.keys():
+                param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
+                full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
+                paths[full_p] = obj.kwargs.get(param_name)
+        return _maybe_shorten(paths, prefix, shortest_unique_paths)
 
-    for attr_name in dir(obj):
+    try:
+        sig = inspect.signature(cls.__init__)
+        init_params = {p for p in sig.parameters if p not in ("self", "cls", "args", "kwargs", "name")}
+    except (ValueError, TypeError):
+        init_params = set()
+
+    instance_attrs = get_configurable_attrs(obj)
+    attrs_to_walk = init_params | instance_attrs
+
+    for attr_name in attrs_to_walk:
         if attr_name.startswith("_"):
             continue
-
         try:
-            attr_val = getattr(obj, attr_name)
-
-            # Check visibility markers on class member and instance value
+            attr_val = getattr(obj, attr_name, None)
             member = getattr(cls, attr_name, None)
-            if member and getattr(member, "__confluid_ignore__", False):
+            if member is not None and getattr(member, "__confluid_ignore__", False):
                 continue
-            if getattr(attr_val, "__confluid_ignore__", False):
+            if attr_val is not None and getattr(attr_val, "__confluid_ignore__", False):
                 continue
 
-            # 1. Handle Configurable Instances (Existing logic)
-            if hasattr(attr_val.__class__, "__confluid_configurable__"):
-                paths.update(get_configurable_paths(attr_val, current_prefix, visited))
+            attr_prefix = f"{current_prefix}.{attr_name}" if current_prefix else attr_name
 
-            # 2. Handle Deferred Classes (type objects registered in Confluid)
-            elif isinstance(attr_val, type) and reg.is_configurable(attr_val):
-                from confluid import get_hierarchy
-
-                hierarchy = get_hierarchy(attr_val)
-                for h_path, _ in hierarchy.items():
-                    # Hierarchy returns 'ClassName.param', we want 'current_prefix.param'
-                    # Strip the ClassName and prepend current_prefix
-                    param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
-                    full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
-                    paths[full_p] = None  # Value is unknown for a class-only default
-
-            # 3. Handle Fluid Proxies
-            elif isinstance(attr_val, Fluid):
-                # Recurse into the Fluid's target class
-                from confluid import get_hierarchy
-
-                target = attr_val.target
-                cls_to_inspect = reg.get_class(target) if isinstance(target, str) else target
-
-                if cls_to_inspect:
-                    hierarchy = get_hierarchy(cls_to_inspect)
-                    for h_path, _ in hierarchy.items():
+            if isinstance(attr_val, Fluid):
+                # Walk the Fluid's target class with values from .kwargs, using
+                # this attribute name (e.g. "optimizer", "train_loader") as the
+                # path segment so siblings stay distinguishable.
+                target_cls = resolve_class(attr_val.target)
+                if isinstance(target_cls, type):
+                    hierarchy = get_hierarchy(target_cls)
+                    for h_path in hierarchy.keys():
                         param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
-                        full_p = f"{current_prefix}.{param_name}" if current_prefix else param_name
-                        # Use Fluid's kwarg value if present, otherwise None
-                        paths[full_p] = attr_val.kwargs.get(param_name)
-
-            elif not callable(attr_val):
-                # Leaf attribute
-                full_path = f"{current_prefix}.{attr_name}" if current_prefix else attr_name
-                paths[full_path] = attr_val
-
+                        paths[f"{attr_prefix}.{param_name}"] = attr_val.kwargs.get(param_name)
+            elif attr_val is not None and hasattr(attr_val.__class__, "__confluid_configurable__"):
+                paths.update(get_configurable_paths(attr_val, current_prefix, visited))
+            elif isinstance(attr_val, type) and reg.is_configurable(attr_val):
+                hierarchy = get_hierarchy(attr_val)
+                for h_path in hierarchy.keys():
+                    param_name = h_path.split(".", 1)[-1] if "." in h_path else h_path
+                    paths[f"{attr_prefix}.{param_name}"] = None
+            elif attr_val is None or not callable(attr_val):
+                paths[attr_prefix] = attr_val
         except Exception:
             continue
 
-    return paths
+    return _maybe_shorten(paths, prefix, shortest_unique_paths)
+
+
+def _maybe_shorten(paths: Dict[str, Any], prefix: str, shortener: Any) -> Dict[str, Any]:
+    """Rewrite keys to their shortest unique suffix when we are at the top of the recursion."""
+    if prefix:
+        return paths
+    short = shortener(list(paths.keys()))
+    return {short[p]: v for p, v in paths.items()}
