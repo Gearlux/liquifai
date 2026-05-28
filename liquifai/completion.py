@@ -523,7 +523,12 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
         "name": app.name,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
+        # All resolvable sub-app names (canonical + aliases) — kept for descent.
         "sub_apps": {n: serialize_app(s) for n, s in app._sub_apps.items()},
+        # Alias names only; excluded from TAB suggestions (they still resolve via
+        # ``sub_apps`` above) so completion shows the canonical name once, not the
+        # abbreviation alongside it.
+        "sub_app_aliases": sorted(app._sub_app_aliases.keys()),
         "signature_keys": {
             cmd: _introspect_function_keys(func) for cmd, func in app._commands.items() if cmd in app._script_cmds
         },
@@ -771,7 +776,12 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     if cmd_name is None:
         if incomplete.startswith("-"):
             return _filter_prefix(GLOBAL_FLAGS, incomplete)
-        return _filter_prefix(list(cur["commands"]) + list(cur["sub_apps"].keys()), incomplete)
+        # Suggest canonical sub-app names only — aliases resolve (see the
+        # ``tok in cur["sub_apps"]`` descent above) but are not offered, so TAB
+        # shows ``dataset`` not ``dataset``+``ds``.
+        aliases = set(cur.get("sub_app_aliases", []))
+        sub_names = [n for n in cur["sub_apps"] if n not in aliases]
+        return _filter_prefix(list(cur["commands"]) + sub_names, incomplete)
 
     is_script_cmd = cmd_name in cur["script_cmds"]
     signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {}) if is_script_cmd else {}

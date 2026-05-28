@@ -29,22 +29,56 @@ class LiquifyApp:
         self.context: Optional[LiquifyContext] = None
         self._commands: Dict[str, Callable[..., Any]] = {}
         self._sub_apps: Dict[str, "LiquifyApp"] = {}
+        # alias name -> canonical group name (so help folds `ds` into `dataset`).
+        self._sub_app_aliases: Dict[str, str] = {}
         self._default_cmd: Optional[Callable[..., Any]] = None
         self._script_cmds: Set[str] = set()
 
-    def add_app(self, app: "LiquifyApp", name: Optional[str] = None) -> None:
-        """Mount a sub-application to support nested command groups (infinitely sub-appable)."""
+    def add_app(self, app: "LiquifyApp", name: Optional[str] = None, aliases: Optional[List[str]] = None) -> None:
+        """Mount a sub-application to support nested command groups (infinitely sub-appable).
+
+        ``aliases`` register extra names that resolve to the same sub-app on the
+        command line (e.g. ``ds`` for ``dataset``). They dispatch identically,
+        but are folded into the canonical group's help row as ``dataset (ds)``
+        instead of being listed as separate groups.
+        """
         group_name = name or app.name
         self._sub_apps[group_name] = app
+        for alias in aliases or []:
+            self._sub_apps[alias] = app
+            self._sub_app_aliases[alias] = group_name
 
     def command(
-        self, name: Optional[str] = None, default: bool = False
+        self,
+        name: Optional[str] = None,
+        default: bool = False,
+        positionals: Optional[List[str]] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register a command."""
+        """Register a command.
+
+        Args:
+            name: Override the CLI name. Defaults to the function name with
+                underscores replaced by hyphens.
+            default: Make this the group's default command (runs when no
+                command token is given).
+            positionals: Ordered names of positional arguments the command
+                accepts. Leading non-flag tokens after the command name are
+                bound, in order, to these names as string values in the config
+                (so DI resolves the matching command-function parameters).
+                ``download`` with ``positionals=["name", "version"]`` lets the
+                user write ``app download foo 1.0`` instead of
+                ``app download --name foo --version 1.0`` — both forms work, and
+                consumption stops at the first ``--flag`` / ``+add`` / ``~del``
+                / ``key=value`` token. Values are bound verbatim as strings; a
+                command that needs another type coerces in its body.
+        """
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             cmd_name = name or f.__name__.replace("_", "-")
             self._commands[cmd_name] = f
+            # Stored on the function (like ``__liquifai_flow_mode__``) so both
+            # run() and _show_help() can read it without a per-app registry.
+            setattr(f, "__liquifai_positionals__", list(positionals or []))
             if default:
                 self._default_cmd = f
             return f
@@ -55,6 +89,7 @@ class LiquifyApp:
         self,
         name: Optional[str] = None,
         flow_mode: FlowMode = "manual",
+        positionals: Optional[List[str]] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command that supports config-promotion.
 
@@ -73,6 +108,10 @@ class LiquifyApp:
                   kwargs (the marainer ``configure_optimizers`` pattern). Any
                   non-``Lazy`` Class stub that can't be instantiated raises
                   immediately.
+            positionals: Ordered positional-argument names (see
+                :meth:`command`). The config-file promotion peek runs first, so
+                a ``script_command`` consumes its config path before binding
+                positionals.
         """
         if flow_mode not in ("manual", "auto"):
             raise ValueError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
@@ -83,7 +122,7 @@ class LiquifyApp:
             # Store the mode on the function itself; run_command looks it up
             # via getattr, no per-app registry needed.
             setattr(f, "__liquifai_flow_mode__", flow_mode)
-            return self.command(name=cmd_name)(f)
+            return self.command(name=cmd_name, positionals=positionals)(f)
 
         return decorator
 
@@ -168,6 +207,10 @@ class LiquifyApp:
         config_path, cmd_name, remaining_argv = None, None, []
         target_app = self
         target_func = None
+        # Positional args consumed for the matched command (bound after
+        # bootstrap, before overrides — see step 4b).
+        positional_names: List[str] = []
+        positional_values: List[str] = []
 
         i = 0
         while i < len(argv):
@@ -183,6 +226,19 @@ class LiquifyApp:
                     cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
                     if cp.exists():
                         config_path, i = cp, i + 1
+                # Consume leading positional tokens declared via
+                # ``@command(positionals=[...])``. Stops at the first flag-like
+                # (``-``/``+``/``~``) or ``key=value`` token so the equals form
+                # (``info name=foo``) and trailing flags still route through the
+                # normal override path. Fewer tokens than declared is fine —
+                # the rest fall back to the command's parameter defaults.
+                positional_names = list(getattr(target_func, "__liquifai_positionals__", []))
+                for _ in positional_names:
+                    if i < len(argv) and not _stops_positional(argv[i]):
+                        positional_values.append(argv[i])
+                        i += 1
+                    else:
+                        break
             else:
                 remaining_argv.append(arg)
                 i += 1
@@ -232,6 +288,16 @@ class LiquifyApp:
         )
         set_context(self.context)
         self._bootstrap(raw_config=raw_config)
+
+        # 4b. BIND POSITIONALS — write each consumed positional into the config
+        # under its declared name (verbatim string) so DI resolves the matching
+        # command parameter. Done before overrides so an explicit ``--name``
+        # flag still wins over a positional, and so the bind survives even when
+        # there are no overrides (``_apply_overrides`` early-returns then).
+        if positional_values and isinstance(self.context.config_data, dict):
+            for nm, val in zip(positional_names, positional_values):
+                self.context.config_data[nm] = val
+            self.context.logger.debug(f"Bound positionals: {dict(zip(positional_names, positional_values))}")
 
         # 5. APPLY OVERRIDES
         self._apply_overrides(final_argv)
@@ -532,7 +598,9 @@ class LiquifyApp:
 
         if target_func:
             desc = target_func.__doc__ or "No description."
-            console.print(f"\n[bold]Command:[/bold] {target_func.__name__.replace('_', '-')}")
+            positionals = getattr(target_func, "__liquifai_positionals__", [])
+            usage = target_func.__name__.replace("_", "-") + "".join(f" <{p}>" for p in positionals)
+            console.print(f"\n[bold]Command:[/bold] {usage}")
             console.print(f"[dim]{desc.strip()}[/dim]")
 
             from liquifai.report import show_configuration
@@ -562,8 +630,12 @@ class LiquifyApp:
             table.add_column("Description")
 
             for name, sub_app in sorted(app._sub_apps.items()):
+                if name in app._sub_app_aliases:
+                    continue  # alias rows fold into their canonical group below
+                aliases = sorted(a for a, canon in app._sub_app_aliases.items() if canon == name)
+                label = f"{name} ({', '.join(aliases)})" if aliases else name
                 desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
-                table.add_row(name, desc)
+                table.add_row(label, desc)
 
             for name, func in sorted(app._commands.items()):
                 desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
@@ -908,6 +980,23 @@ def _looks_like_arg(token: str) -> bool:
     if not token:
         return False
     return token.startswith("--") or token.startswith("+") or token.startswith("~")
+
+
+def _stops_positional(token: str) -> bool:
+    """True if ``token`` must NOT be consumed as a positional value.
+
+    Positional consumption halts at the first flag-like token (a ``-`` / ``+`` /
+    ``~`` prefix — covers short ``-c`` and long ``--config`` options as well as
+    the ``+add`` / ``~delete`` override forms) or any ``key=value`` token. This
+    lets a user supply positionals (``info foo``), the equals form
+    (``info name=foo``), or trailing flags (``download foo 1.0 --path /tmp``)
+    interchangeably without the parser mistaking one for another.
+    """
+    if not token:
+        return True
+    if token[0] in ("-", "+", "~"):
+        return True
+    return "=" in token
 
 
 def _looks_like_key(token: str) -> bool:
