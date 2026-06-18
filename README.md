@@ -56,9 +56,17 @@ pip install git+https://github.com/Gearlux/liquifai.git@main
 ## Shell Completion
 
 Every LiquifyApp ships with bash, zsh, and fish tab completion. Candidates
-include sub-commands, sub-app names, global flags, YAML files for
-`@script_command` configuration arguments, and `--<key>` override
-suggestions derived from the loaded config.
+include sub-commands, sub-app names, global flags, each command's own
+`--<option>` flags (derived from its function signature — so a plain
+`@command` like `run list` completes `--experiment`, `--status`, … not just
+the globals), YAML files for `@script_command` configuration arguments, and
+`--<key>` override suggestions derived from the loaded config.
+
+> **Note:** the option flags are baked into a per-app cache
+> (`~/.cache/liquifai/<app>.json`) that is refreshed automatically every time
+> the app runs (including on `--help` and `--install-completion`). After
+> upgrading liquifai, run the app once (e.g. `my-app --help`) so newly
+> surfaced completions appear.
 
 ```bash
 my-app --install-completion          # auto-detects $SHELL, appends to your rc file

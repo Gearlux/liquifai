@@ -143,6 +143,51 @@ def test_script_command_after_override_flag_silent(app: LiquifyApp, tmp_path: Pa
     assert out == []
 
 
+# --------- plain @command option flags (the `sairen run list` case) -------
+#
+# A plain @command (no config-file positional) must still surface its own
+# option flags from its signature, not just the global flags. Regression:
+# `sairen run list <TAB>` fell back to file completion and
+# `sairen run list --<TAB>` offered only the globals.
+
+
+def test_plain_command_empty_word_lists_flags(app: LiquifyApp) -> None:
+    """`myapp greet <TAB>` (empty incomplete) should reveal the command's own
+    options + globals, instead of falling back to filename completion."""
+    out = comp.complete(app, ["myapp", "greet", ""], cword=2)
+    assert "--name" in out  # from `greet(name: str = "world")`
+    assert "--config" in out  # a global flag
+
+
+def test_plain_command_dashdash_lists_flags(app: LiquifyApp) -> None:
+    """`myapp greet --<TAB>` should list the command's flags alongside globals."""
+    out = comp.complete(app, ["myapp", "greet", "--"], cword=2)
+    assert "--name" in out
+    assert "--config" in out
+    assert "--help" in out
+
+
+def test_plain_command_prefix_filters_signature_flag(app: LiquifyApp) -> None:
+    """A `--` prefix filters down to the matching signature flag."""
+    out = comp.complete(app, ["myapp", "greet", "--na"], cword=2)
+    assert out == ["--name"]
+
+
+def test_plain_command_after_flag_silent(app: LiquifyApp) -> None:
+    """`myapp greet --name <TAB>` expects a value; stay silent so the shell's
+    default filename completion handles it."""
+    out = comp.complete(app, ["myapp", "greet", "--name", ""], cword=3)
+    assert out == []
+
+
+def test_plain_subapp_command_lists_globals(app: LiquifyApp) -> None:
+    """A plain command in a sub-app with no params still offers the globals
+    (and doesn't crash for the empty-signature case)."""
+    out = comp.complete(app, ["myapp", "group", "alpha", ""], cword=3)
+    assert "--config" in out
+    assert "--help" in out
+
+
 def test_config_flag_value_completion(app: LiquifyApp, tmp_path: Path) -> None:
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text("k: v\n")
@@ -331,13 +376,17 @@ def test_serialize_app_round_trip(app: LiquifyApp) -> None:
     sub = tree["sub_apps"]["group"]
     assert set(sub["commands"]) == {"alpha", "beta"}
     assert set(sub["script_cmds"]) == {"beta"}
-    # Only script_commands get signature_keys entries (non-script commands
-    # don't take a YAML config and thus don't take dotted overrides).
-    assert set(tree["signature_keys"].keys()) == {"train"}
+    # EVERY command gets a signature_keys entry — a plain @command carries
+    # its options in its signature too, so completion needs them to offer
+    # anything beyond the global flags (regression: `run list --<TAB>` used
+    # to surface only globals).
+    assert set(tree["signature_keys"].keys()) == {"greet", "train"}
     # `train(layers: int = 1)` — `int` isn't @configurable, so the entry
-    # is present-but-empty; callers can still surface `--layers` later if
-    # they want, but the recursive walk has nothing to descend into.
+    # is present-but-empty; the `--layers` flag is still surfaced from the
+    # key, but the recursive walk has nothing to descend into.
     assert tree["signature_keys"]["train"] == {"layers": []}
+    # `greet(name: str = "world")` — likewise plain, contributing `--name`.
+    assert tree["signature_keys"]["greet"] == {"name": []}
 
 
 def test_write_then_read_cache(app: LiquifyApp, tmp_path: Path, monkeypatch: Any) -> None:
