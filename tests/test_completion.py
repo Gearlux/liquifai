@@ -689,6 +689,22 @@ def test_discover_liquifai_apps_missing_bindir(tmp_path: Path) -> None:
     assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == []
 
 
+def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path) -> None:
+    """Concurrent probing must still yield names in deterministic (sorted) bin
+    order, regardless of which probe thread finishes first."""
+    prefix = tmp_path / "venv"
+    bindir = prefix / "bin"
+    bindir.mkdir(parents=True)
+    # Created out of alphabetical order; all are valid Liquifai responders.
+    for app in ("zebra", "alpha", "mid"):
+        _make_stub_script(
+            bindir / app,
+            exit_code=0,
+            stdout=f"_{app}_completion() {{ :; }}; liquifai-complete {app}",
+        )
+    assert comp.discover_liquifai_apps(prefix=prefix) == ["alpha", "mid", "zebra"]
+
+
 # --------------------------- CLI: --target-rc entry ---------------------------
 
 
@@ -703,18 +719,23 @@ def test_cli_install_completions_explicit_apps(tmp_path: Path, capsys: Any) -> N
     assert "_annotaide_completion()" in body
 
 
-def test_cli_install_completions_auto_discover_empty(tmp_path: Path, capsys: Any) -> None:
+def test_cli_install_completions_auto_discover_empty(tmp_path: Path, capsys: Any, monkeypatch: Any) -> None:
+    """Auto-discover finding nothing → clean no-op message, no rc written.
+
+    Discovery is mocked to empty so this never probes the REAL venv. Probing it
+    spawned every console-script with ``--show-completion`` — and the heavy ML
+    CLIs (marainer/navigaitor/raidar/…) import torch before the short-circuit,
+    several hitting the 15 s timeout — which made this single test ~225 s (99%
+    of the suite). The real probe loop is covered deterministically by
+    ``test_discover_liquifai_apps_*`` / ``test_install_for_apps_auto_discover``
+    via controlled stub prefixes.
+    """
+    monkeypatch.setattr(comp, "discover_liquifai_apps", lambda *a, **k: [])
     target_rc = tmp_path / "rc"
-    # No apps to discover (no prefix override; sys.prefix's bin probably has
-    # non-Liquifai stuff that exits non-zero on --show-completion bash). We
-    # only assert the no-op message + clean exit, not the specific contents.
     rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash"])
     assert rc == 0
-    out = capsys.readouterr().out
-    # Either some apps were installed (rare in test env) or the no-op message
-    # was printed. Both are acceptable; assert clean exit.
-    if not target_rc.exists():
-        assert "no Liquifai apps found" in out
+    assert "no Liquifai apps found" in capsys.readouterr().out
+    assert not target_rc.exists()
 
 
 def test_cli_install_completions_requires_target_rc() -> None:
