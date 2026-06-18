@@ -106,9 +106,13 @@ liquifai-install-completions --target-rc ./.project.bashrc.completion marainer a
 ```
 
 Auto-discovery probes each executable in `sys.prefix/bin` with
-`--show-completion bash`; Liquifai apps short-circuit that flag before any
-heavy import, so probing is cheap. The aisland workspace runs this step
-as part of `bash aisland/setup.sh`.
+`--show-completion bash` and keeps the ones that emit Liquifai's completion
+marker. A Liquifai app handles that flag early, but a heavy app still imports
+its full stack (torch, Lightning, …) at module load *before* the handler
+runs, so an individual probe is **not** cheap. Discovery therefore runs the
+probes concurrently (a small bounded thread pool) so a populated ML venv
+resolves in tens of seconds instead of minutes. The aisland workspace runs
+this step as part of `bash aisland/setup.sh`.
 
 ## License
 MIT
