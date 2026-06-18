@@ -540,12 +540,15 @@ def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
 def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
     """Snapshot the static command tree of ``app`` to a JSON-friendly dict.
 
-    ``signature_keys`` records, per script_command, the dotted override keys
-    inferred from each parameter's annotation (when the annotation resolves
-    to a ``@configurable`` class). It is computed at snapshot time — when
-    the app module is already loaded, so the confluid import is free —
-    and consumed by :func:`complete_from_tree` so TAB can offer
-    ``--<param>.<sub_key>`` flags even before a YAML config is on the line.
+    ``signature_keys`` records, per command (plain ``@command`` AND
+    ``@script_command``), the option flags inferred from each parameter: a
+    plain parameter contributes ``--<param>``, while a parameter whose
+    annotation resolves to a ``@configurable`` class also contributes the
+    dotted ``--<param>.<sub_key>`` override keys (walked recursively). It is
+    computed at snapshot time — when the app module is already loaded, so the
+    confluid import is free — and consumed by :func:`complete_from_tree` so TAB
+    offers a command's own options (not just the global flags), and for a
+    ``script_command`` can do so even before a YAML config is on the line.
     """
     return {
         "name": app.name,
@@ -557,9 +560,13 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
         # ``sub_apps`` above) so completion shows the canonical name once, not the
         # abbreviation alongside it.
         "sub_app_aliases": sorted(app._sub_app_aliases.keys()),
-        "signature_keys": {
-            cmd: _introspect_function_keys(func) for cmd, func in app._commands.items() if cmd in app._script_cmds
-        },
+        # Computed for EVERY command, not only script_commands: a plain
+        # ``@command`` (e.g. ``run list``) carries its options in its function
+        # signature, so without this TAB could only ever offer the global
+        # flags for it. ``_introspect_function_keys`` returns ``{param: []}``
+        # for a plain parameter and ``{param: [sub_keys]}`` for a configurable
+        # one, so the same map drives both ``--<param>`` and dotted overrides.
+        "signature_keys": {cmd: _introspect_function_keys(func) for cmd, func in app._commands.items()},
     }
 
 
@@ -812,37 +819,38 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         return _filter_prefix(list(cur["commands"]) + sub_names, incomplete)
 
     is_script_cmd = cmd_name in cur["script_cmds"]
-    signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {}) if is_script_cmd else {}
+    signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {})
 
+    # A script_command still expects its config-file positional first, so
+    # before one is consumed (and the user isn't already typing a flag) offer
+    # YAML files. A plain @command has no config positional, so it skips
+    # straight to its option flags below.
     if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
         return _file_candidates(incomplete, exts=["yaml", "yml"])
 
-    # Once a script_command has consumed its config (or any time the user
-    # is typing a flag), suggest globals + dotted override keys. Empty
-    # incomplete is included so the user gets a hint even before typing
-    # the first dash.
-    if is_script_cmd and consumed_config and prev.startswith("--") and prev not in GLOBAL_VALUE_FLAGS:
-        # User just typed `--<key>`; the next token is its value. We don't
-        # know the value type, so stay silent and let the shell's default
-        # filename completion kick in.
+    # The previous token is a value-taking ``--flag`` (and not one of the
+    # globals we resolved values for above): its value comes next and we
+    # can't know the type, so stay silent and let the shell's default
+    # filename completion kick in. Applies to both command kinds.
+    if prev.startswith("--") and prev not in GLOBAL_VALUE_FLAGS:
         return []
 
-    if incomplete.startswith("-") or (is_script_cmd and consumed_config):
-        candidates = list(GLOBAL_FLAGS)
-        # Signature-derived keys: cheap, baked into the cache at serialize_app
-        # time. Surfaced both when no config is on the line (so `train --` is
-        # useful in isolation) and when one is (union with the YAML's own
-        # keys — the user may want to override fields the YAML doesn't set).
-        if signature_keys:
-            candidates.extend(_signature_flag_candidates(signature_keys))
-        if is_script_cmd and config_path is not None and config_path.exists():
-            try:
-                candidates.extend(f"--{k}" for k in _resolve_override_keys(config_path))
-            except Exception:
-                pass
-        return _filter_prefix(candidates, incomplete)
-
-    return []
+    # Otherwise the user is at a flag position. Offer the global flags plus
+    # this command's own option flags — derived from its signature at
+    # serialize_app time (cheap, baked into the cache) for EVERY command, so a
+    # plain ``@command`` surfaces its options too, not just the globals. Empty
+    # ``incomplete`` is included so bare ``<cmd> <TAB>`` reveals the options
+    # instead of falling back to filename completion. For a script_command
+    # with a config on the line, also union the YAML's own override keys.
+    candidates = list(GLOBAL_FLAGS)
+    if signature_keys:
+        candidates.extend(_signature_flag_candidates(signature_keys))
+    if is_script_cmd and config_path is not None and config_path.exists():
+        try:
+            candidates.extend(f"--{k}" for k in _resolve_override_keys(config_path))
+        except Exception:
+            pass
+    return _filter_prefix(candidates, incomplete)
 
 
 def _signature_flag_candidates(signature_keys: Dict[str, List[str]]) -> List[str]:
