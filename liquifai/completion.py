@@ -821,19 +821,33 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     is_script_cmd = cmd_name in cur["script_cmds"]
     signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {})
 
-    # A script_command still expects its config-file positional first, so
-    # before one is consumed (and the user isn't already typing a flag) offer
-    # YAML files. A plain @command has no config positional, so it skips
-    # straight to its option flags below.
-    if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
-        return _file_candidates(incomplete, exts=["yaml", "yml"])
-
     # The previous token is a value-taking ``--flag`` (and not one of the
-    # globals we resolved values for above): its value comes next and we
-    # can't know the type, so stay silent and let the shell's default
-    # filename completion kick in. Applies to both command kinds.
+    # globals whose values we resolved at the top): its value comes next and
+    # we can't know the type, so stay silent and let the shell's default
+    # filename completion kick in. Checked FIRST so a value slot
+    # (``--converter.src <TAB>``) stays silent even for a script_command that
+    # hasn't consumed a config yet — otherwise the config-file branch below
+    # would hijack the flag's value position. Applies to both command kinds.
     if prev.startswith("--") and prev not in GLOBAL_VALUE_FLAGS:
         return []
+
+    # A script_command's first positional is its YAML config path, so before
+    # one is consumed (and the user isn't already typing a flag) offer
+    # config-file candidates — but UNION the command's own option flags so a
+    # bare ``<cmd> <TAB>`` also reveals the overrides (e.g. ``--converter.src``),
+    # not just files, matching the discoverability of a plain @command's
+    # ``<cmd> <TAB>``. A script_command runs from CLI overrides + defaults too
+    # (no config required), so these option flags must complete with or without
+    # a config on the line. ``_filter_prefix`` drops every flag while the user
+    # is typing a path (no flag starts with a path prefix), so the flags
+    # surface only for an empty word. A plain @command has no config positional
+    # and skips straight to its option flags below.
+    if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
+        files = _file_candidates(incomplete, exts=["yaml", "yml"])
+        flags = list(GLOBAL_FLAGS)
+        if signature_keys:
+            flags.extend(_signature_flag_candidates(signature_keys))
+        return files + _filter_prefix(flags, incomplete)
 
     # Otherwise the user is at a flag position. Offer the global flags plus
     # this command's own option flags — derived from its signature at

@@ -113,6 +113,32 @@ def test_script_command_after_config_dashdash_lists_flags(app: LiquifyApp, tmp_p
     assert "--learning_rate" in out
 
 
+def test_script_command_empty_word_lists_files_and_flags(app: LiquifyApp, tmp_path: Path, monkeypatch: Any) -> None:
+    """`myapp train <TAB>` (no config yet, empty word) reveals the command's
+    override flags ALONGSIDE config-file candidates — not files only.
+
+    Regression: a script_command (e.g. `waivefront-helios convert-ops-export`)
+    hid its `--<key>` options behind a `--`, so a bare TAB showed only the
+    cwd's files/dirs and never the command's own options."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cfg.yaml").write_text("layers: 5\n")
+
+    out = comp.complete(app, ["myapp", "train", ""], cword=2)
+    assert "cfg.yaml" in out  # config-file candidate still offered
+    assert "--layers" in out  # ...AND the command's own option flag
+    assert "--config" in out  # ...AND the globals
+
+
+def test_script_command_path_prefix_lists_files_only(app: LiquifyApp, tmp_path: Path) -> None:
+    """While typing a path (a non-empty, non-dash word), only file candidates
+    come back — the unioned option flags are prefix-filtered out so they don't
+    pollute path completion."""
+    (tmp_path / "cfg.yaml").write_text("layers: 5\n")
+    out = comp.complete(app, ["myapp", "train", str(tmp_path) + "/"], cword=2)
+    assert any(p.endswith("cfg.yaml") for p in out)
+    assert not any(p.startswith("--") for p in out)
+
+
 def test_script_command_after_config_dashprefix_filters_keys(app: LiquifyApp, tmp_path: Path) -> None:
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text("layers: 5\nlearning_rate: 0.01\n")
@@ -140,6 +166,17 @@ def test_script_command_after_override_flag_silent(app: LiquifyApp, tmp_path: Pa
     cfg.write_text("layers: 5\n")
 
     out = comp.complete(app, ["myapp", "train", str(cfg), "--layers", ""], cword=4)
+    assert out == []
+
+
+def test_script_command_no_config_override_flag_silent(app: LiquifyApp) -> None:
+    """`myapp train --layers <TAB>` (NO config on the line) also expects a
+    value — stay silent so the shell does default filename completion.
+
+    Regression: the no-config config-file+flags branch used to hijack the
+    flag's value slot, returning files + every override flag instead of
+    nothing."""
+    out = comp.complete(app, ["myapp", "train", "--layers", ""], cword=3)
     assert out == []
 
 

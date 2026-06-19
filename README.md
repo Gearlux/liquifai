@@ -60,7 +60,11 @@ include sub-commands, sub-app names, global flags, each command's own
 `--<option>` flags (derived from its function signature — so a plain
 `@command` like `run list` completes `--experiment`, `--status`, … not just
 the globals), YAML files for `@script_command` configuration arguments, and
-`--<key>` override suggestions derived from the loaded config.
+`--<key>` override suggestions derived from the loaded config. A bare
+`<cmd> <TAB>` reveals the command's options directly — for a `@script_command`
+they appear *alongside* the config-file candidates (so
+`convert-ops-export <TAB>` shows both the YAML files to pick and the
+`--converter.*` overrides), and narrowing with `--<TAB>` drops the files.
 
 > **Note:** the option flags are baked into a per-app cache
 > (`~/.cache/liquifai/<app>.json`) that is refreshed automatically every time
