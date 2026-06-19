@@ -28,8 +28,12 @@ def app() -> LiquifyApp:
     root = LiquifyApp(name="myapp")
 
     @root.command()
-    def greet(name: str = "world") -> None:
-        print(f"hi {name}")
+    def greet(target: str = "world") -> None:
+        # NB: a param literally named ``name`` is the confluid instance-identity
+        # key and is skipped by ``get_hierarchy`` (hence excluded from both
+        # ``--help`` and completion), so this fixture uses ``target`` to model a
+        # normal plain-command option.
+        print(f"hi {target}")
 
     @root.script_command()
     def train(layers: int = 1) -> None:
@@ -192,28 +196,28 @@ def test_plain_command_empty_word_lists_flags(app: LiquifyApp) -> None:
     """`myapp greet <TAB>` (empty incomplete) should reveal the command's own
     options + globals, instead of falling back to filename completion."""
     out = comp.complete(app, ["myapp", "greet", ""], cword=2)
-    assert "--name" in out  # from `greet(name: str = "world")`
+    assert "--target" in out  # from `greet(target: str = "world")`
     assert "--config" in out  # a global flag
 
 
 def test_plain_command_dashdash_lists_flags(app: LiquifyApp) -> None:
     """`myapp greet --<TAB>` should list the command's flags alongside globals."""
     out = comp.complete(app, ["myapp", "greet", "--"], cword=2)
-    assert "--name" in out
+    assert "--target" in out
     assert "--config" in out
     assert "--help" in out
 
 
 def test_plain_command_prefix_filters_signature_flag(app: LiquifyApp) -> None:
     """A `--` prefix filters down to the matching signature flag."""
-    out = comp.complete(app, ["myapp", "greet", "--na"], cword=2)
-    assert out == ["--name"]
+    out = comp.complete(app, ["myapp", "greet", "--ta"], cword=2)
+    assert out == ["--target"]
 
 
 def test_plain_command_after_flag_silent(app: LiquifyApp) -> None:
-    """`myapp greet --name <TAB>` expects a value; stay silent so the shell's
+    """`myapp greet --target <TAB>` expects a value; stay silent so the shell's
     default filename completion handles it."""
-    out = comp.complete(app, ["myapp", "greet", "--name", ""], cword=3)
+    out = comp.complete(app, ["myapp", "greet", "--target", ""], cword=3)
     assert out == []
 
 
@@ -413,17 +417,20 @@ def test_serialize_app_round_trip(app: LiquifyApp) -> None:
     sub = tree["sub_apps"]["group"]
     assert set(sub["commands"]) == {"alpha", "beta"}
     assert set(sub["script_cmds"]) == {"beta"}
-    # EVERY command gets a signature_keys entry — a plain @command carries
-    # its options in its signature too, so completion needs them to offer
-    # anything beyond the global flags (regression: `run list --<TAB>` used
-    # to surface only globals).
-    assert set(tree["signature_keys"].keys()) == {"greet", "train"}
-    # `train(layers: int = 1)` — `int` isn't @configurable, so the entry
-    # is present-but-empty; the `--layers` flag is still surfaced from the
-    # key, but the recursive walk has nothing to descend into.
-    assert tree["signature_keys"]["train"] == {"layers": []}
-    # `greet(name: str = "world")` — likewise plain, contributing `--name`.
-    assert tree["signature_keys"]["greet"] == {"name": []}
+    # EVERY command gets signature entries — a plain @command carries its
+    # options in its signature too, so completion needs them to offer anything
+    # beyond the global flags (regression: `run list --<TAB>` used to surface
+    # only globals). Two parallel maps: raw `signature_paths` + the
+    # shortest-unique-collapsed `signature_flags`.
+    assert set(tree["signature_paths"].keys()) == {"greet", "train"}
+    assert set(tree["signature_flags"].keys()) == {"greet", "train"}
+    # `train(layers: int = 1)` — `int` isn't @configurable, so the only path is
+    # the param itself; it collapses to the `--layers` flag.
+    assert tree["signature_paths"]["train"] == ["layers"]
+    assert tree["signature_flags"]["train"] == ["--layers"]
+    # `greet(target: str = "world")` — likewise plain, contributing `--target`.
+    assert tree["signature_paths"]["greet"] == ["target"]
+    assert tree["signature_flags"]["greet"] == ["--target"]
 
 
 def test_write_then_read_cache(app: LiquifyApp, tmp_path: Path, monkeypatch: Any) -> None:
@@ -509,59 +516,97 @@ def _plain_cmd(layers: int = 1, name: str = "x") -> None:
 
 
 def test_introspect_function_keys_walks_configurable() -> None:
-    """Signature introspection should descend one level into @configurable types."""
+    """Signature introspection (via confluid `get_hierarchy`) descends into
+    @configurable types and emits the flat list of LEAF override paths — no
+    configurable container roots/intermediates, and the instance-identity
+    `name` param is skipped (`_CompTestTrainer.name` does not appear)."""
     keys = comp._introspect_function_keys(_walking_cmd)
-    assert "outer" in keys
-    assert "name" in keys["outer"]
-    assert "optimizer" in keys["outer"]
-    assert "optimizer.lr" in keys["outer"]
-    assert "optimizer.weight_decay" in keys["outer"]
+    assert keys == [
+        "outer.epochs",
+        "outer.optimizer.lr",
+        "outer.optimizer.weight_decay",
+    ]
 
 
-def test_introspect_function_keys_plain_annotation_returns_empty_list() -> None:
-    """Non-@configurable annotations leave the param's sub-key list empty."""
+def test_introspect_function_keys_plain_annotation_lists_params() -> None:
+    """Plain params are leaves; the special `name` param is skipped (matching
+    `--help`/`get_hierarchy`), so `_plain_cmd(layers, name)` yields just
+    `layers`."""
     keys = comp._introspect_function_keys(_plain_cmd)
-    assert keys == {"layers": [], "name": []}
+    assert keys == ["layers"]
 
 
-def test_complete_signature_keys_without_config() -> None:
-    """`myapp train --` with no YAML still surfaces `--trainer.<key>` flags."""
+def test_complete_signature_keys_shortest_unique_paths() -> None:
+    """`myapp train --` with no YAML surfaces the command's options collapsed to
+    their SHORTEST-UNIQUE paths (confluid `shortest_unique_paths`), exactly like
+    `--help` — a unique leaf shows as `--lr`, NOT `--trainer.optimizer.lr`.
+
+    This is the regression the user hit on `convert-ops-export <TAB>`: the
+    options were emitted verbatim as `--converter.class_name` instead of the
+    unique-leaf `--class_name`."""
     app = _configurable_app()
     out = comp.complete(app, ["myapp", "train", "--"], cword=2)
-    assert "--trainer" in out
-    assert "--trainer.epochs" in out
-    assert "--trainer.optimizer" in out
-    assert "--trainer.optimizer.lr" in out
-    # Globals must remain available alongside signature keys.
+    # Every leaf here is unique, so each collapses to its bare name:
+    assert "--epochs" in out
+    assert "--lr" in out
+    assert "--weight_decay" in out
+    # Configurable container roots/intermediates are NOT leaves → not offered
+    # (matching `--help`); neither is the un-collapsed long form:
+    assert "--trainer" not in out
+    assert "--optimizer" not in out
+    assert "--trainer.optimizer.lr" not in out
+    assert "--trainer.epochs" not in out
+    # Globals remain available alongside signature flags.
     assert "--config" in out
 
 
+def test_complete_signature_keys_shared_leaf_keeps_prefix() -> None:
+    """When two params share a leaf, `shortest_unique_paths` keeps enough prefix
+    to disambiguate — completion must reflect that (no ambiguous bare `--lr`)."""
+    root = LiquifyApp(name="myapp")
+
+    @root.command()
+    def tune(model: _CompTestOptim, optim: _CompTestOptim) -> None:  # both carry lr/weight_decay
+        pass
+
+    out = comp.complete(root, ["myapp", "tune", "--"], cword=2)
+    # `lr` is shared by model + optim, so it stays prefixed both ways:
+    assert "--model.lr" in out
+    assert "--optim.lr" in out
+    assert "--lr" not in out
+    assert "--model.weight_decay" in out
+    assert "--optim.weight_decay" in out
+
+
 def test_complete_signature_keys_filtered_by_prefix() -> None:
-    """Prefix filtering applies to signature flags the same as global flags."""
+    """Prefix filtering applies to (collapsed) signature flags like global flags."""
     app = _configurable_app()
-    out = comp.complete(app, ["myapp", "train", "--trainer.opt"], cword=2)
-    assert "--trainer.optimizer" in out
-    assert "--trainer.optimizer.lr" in out
-    assert "--trainer.optimizer.weight_decay" in out
-    # Sibling key starts with `--trainer.` but not `--trainer.opt`:
-    assert "--trainer.epochs" not in out
+    out = comp.complete(app, ["myapp", "train", "--weight"], cword=2)
+    assert "--weight_decay" in out
+    # `--epochs` / `--lr` start with `--` but not `--weight`:
+    assert "--epochs" not in out
+    assert "--lr" not in out
 
 
 def test_complete_signature_union_with_config(tmp_path: Path) -> None:
-    """When a YAML is on the line, completion unions config keys + signature keys.
+    """When a YAML is on the line, completion collapses the UNION of config keys
+    + signature keys to shortest-unique form in one pass.
 
     The YAML sets `trainer.epochs`; signature introspection knows
-    `trainer.optimizer.lr` exists even though the YAML doesn't set it.
-    Both must be present so the user can override either.
+    `trainer.optimizer.lr` exists even though the YAML doesn't set it. Both must
+    be offered (so the user can override either), each at its shortest-unique
+    form.
     """
     app = _configurable_app()
     cfg = tmp_path / "train.yaml"
     cfg.write_text("trainer:\n  epochs: 5\n")
-    out = comp.complete(app, ["myapp", "train", str(cfg), "--trainer."], cword=3)
-    # From the YAML (via _resolve_override_keys):
-    assert "--trainer.epochs" in out
-    # From the signature (not in YAML):
-    assert "--trainer.optimizer.lr" in out
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--"], cword=3)
+    # From the YAML (via _resolve_override_keys), unique leaf → bare:
+    assert "--epochs" in out
+    # From the signature (not in YAML), unique leaf → bare:
+    assert "--lr" in out
+    # Long forms are not offered:
+    assert "--trainer.optimizer.lr" not in out
 
 
 # ------------------------ end-to-end via LiquifyApp ----------------------

@@ -58,13 +58,23 @@ pip install git+https://github.com/Gearlux/liquifai.git@main
 Every LiquifyApp ships with bash, zsh, and fish tab completion. Candidates
 include sub-commands, sub-app names, global flags, each command's own
 `--<option>` flags (derived from its function signature — so a plain
-`@command` like `run list` completes `--experiment`, `--status`, … not just
-the globals), YAML files for `@script_command` configuration arguments, and
+`@command` like `run list` completes `--experiment`, `--status`, …, and a
+`@script_command` whose argument is a `@configurable` completes its nested
+overrides), YAML files for `@script_command` configuration arguments, and
 `--<key>` override suggestions derived from the loaded config. A bare
 `<cmd> <TAB>` reveals the command's options directly — for a `@script_command`
 they appear *alongside* the config-file candidates (so
-`convert-ops-export <TAB>` shows both the YAML files to pick and the
-`--converter.*` overrides), and narrowing with `--<TAB>` drops the files.
+`convert-ops-export <TAB>` shows both the YAML files to pick and the converter
+overrides), and narrowing with `--<TAB>` drops the files.
+
+**Option flags use the same shortest-unique paths as `--help`.** Completion
+runs the command's override paths through the *exact same* confluid functions
+(`get_hierarchy` + `shortest_unique_paths`) that build the `--help` options
+table, so the two never disagree: a uniquely-named leaf shows as `--class_name`
+(not the noisy `--converter.class_name`), and a leaf shared by two sub-objects
+keeps just enough prefix to disambiguate (`--model.lr` vs `--optim.lr`). Both
+the short flat form and the fully-dotted form work as overrides at runtime;
+completion only *suggests* the short one.
 
 > **Note:** the option flags are baked into a per-app cache
 > (`~/.cache/liquifai/<app>.json`) that is refreshed automatically every time

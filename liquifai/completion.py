@@ -37,7 +37,11 @@ if TYPE_CHECKING:
 
 
 SHELLS: List[str] = ["bash", "zsh", "fish"]
-CACHE_VERSION: int = 2
+# v3: command option flags are stored as shortest-unique-path-collapsed
+# ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
+# ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
+# so they are rewritten on the next run / ``--help``.
+CACHE_VERSION: int = 3
 
 GLOBAL_FLAGS: List[str] = [
     "--config",
@@ -540,16 +544,26 @@ def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
 def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
     """Snapshot the static command tree of ``app`` to a JSON-friendly dict.
 
-    ``signature_keys`` records, per command (plain ``@command`` AND
-    ``@script_command``), the option flags inferred from each parameter: a
-    plain parameter contributes ``--<param>``, while a parameter whose
-    annotation resolves to a ``@configurable`` class also contributes the
-    dotted ``--<param>.<sub_key>`` override keys (walked recursively). It is
-    computed at snapshot time — when the app module is already loaded, so the
-    confluid import is free — and consumed by :func:`complete_from_tree` so TAB
-    offers a command's own options (not just the global flags), and for a
-    ``script_command`` can do so even before a YAML config is on the line.
+    Per command (plain ``@command`` AND ``@script_command``) we record the
+    option flags inferred from the function signature — for EVERY command, not
+    only script_commands: a plain ``@command`` (e.g. ``run list``) carries its
+    options in its signature too, so without this TAB could only ever offer the
+    global flags for it. Two parallel maps are stored:
+
+    * ``signature_paths`` — the raw flat dotted override paths
+      (``["converter", "converter.class_name", ...]``). Kept so the
+      config-present completion path can collapse the UNION of these and the
+      YAML's own keys in one pass.
+    * ``signature_flags`` — those paths run through confluid's canonical
+      :func:`confluid.shortest_unique_paths` and turned into ``--<flag>``
+      candidates, so a unique leaf shows as ``--class_name`` (not the noisy
+      ``--converter.class_name``), exactly matching ``--help`` /
+      :mod:`liquifai.report`. Collapsing happens HERE — at snapshot time, when
+      the app module (and therefore confluid) is already loaded — so the
+      stdlib-only fast completion path just reads the result and never imports
+      confluid.
     """
+    command_paths = {cmd: _introspect_function_keys(func) for cmd, func in app._commands.items()}
     return {
         "name": app.name,
         "commands": list(app._commands.keys()),
@@ -560,162 +574,66 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
         # ``sub_apps`` above) so completion shows the canonical name once, not the
         # abbreviation alongside it.
         "sub_app_aliases": sorted(app._sub_app_aliases.keys()),
-        # Computed for EVERY command, not only script_commands: a plain
-        # ``@command`` (e.g. ``run list``) carries its options in its function
-        # signature, so without this TAB could only ever offer the global
-        # flags for it. ``_introspect_function_keys`` returns ``{param: []}``
-        # for a plain parameter and ``{param: [sub_keys]}`` for a configurable
-        # one, so the same map drives both ``--<param>`` and dotted overrides.
-        "signature_keys": {cmd: _introspect_function_keys(func) for cmd, func in app._commands.items()},
+        "signature_paths": command_paths,
+        "signature_flags": {cmd: _collapse_to_flags(paths) for cmd, paths in command_paths.items()},
     }
 
 
-def _introspect_function_keys(func: Any, max_depth: int = 4) -> Dict[str, List[str]]:
-    """Return per-parameter dotted sub-keys derived from confluid annotations.
+def _collapse_to_flags(paths: Iterable[str]) -> List[str]:
+    """Collapse dotted override paths to their shortest-unique ``--flag`` form.
 
-    For each parameter of ``func`` whose annotation unwraps to a
-    ``@configurable`` class, walk that class's accept-list (recursively into
-    nested ``@configurable`` types up to ``max_depth``) and return the keys.
+    Reuses confluid's canonical :func:`confluid.shortest_unique_paths` — the
+    SAME function ``--help`` / :func:`liquifai.report.show_configuration` uses —
+    so completion and help agree: a leaf unique across the command's override
+    keys shows as ``--<leaf>`` (``--class_name``), and only a shared leaf keeps
+    enough of its prefix to disambiguate (``--a.lr`` vs ``--b.lr``).
 
-    Result shape: ``{param_name: [sub_key, sub_key.nested, ...]}``. Params
-    whose annotation isn't ``@configurable`` produce an empty list — kept in
-    the map so callers can still emit ``--<param>`` for explicit overrides.
-    Returns ``{}`` on any import / introspection failure so a broken
-    annotation never breaks completion.
-
-    Uses :func:`typing.get_type_hints` rather than reading raw annotations
-    off the signature so PEP 563 (``from __future__ import annotations``)
-    callers — where annotations are kept as strings — resolve correctly.
+    Confluid is imported lazily: this is called at cache-build time (confluid
+    already loaded in the app process) and on the config-present completion path
+    (which has already imported confluid to read the YAML), so the stdlib-only
+    fast path never reaches it. Returns sorted, de-duplicated flags.
     """
-    import inspect
-    import typing
+    from confluid import shortest_unique_paths
 
+    unique = sorted({p for p in paths if p})
+    display = shortest_unique_paths(unique)
+    out: List[str] = []
+    seen: Set[str] = set()
+    for full in unique:
+        flag = f"--{display[full]}"
+        if flag not in seen:
+            out.append(flag)
+            seen.add(flag)
+    return out
+
+
+def _introspect_function_keys(func: Any) -> List[str]:
+    """Return the flat list of LEAF override paths a command exposes.
+
+    Delegates to confluid's :func:`confluid.get_hierarchy` — the SAME path
+    enumerator ``--help`` / :func:`liquifai.report.show_configuration` use — so
+    completion and help can never diverge. ``get_hierarchy`` walks the command
+    function's signature params, recurses into each ``@configurable`` param, and
+    records only LEAF scalars (never the configurable container itself):
+    ``convert-ops-export(converter: TaidalOpsToHeliosConverter)`` yields
+    ``["converter.class_name", "converter.dst", ...]`` — no bare ``converter``
+    root. A plain ``@command`` like ``run list`` yields its bare params
+    (``["experiment", "status", ...]``). It reads ``__init__``/signature
+    parameters only (NOT ``dir(cls)``), so inherited framework-base attributes
+    never pollute the output.
+
+    These RAW paths are later collapsed to shortest-unique ``--flag`` form by
+    :func:`_collapse_to_flags`. Called only at cache-build time
+    (:func:`serialize_app`), where confluid is already loaded — never on the
+    stdlib-only fast path. Returns ``[]`` on any introspection failure so a
+    broken annotation never breaks completion.
+    """
     try:
-        sig = inspect.signature(func)
-    except (TypeError, ValueError):
-        return {}
-    try:
-        hints = typing.get_type_hints(func, include_extras=True)
+        from confluid import get_hierarchy
+
+        return sorted(get_hierarchy(func).keys())
     except Exception:
-        hints = {}
-
-    out: Dict[str, List[str]] = {}
-    for name, param in sig.parameters.items():
-        if name in ("self", "cls"):
-            continue
-        ann = hints.get(name, param.annotation)
-        leaf = _unwrap_annotation(ann)
-        if leaf is None or not getattr(leaf, "__confluid_configurable__", False):
-            out[name] = []
-            continue
-        try:
-            out[name] = _walk_configurable_keys(leaf, depth=0, max_depth=max_depth)
-        except Exception:
-            out[name] = []
-    return out
-
-
-def _unwrap_annotation(ann: Any) -> Optional[Any]:
-    """Strip ``Annotated[...]``, ``Optional[...]``, ``Lazy[...]`` wrappers.
-
-    Returns the inner type or ``None`` for ``Any`` / un-annotated / unions
-    that don't reduce to a single non-None type.
-    """
-    import inspect
-    import typing
-
-    if ann is inspect.Parameter.empty or ann is Any or ann is type(None):
-        return None
-    origin = typing.get_origin(ann)
-    # Annotated[T, ...] (includes Lazy[T] which is Annotated[T, _LAZY_MARKER])
-    if origin is not None and getattr(typing, "Annotated", None) is not None:
-        # typing.get_origin returns the type T for Annotated[T, ...].
-        args = typing.get_args(ann)
-        if args:
-            return _unwrap_annotation(args[0])
-    # Union / Optional — keep the first non-None arm.
-    if origin is typing.Union:
-        non_none = [a for a in typing.get_args(ann) if a is not type(None)]
-        if len(non_none) == 1:
-            return _unwrap_annotation(non_none[0])
-        return None
-    return ann
-
-
-def _walk_configurable_keys(cls: Any, depth: int, max_depth: int) -> List[str]:
-    """Recursively collect dotted override-keys for a ``@configurable`` class.
-
-    Returns the keys a user would plausibly want to override via the CLI:
-    ``__init__`` parameters plus class-level annotated attributes. We do
-    NOT reuse ``confluid.loader._get_acceptable_keys`` because that walks
-    ``dir(cls)`` to surface every non-callable class attribute — including
-    everything inherited from base classes (e.g. ``LightningModule`` adds
-    ~25 attrs like ``CHECKPOINT_HYPER_PARAMS_KEY``, ``dump_patches``,
-    ``automatic_optimization``). That's appropriate for the config loader
-    (any of them is technically bindable) but useless noise in TAB output.
-
-    For each key whose annotation itself resolves to a ``@configurable``
-    class, recurse and prefix with ``"<key>."``. Returns a sorted,
-    deduplicated list.
-    """
-    if depth > max_depth:
         return []
-
-    sub_annotations = _gather_annotations(cls)
-    # _gather_annotations already covers both __init__ params (init slot)
-    # and class-level annotations. Restrict to keys that have annotations —
-    # for fields the user couldn't reasonably override blindly, completion
-    # is more confusing than helpful.
-    accept = {k for k in sub_annotations if not k.startswith("_")}
-    if not accept:
-        return []
-
-    keys: List[str] = []
-    for k in sorted(accept):
-        keys.append(k)
-        sub = _unwrap_annotation(sub_annotations.get(k))
-        if sub is not None and getattr(sub, "__confluid_configurable__", False):
-            for nested in _walk_configurable_keys(sub, depth + 1, max_depth):
-                keys.append(f"{k}.{nested}")
-    return keys
-
-
-def _gather_annotations(cls: Any) -> Dict[str, Any]:
-    """Collect annotations for ``cls`` from both ``__init__`` and class body.
-
-    Resolves PEP 563 stringified annotations via :func:`typing.get_type_hints`,
-    but restricts class-level annotations to the class's OWN ``__annotations__``
-    rather than the inherited merged view. Without this, subclasses of
-    framework bases like ``pytorch_lightning.LightningModule`` or
-    ``torch.nn.Module`` pull in dozens of annotated-but-irrelevant attrs
-    (``training``, ``forward``, ``call_super_init``, ``dump_patches``, …)
-    that would otherwise pollute every ``--<param>.<TAB>`` listing.
-    """
-    import typing
-
-    out: Dict[str, Any] = {}
-    init = getattr(cls, "__init__", None)
-    if init is not None:
-        try:
-            hints = typing.get_type_hints(init, include_extras=True)
-            for name, ann in hints.items():
-                if name in ("self", "cls", "return"):
-                    continue
-                out[name] = ann
-        except Exception:
-            pass
-
-    own = cls.__dict__.get("__annotations__", {}) if hasattr(cls, "__dict__") else {}
-    if own:
-        try:
-            resolved = typing.get_type_hints(cls, include_extras=True)
-        except Exception:
-            resolved = {}
-        for k in own:
-            if k.startswith("_"):
-                continue
-            out[k] = resolved.get(k, own[k])
-    return out
 
 
 def write_cache(app: "LiquifyApp") -> Path:
@@ -819,7 +737,12 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         return _filter_prefix(list(cur["commands"]) + sub_names, incomplete)
 
     is_script_cmd = cmd_name in cur["script_cmds"]
-    signature_keys = (cur.get("signature_keys") or {}).get(cmd_name, {})
+    # ``signature_flags``: the command's options already collapsed to
+    # shortest-unique ``--flag`` form (baked at serialize time). ``signature_paths``:
+    # the raw dotted paths, kept so the config-present branch can re-collapse
+    # the UNION of these and the YAML's own keys in one pass.
+    signature_flags = list((cur.get("signature_flags") or {}).get(cmd_name, []))
+    signature_paths = list((cur.get("signature_paths") or {}).get(cmd_name, []))
 
     # The previous token is a value-taking ``--flag`` (and not one of the
     # globals whose values we resolved at the top): its value comes next and
@@ -834,7 +757,7 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     # A script_command's first positional is its YAML config path, so before
     # one is consumed (and the user isn't already typing a flag) offer
     # config-file candidates — but UNION the command's own option flags so a
-    # bare ``<cmd> <TAB>`` also reveals the overrides (e.g. ``--converter.src``),
+    # bare ``<cmd> <TAB>`` also reveals the overrides (e.g. ``--class_name``),
     # not just files, matching the discoverability of a plain @command's
     # ``<cmd> <TAB>``. A script_command runs from CLI overrides + defaults too
     # (no config required), so these option flags must complete with or without
@@ -844,37 +767,27 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     # and skips straight to its option flags below.
     if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
         files = _file_candidates(incomplete, exts=["yaml", "yml"])
-        flags = list(GLOBAL_FLAGS)
-        if signature_keys:
-            flags.extend(_signature_flag_candidates(signature_keys))
+        flags = list(GLOBAL_FLAGS) + signature_flags
         return files + _filter_prefix(flags, incomplete)
 
-    # Otherwise the user is at a flag position. Offer the global flags plus
-    # this command's own option flags — derived from its signature at
-    # serialize_app time (cheap, baked into the cache) for EVERY command, so a
-    # plain ``@command`` surfaces its options too, not just the globals. Empty
-    # ``incomplete`` is included so bare ``<cmd> <TAB>`` reveals the options
-    # instead of falling back to filename completion. For a script_command
-    # with a config on the line, also union the YAML's own override keys.
+    # Otherwise the user is at a flag position. Offer the global flags plus this
+    # command's own option flags. Empty ``incomplete`` is included so bare
+    # ``<cmd> <TAB>`` reveals the options instead of falling back to filename
+    # completion. When a script_command has a config on the line, collapse the
+    # UNION of the signature paths and the YAML's own override keys to
+    # shortest-unique form in a single pass (confluid is already loaded to read
+    # the YAML) so completion and ``--help`` agree; otherwise use the flags
+    # collapsed at serialize time (the stdlib-only fast path — no confluid).
     candidates = list(GLOBAL_FLAGS)
-    if signature_keys:
-        candidates.extend(_signature_flag_candidates(signature_keys))
     if is_script_cmd and config_path is not None and config_path.exists():
         try:
-            candidates.extend(f"--{k}" for k in _resolve_override_keys(config_path))
+            yaml_paths = _resolve_override_keys(config_path)
         except Exception:
-            pass
+            yaml_paths = []
+        candidates.extend(_collapse_to_flags(signature_paths + yaml_paths))
+    else:
+        candidates.extend(signature_flags)
     return _filter_prefix(candidates, incomplete)
-
-
-def _signature_flag_candidates(signature_keys: Dict[str, List[str]]) -> List[str]:
-    """Flatten ``{param: [sub_keys]}`` to ``--param`` + ``--param.sub_key`` flags."""
-    out: List[str] = []
-    for param, subs in signature_keys.items():
-        out.append(f"--{param}")
-        for sub in subs:
-            out.append(f"--{param}.{sub}")
-    return out
 
 
 def _filter_prefix(items: List[str], prefix: str) -> List[str]:
