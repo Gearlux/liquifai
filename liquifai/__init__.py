@@ -8,11 +8,12 @@ not pay the cost of pulling in confluid / logflow / rich.
 
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["LiquifyApp", "LiquifyContext", "get_context", "set_context"]
+__all__ = ["LiquifyApp", "LiquifyContext", "get_context", "set_context", "make_mcp_tools", "Presentation"]
 
 if TYPE_CHECKING:
     from liquifai.context import LiquifyContext, get_context, set_context
-    from liquifai.core import LiquifyApp
+    from liquifai.core import LiquifyApp, Presentation
+    from liquifai.tools import make_mcp_tools
 
 
 def __getattr__(name: str) -> Any:
@@ -24,4 +25,12 @@ def __getattr__(name: str) -> Any:
         from liquifai import context
 
         return getattr(context, name)
+    if name == "make_mcp_tools":
+        from liquifai.tools import make_mcp_tools
+
+        return make_mcp_tools
+    if name == "Presentation":
+        from liquifai.core import Presentation
+
+        return Presentation
     raise AttributeError(f"module 'liquifai' has no attribute {name!r}")
