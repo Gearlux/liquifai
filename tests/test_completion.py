@@ -945,3 +945,76 @@ def test_help_refreshes_stale_completion_cache(capsys: Any, monkeypatch: Any, tm
     tree_after = comp.read_cache("freshapp")
     assert tree_after is not None
     assert set(tree_after["commands"]) == {"alpha2", "beta"}
+
+
+# ---------------------------------------------------------------------------
+# Positional hints in complete_from_tree
+# ---------------------------------------------------------------------------
+
+
+def _app_with_positionals() -> LiquifyApp:
+    """A one-sub-app, one-command app where 'download' has two positionals."""
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.command("download", positionals=["name", "version"])
+    def download(name: str = "", version: str = "", path: str = "") -> None:
+        pass
+
+    root.add_app(sub, "dataset")
+    return root
+
+
+def test_positionals_in_serialized_tree() -> None:
+    root = _app_with_positionals()
+    tree = comp.serialize_app(root)
+    sub_tree = tree["sub_apps"]["dataset"]
+    assert "download" in sub_tree.get("positionals", {})
+    assert sub_tree["positionals"]["download"] == ["name", "version"]
+
+
+def test_positional_hint_at_first_slot() -> None:
+    root = _app_with_positionals()
+    # "sairen dataset download <TAB>" — cursor at position 3, no tokens after cmd yet
+    out = comp.complete(root, ["sairen", "dataset", "download", ""], cword=3)
+    assert out[0] == "<name>"
+
+
+def test_positional_hint_advances_after_first_consumed() -> None:
+    root = _app_with_positionals()
+    # "sairen dataset download mydata <TAB>" — one positional consumed
+    out = comp.complete(root, ["sairen", "dataset", "download", "mydata", ""], cword=4)
+    assert out[0] == "<version>"
+
+
+def test_no_positional_hint_after_all_consumed() -> None:
+    root = _app_with_positionals()
+    # Both positionals consumed — only flags remain
+    out = comp.complete(root, ["sairen", "dataset", "download", "mydata", "1.0", ""], cword=5)
+    assert not any(c.startswith("<") for c in out)
+
+
+def test_positional_hint_stops_at_flag() -> None:
+    root = _app_with_positionals()
+    # "--path" was given before the positionals, stops counting
+    out = comp.complete(root, ["sairen", "dataset", "download", "--path", "/tmp", ""], cword=5)
+    # "--path /tmp" are consumed as a flag+value pair, so n_consumed=0 → hint is <name>
+    assert out[0] == "<name>"
+
+
+def test_no_hint_for_command_with_no_positionals() -> None:
+    root = LiquifyApp(name="myapp")
+
+    @root.command("list")
+    def lst() -> None:
+        pass
+
+    out = comp.complete(root, ["myapp", "list", ""], cword=2)
+    assert not any(c.startswith("<") for c in out)
+
+
+def test_positional_hint_filtered_by_partial_input() -> None:
+    root = _app_with_positionals()
+    # User is typing "my" — "<name>" doesn't start with "my", so it's filtered out
+    out = comp.complete(root, ["sairen", "dataset", "download", "my"], cword=3)
+    assert "<name>" not in out

@@ -576,6 +576,12 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
         "sub_app_aliases": sorted(app._sub_app_aliases.keys()),
         "signature_paths": command_paths,
         "signature_flags": {cmd: _collapse_to_flags(paths) for cmd, paths in command_paths.items()},
+        # Ordered positional-argument names per command; used by complete_from_tree
+        # to emit ``<name>`` placeholder hints before flags when the cursor is at
+        # an unfilled positional slot.
+        "positionals": {
+            cmd: list(getattr(func, "__liquifai_positionals__", [])) for cmd, func in app._commands.items()
+        },
     }
 
 
@@ -770,6 +776,29 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         flags = list(GLOBAL_FLAGS) + signature_flags
         return files + _filter_prefix(flags, incomplete)
 
+    # Positional hints: when the cursor is at an unfilled positional slot, emit
+    # ``<name>`` as the first candidate so the user sees what to type without
+    # consulting ``--help``.  The angle-bracket format is a conventional
+    # "placeholder, not a literal" signal — shells show it in the completion
+    # list but don't expand it.  The hint appears only when ``incomplete`` is
+    # empty (bare TAB); while the user is actively typing it is filtered out by
+    # ``_filter_prefix`` naturally.
+    positional_hint: List[str] = []
+    cmd_positionals = list((cur.get("positionals") or {}).get(cmd_name, []))
+    if cmd_positionals:
+        # Find where the command token sits in ``parsed`` (words[1:cword]).
+        cmd_idx = next((j for j, t in enumerate(parsed) if t == cmd_name), None)
+        n_consumed = 0
+        if cmd_idx is not None:
+            for tok in parsed[cmd_idx + 1 :]:
+                # Stop counting at the first flag-like or key=value token —
+                # mirrors _stops_positional() in core.py without importing it.
+                if not tok or tok[0] in ("-", "+", "~") or "=" in tok:
+                    break
+                n_consumed += 1
+        if n_consumed < len(cmd_positionals):
+            positional_hint = [f"<{cmd_positionals[n_consumed]}>"]
+
     # Otherwise the user is at a flag position. Offer the global flags plus this
     # command's own option flags. Empty ``incomplete`` is included so bare
     # ``<cmd> <TAB>`` reveals the options instead of falling back to filename
@@ -787,7 +816,9 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
         candidates.extend(_collapse_to_flags(signature_paths + yaml_paths))
     else:
         candidates.extend(signature_flags)
-    return _filter_prefix(candidates, incomplete)
+    # Prepend positional hint (if any) before flag candidates; _filter_prefix
+    # naturally drops it when the user has started typing a non-matching prefix.
+    return _filter_prefix(positional_hint + candidates, incomplete)
 
 
 def _filter_prefix(items: List[str], prefix: str) -> List[str]:
