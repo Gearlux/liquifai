@@ -86,6 +86,53 @@ def test_operation_no_group_prefix() -> None:
     assert meta["cmd_name"] == "clear-cache"
 
 
+def test_operation_invalid_presentation_raises() -> None:
+    app = LiquifyApp("test")
+    import pytest
+
+    with pytest.raises(ValueError, match="presentation must be one of"):
+
+        @app.operation(presentation="invalid")  # type: ignore[arg-type]
+        def fn(conn: Any) -> Dict[str, Any]:
+            return {}
+
+
+def test_operation_valid_presentations_accepted() -> None:
+    app = LiquifyApp("ops")
+    for p in ("list", "fields", "status"):
+
+        @app.operation(presentation=p)  # type: ignore[arg-type]
+        def fn(conn: Any) -> Dict[str, Any]:
+            return {}
+
+
+def test_mcp_only_skips_cli_generation() -> None:
+    app = LiquifyApp("ops")
+    app.set_context_factory(lambda: {})
+    app.set_presenter(lambda *a, **k: None)
+
+    @app.operation(presentation="fields", mcp_only=True)
+    def ops_mcp_op(conn: Any) -> Dict[str, Any]:
+        return {}
+
+    app.build_commands()
+    assert "mcp-op" not in app._commands  # no CLI command generated
+    assert "ops_mcp_op" in app._operations  # still available to make_mcp_tools
+
+
+def test_mcp_only_false_still_generates_cli() -> None:
+    app = LiquifyApp("ops")
+    app.set_context_factory(lambda: {})
+    app.set_presenter(lambda *a, **k: None)
+
+    @app.operation(presentation="status")
+    def ops_normal(conn: Any) -> Dict[str, Any]:
+        return {}
+
+    app.build_commands()
+    assert "normal" in app._commands
+
+
 # ---------------------------------------------------------------------------
 # LiquifyApp hooks
 # ---------------------------------------------------------------------------

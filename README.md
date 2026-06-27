@@ -136,5 +136,96 @@ probes concurrently (a small bounded thread pool) so a populated ML venv
 resolves in tens of seconds instead of minutes. The aisland workspace runs
 this step as part of `bash aisland/setup.sh`.
 
+### Dynamic positional values (complete `<name>` from a live source)
+
+By default the `<name>` placeholder is just a hint. A command can instead make
+a positional complete with **real values** from a provider — e.g. complete
+`my-app dataset download <name>` from `dataset list`:
+
+```python
+def dataset_names() -> list[str]:           # any Callable[[], list[str]]
+    return [d["name"] for d in fetch_datasets()]   # may import the SDK / hit the network
+
+@sub.command("download", positionals=["name"], completions={"name": dataset_names})
+def download(name: str = "", path: str = "."): ...
+
+# or, wired separately from the decorator (e.g. to dodge an import cycle):
+sub.set_completions("download", {"name": dataset_names})   # before build_commands()
+```
+
+How it stays fast and offline-safe:
+
+- The provider runs **only at refresh time** (`my-app --refresh-completions`),
+  never on the TAB hot path. Its result is cached under
+  `~/.cache/liquifai/<app>.values/`.
+- `liquifai-complete` reads that JSON cache and offers the values for the
+  `<name>` slot (prefix-filtered like any candidate). No cache yet → it falls
+  back to the `<name>` placeholder. A provider that raises (offline / no auth)
+  is skipped — completion silently degrades to the placeholder.
+- **Self-heals on first use.** A static positional whose value cache is missing
+  or stale (`> DEPENDENT_REFRESH_TTL`, 5 min) is filled the same way dependent
+  ones are (see below): the first TAB returns the placeholder instantly **and**
+  kicks off a *detached, throttled* background refresh, so a freshly-added
+  positional (e.g. a new `run list <experiment>`) populates itself on the **next**
+  TAB — no manual `--refresh-completions` required.
+- **Refresh-everything is explicit by default**: run `my-app --refresh-completions`
+  to (re)populate ALL value caches at once. Opt into automatic background refresh by
+  setting `LIQUIFAI_BG_REFRESH=1` — then a successful run refreshes stale caches
+  (>10 min) in a detached daemon thread, never blocking the command. It is OFF
+  by default so a normal run never triggers a surprise provider call (e.g. a
+  platform query). A sub-app alias (`ds` for `dataset`) shares the canonical
+  command's value cache.
+- **Prefix matching is case-insensitive**: `helios<TAB>` finds `Helios_…`.
+- **Values with spaces work.** A candidate like `Test Script VB` is transported
+  as one token (the wrappers newline-join `$COMP_WORDS`) and emitted
+  backslash-escaped so the shell inserts it as a single argument. bash gets this
+  with no re-install; **zsh/fish users should re-run `--install-completion`** once
+  to pick up the newline-joining wrapper.
+
+#### Dependent positionals (a later `<version>` that depends on an earlier `<name>`)
+
+A provider that takes **one argument** receives the already-typed earlier
+positionals, so a second positional can complete from the first — e.g.
+`download <name> <version>` where versions depend on the chosen dataset:
+
+```python
+def dataset_names() -> list[str]:                      # static (0-arg)
+    return [d["name"] for d in fetch_datasets()]
+
+def dataset_versions(inputs: dict[str, str]) -> list[str]:   # dependent (1-arg)
+    return versions_of(inputs["name"])                 # inputs = the typed earlier positionals
+
+sub.set_completions("download", {"name": dataset_names, "version": dataset_versions})
+```
+
+At refresh, liquifai **pre-enumerates** the dependent values: for each value of
+the prior positional(s) it calls the dependent provider and caches the result
+per input combination (capped at `max_combos`, default 200). On TAB,
+`download "Test Script VB" <TAB>` reads the cache keyed by that exact name and
+offers its versions — still no provider call on the hot path.
+
+**Self-healing (new / changed / beyond-the-cap values).** Pre-enumeration alone
+would freeze a name's versions at the last refresh. So on TAB, if a dependent
+slot's per-input cache is **missing or stale** (`> DEPENDENT_REFRESH_TTL`, 5 min),
+the fast path returns whatever's cached now (instant — stale values or the
+placeholder) **and** kicks off a *detached, throttled* background refresh for that
+exact input (`<app> --refresh-completion-value …`). So a brand-new dataset, a new
+version, or a name beyond the cap becomes current on the **next** TAB without ever
+blocking — no manual `--refresh-completions` needed. Throttled per input so rapid
+TABbing can't fork a storm; opt out entirely with `LIQUIFAI_NO_LAZY_COMPLETE=1`.
+
+When a self-heal **actually changes** the values, the next TAB shows a transient
+`<<positional>-updated>` hint (e.g. `<version-updated>`) alongside them for a short
+window, so you know the background refresh took effect — change-only (an unchanged
+refresh shows nothing), and it disappears the moment you type a real value.
+
+### `--docs` — code-extracted documentation, one option per line
+
+`my-app <cmd> --docs` renders the same option documentation as `--help`
+(extracted from the command signature + docstrings via confluid's
+`get_hierarchy`) but one option per physical line — `--flag  type  = value  doc`
+— so it greps and pipes cleanly instead of wrapping inside a Rich table. Same
+data, different layout (`liquifai.report.show_configuration(..., layout="lines")`).
+
 ## License
 MIT

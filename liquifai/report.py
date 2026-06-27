@@ -8,10 +8,11 @@ def show_configuration(
     target: Any,
     config_map: Optional[Dict[str, Any]] = None,
     title: str = "Available Configuration Options",
+    layout: str = "table",
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
-    Two modes:
+    Two data sources:
 
     * **Static-type view** (``config_map`` is None or a plain mapping of
       already-live values): walks ``target``'s type annotations via
@@ -23,12 +24,26 @@ def show_configuration(
       :func:`confluid.get_hierarchy_from_instance`. Surfaces defaults the
       user didn't set in YAML plus post-construction setattr keys (e.g.
       Enable.visualize).
+
+    ``layout`` chooses the renderer:
+
+    * ``"table"`` (default): the Rich grid.
+    * ``"lines"``: one option per physical line (``--flag  type  = value  doc``),
+      aligned and greppable / pipe-friendly — the ``--docs`` rendering. The
+      extracted documentation is identical; only the presentation differs.
     """
     from confluid import get_hierarchy, get_hierarchy_from_instance
 
     if _looks_like_flowed_graph(config_map):
         hierarchy = get_hierarchy_from_instance(config_map)
-        _render_flowed_table(hierarchy, title)
+        if layout == "lines":
+            _render_lines(hierarchy, title, flowed=True)
+        else:
+            _render_flowed_table(hierarchy, title)
+        return
+
+    if layout == "lines":
+        _render_lines(get_hierarchy(target), title, flowed=False, config_map=config_map)
         return
 
     # Static-type path (legacy behaviour)
@@ -87,6 +102,53 @@ def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
         val_str = _short_repr(value)
         table.add_row(f"--{short_path}", host, type_str, val_str, doc)
     console.print(table)
+
+
+def _render_lines(
+    hierarchy: Dict[str, Any],
+    title: str,
+    *,
+    flowed: bool,
+    config_map: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Render code-extracted option docs one option per line (the ``--docs`` view).
+
+    Same data as the tables (``confluid.get_hierarchy`` → type / default-or-value /
+    docstring), shortest-unique flag form, value/markup escaped. Aligned columns
+    keep it readable while staying a single physical line per option (greppable).
+    """
+    from confluid import shortest_unique_paths
+    from rich.markup import escape
+
+    console = Console()
+    console.print(f"\n[bold cyan]{title}[/bold cyan]")
+
+    all_paths = list(hierarchy.keys())
+    if not all_paths:
+        console.print("[dim]  (no configurable options)[/dim]")
+        return
+
+    display_map = shortest_unique_paths(all_paths)
+    sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
+    flags = {p: f"--{display_map[p]}" for p in sorted_paths}
+    flag_w = max(len(f) for f in flags.values())
+    type_w = max((len(hierarchy[p][0]) for p in sorted_paths), default=0)
+
+    for path in sorted_paths:
+        type_str, default_or_value, doc = hierarchy[path]
+        if flowed:
+            value: Any = default_or_value
+        else:
+            current = _get_from_config(config_map, path) if config_map else None
+            value = current if current is not None else default_or_value
+        val_str = escape(_short_repr(value, limit=40))
+        flag = flags[path].ljust(flag_w)
+        type_disp = escape(str(type_str)).ljust(type_w)
+        doc_disp = escape(doc) if doc else ""
+        console.print(
+            f"  [bold white]{flag}[/bold white]  [dim cyan]{type_disp}[/dim cyan]"
+            f"  [green]= {val_str}[/green]  [dim]{doc_disp}[/dim]"
+        )
 
 
 def _looks_like_flowed_graph(config_map: Any) -> bool:

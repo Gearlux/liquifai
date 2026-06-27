@@ -23,25 +23,52 @@ lazily inside :func:`_resolve_override_keys`.
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
+import time
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
 
 SHELLS: List[str] = ["bash", "zsh", "fish"]
+# v5: ``positional_completions`` entries are now ``{positional: {key, kind,
+# depends_on}}`` (kind ``static``|``dependent``) so a positional's values can
+# depend on EARLIER positionals (e.g. ``download <name> <version>`` — version
+# depends on name). v4 stored only ``{positional: key}`` (static).
+# v4: added ``positional_completions`` so the fast path can offer real cached
+# values for a positional (dynamic completion), falling back to the ``<name>``
+# placeholder when no cache exists.
 # v3: command option flags are stored as shortest-unique-path-collapsed
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 3
+CACHE_VERSION: int = 5
+
+#: Versioned envelope for the per-positional value caches (Q2). Separate from
+#: CACHE_VERSION so a value-format change doesn't invalidate the command tree.
+VALUE_CACHE_VERSION: int = 1
+
+#: A dependent positional's per-input cache older than this (seconds) is refreshed
+#: lazily on use (in the background) so new/changed values self-heal; a missing one
+#: is always refreshed. :data:`LAZY_REFRESH_THROTTLE` bounds how often the same
+#: input combo re-spawns a refresh so rapid TABbing can't fork a storm.
+DEPENDENT_REFRESH_TTL: float = 300.0
+LAZY_REFRESH_THROTTLE: float = 30.0
+
+#: After a lazy self-heal actually CHANGES a dependent positional's values, TAB shows
+#: a transient ``<<positional>-updated>`` hint alongside them for this many seconds, so
+#: the user knows the background refresh added/changed values (and need not wonder why
+#: the list grew). Change-only — an unchanged refresh shows nothing.
+DEPENDENT_NOTICE_WINDOW: float = 60.0
 
 GLOBAL_FLAGS: List[str] = [
     "--config",
@@ -55,8 +82,10 @@ GLOBAL_FLAGS: List[str] = [
     "--file-level",
     "--log-dir",
     "--help",
+    "--docs",
     "--install-completion",
     "--show-completion",
+    "--refresh-completions",
 ]
 
 PATH_VALUE_FLAGS: Set[str] = {"--config", "-c", "--log-dir"}
@@ -85,6 +114,260 @@ def cache_dir() -> Path:
 
 def cache_path(app_name: str) -> Path:
     return cache_dir() / f"{app_name}.json"
+
+
+# ---------------------------------------------------------------------------
+# Per-positional value caches (Q2 — dynamic completion of a positional's value)
+# ---------------------------------------------------------------------------
+# A command may register a value PROVIDER for a positional via
+# ``@command(..., completions={"name": provider})`` (provider is a
+# ``Callable[[], List[str]]``). At refresh time the provider runs IN the app
+# process (it may import the heavy SDK / hit the network) and its result is
+# cached to ``<cache_dir>/<app>.values/<key>.json``. The stdlib-only fast path
+# then reads that cache and offers the real values for the ``<positional>``
+# slot — never running the provider itself, so TAB stays fast and offline-safe.
+
+
+def values_cache_dir(app_name: str) -> Path:
+    """Directory holding an app's per-positional value caches."""
+    return cache_dir() / f"{app_name}.values"
+
+
+def _sanitize_key(cache_key: str) -> str:
+    """Make a value-cache key safe to use as a filename."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", cache_key)
+
+
+def value_cache_key(path: Tuple[str, ...], cmd: str, positional: str) -> str:
+    """Deterministic key for one (command-path, command, positional) value cache.
+
+    The app name is NOT part of the key — value caches are already namespaced by
+    :func:`values_cache_dir`. Sub-app aliases collapse to their canonical name
+    (handled by callers) so ``dataset`` and its alias ``ds`` share one cache.
+    """
+    return "__".join((*path, cmd, positional))
+
+
+def value_cache_path(app_name: str, cache_key: str) -> Path:
+    return values_cache_dir(app_name) / f"{_sanitize_key(cache_key)}.json"
+
+
+def write_value_cache(app_name: str, cache_key: str, values: List[str]) -> Path:
+    """Write a positional's candidate values to its cache (timestamped). Best-effort."""
+    target = value_cache_path(app_name, cache_key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"version": VALUE_CACHE_VERSION, "ts": time.time(), "values": [str(v) for v in values]}
+    target.write_text(json.dumps(payload))
+    return target
+
+
+def read_value_cache(app_name: str, cache_key: str) -> Optional[List[str]]:
+    """Read a positional's cached values. None if missing/unreadable/stale-format."""
+    target = value_cache_path(app_name, cache_key)
+    if not target.exists():
+        return None
+    try:
+        with target.open() as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if data.get("version") != VALUE_CACHE_VERSION:
+        return None
+    vals = data.get("values")
+    return [str(v) for v in vals] if isinstance(vals, list) else None
+
+
+def _value_cache_age(app_name: str, cache_key: str) -> Optional[float]:
+    """Seconds since a value cache was written, or None if missing/unreadable."""
+    target = value_cache_path(app_name, cache_key)
+    if not target.exists():
+        return None
+    try:
+        with target.open() as f:
+            ts = json.load(f).get("ts")
+    except (OSError, ValueError):
+        return None
+    return (time.time() - ts) if isinstance(ts, (int, float)) else None
+
+
+# --- Dependent positional caches (values keyed by the earlier positionals) ----
+# A dependent positional's candidates depend on what was already typed (e.g.
+# ``download <name> <version>`` — versions depend on the dataset name). At refresh
+# time we enumerate the cross-product of the prior positionals' static values and
+# cache the dependent provider's output per input combination under
+# ``<app>.values/<key>/<inputs-hash>.json``; the fast path reads the cache for the
+# exact typed inputs.
+
+
+def _inputs_sig(inputs: Dict[str, str]) -> str:
+    """Stable short hash of a dependent positional's input combination."""
+    raw = json.dumps(inputs, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def dependent_value_cache_path(app_name: str, cache_key: str, inputs: Dict[str, str]) -> Path:
+    return values_cache_dir(app_name) / _sanitize_key(cache_key) / f"{_inputs_sig(inputs)}.json"
+
+
+def write_dependent_value_cache(
+    app_name: str,
+    cache_key: str,
+    inputs: Dict[str, str],
+    values: List[str],
+    changed_at: Optional[float] = None,
+) -> Path:
+    """Cache a dependent positional's candidate values for one input combination.
+
+    ``changed_at`` (set by :func:`refresh_one` only when the values actually
+    changed) timestamps the change so TAB can briefly flag "<…>-updated" (see
+    :data:`DEPENDENT_NOTICE_WINDOW`). The bulk refresh leaves it None — no notice.
+    """
+    target = dependent_value_cache_path(app_name, cache_key, inputs)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload: Dict[str, Any] = {
+        "version": VALUE_CACHE_VERSION,
+        "ts": time.time(),
+        "inputs": inputs,
+        "values": [str(v) for v in values],
+    }
+    if changed_at is not None:
+        payload["changed_at"] = changed_at
+    target.write_text(json.dumps(payload))
+    return target
+
+
+def read_dependent_value_cache(app_name: str, cache_key: str, inputs: Dict[str, str]) -> Optional[List[str]]:
+    """Read a dependent positional's cached values for ``inputs``. None if missing/stale-format."""
+    target = dependent_value_cache_path(app_name, cache_key, inputs)
+    if not target.exists():
+        return None
+    try:
+        with target.open() as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if data.get("version") != VALUE_CACHE_VERSION:
+        return None
+    vals = data.get("values")
+    return [str(v) for v in vals] if isinstance(vals, list) else None
+
+
+def _dependent_value_cache_age(app_name: str, cache_key: str, inputs: Dict[str, str]) -> Optional[float]:
+    """Seconds since a dependent positional's per-input cache was written (None if missing)."""
+    target = dependent_value_cache_path(app_name, cache_key, inputs)
+    if not target.exists():
+        return None
+    try:
+        with target.open() as f:
+            ts = json.load(f).get("ts")
+    except (OSError, ValueError):
+        return None
+    return (time.time() - ts) if isinstance(ts, (int, float)) else None
+
+
+def _dependent_changed_at(app_name: str, cache_key: str, inputs: Dict[str, str]) -> Optional[float]:
+    """The ``changed_at`` stamp of a dependent per-input cache (None if missing/unset)."""
+    target = dependent_value_cache_path(app_name, cache_key, inputs)
+    if not target.exists():
+        return None
+    try:
+        with target.open() as f:
+            ca = json.load(f).get("changed_at")
+    except (OSError, ValueError):
+        return None
+    return ca if isinstance(ca, (int, float)) else None
+
+
+def _dependent_changed_recently(app_name: str, cache_key: str, inputs: Dict[str, str], window: float) -> bool:
+    """True if a dependent per-input cache's values changed within ``window`` seconds."""
+    ca = _dependent_changed_at(app_name, cache_key, inputs)
+    return ca is not None and (time.time() - ca) < window
+
+
+def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], None]:
+    """Return a callback that DETACHES a targeted refresh for one positional's cache.
+
+    Passed to :func:`complete_from_tree` by the fast path so a positional with a
+    missing/stale value cache self-heals for next time WITHOUT blocking TAB: it spawns
+    ``<app> --refresh-completion-value '<json>'`` in a new session (output discarded),
+    throttled per (key, inputs) by :data:`LAZY_REFRESH_THROTTLE`. Handles BOTH a STATIC
+    positional (empty ``inputs`` → refreshes the whole name list) and a DEPENDENT one
+    (``inputs`` = the earlier positionals → refreshes that combo). Opt out entirely with
+    ``$LIQUIFAI_NO_LAZY_COMPLETE``. Best-effort — any error is swallowed (completion still
+    returned whatever was cached / the placeholder).
+    """
+
+    def spawn(cache_key: str, inputs: Dict[str, str]) -> None:
+        if os.environ.get("LIQUIFAI_NO_LAZY_COMPLETE"):
+            return
+        base = (
+            dependent_value_cache_path(app_name, cache_key, inputs) if inputs else value_cache_path(app_name, cache_key)
+        )
+        marker = base.with_suffix(".pending")
+        try:
+            if marker.exists() and (time.time() - marker.stat().st_mtime) < LAZY_REFRESH_THROTTLE:
+                return  # a refresh for this combo was attempted very recently
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        except OSError:
+            return
+        payload = json.dumps({"key": cache_key, "inputs": inputs})
+        try:
+            subprocess.Popen(
+                [app_name, "--refresh-completion-value", payload],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
+
+    return spawn
+
+
+# ---------------------------------------------------------------------------
+# Wire-protocol helpers — preserve & escape words/candidates containing spaces
+# ---------------------------------------------------------------------------
+# The shell wrappers join ``$COMP_WORDS`` with a NEWLINE so a value like
+# ``Test Script VB`` survives transport as ONE token (older wrappers space-join;
+# we detect and tolerate both). Candidate values are then backslash-escaped on
+# output so the shell inserts e.g. ``Test\ Script\ VB`` as a single argument.
+
+#: Shell-special chars that must be backslash-escaped in an emitted candidate so
+#: it inserts as one token (whitespace + word-splitting / globbing / quoting metas).
+_SHELL_SPECIAL = re.compile(r"([ \t\"'()&;|<>$`\\*?\[\]{}])")
+
+
+def _unescape_word(word: str) -> str:
+    """Strip one layer of shell backslash-escaping (``Test\\ Scr`` -> ``Test Scr``)."""
+    return re.sub(r"\\(.)", r"\1", word)
+
+
+def split_comp_words(comp_words: str) -> List[str]:
+    """Split the shell's ``$COMP_WORDS`` into tokens, PRESERVING embedded spaces.
+
+    The wrappers newline-join the word array; older space-joined ones lack a
+    newline — so split on newline when present, else fall back to whitespace
+    (migration-safe: bash already newline-joins, so this fixes spaces with no
+    re-install; old zsh/fish installs keep working, unbroken). Each token is then
+    unescaped so a half-typed ``Test\\ Scr`` matches the logical value ``Test Scr``.
+    """
+    parts = comp_words.split("\n") if "\n" in comp_words else comp_words.split()
+    return [_unescape_word(p) for p in parts]
+
+
+def escape_candidate(value: str) -> str:
+    """Backslash-escape a candidate so the shell inserts it as ONE token.
+
+    ``Test Script VB`` -> ``Test\\ Script\\ VB`` (so bash/zsh don't split it into
+    three args). Placeholders like ``<name>`` are left verbatim — they are display
+    hints, never inserted as real values, and escaping would render ``\\<name\\>``.
+    Values with no special chars (``alpha``, ``--path``) pass through unchanged.
+    """
+    if value.startswith("<") and value.endswith(">"):
+        return value
+    return _SHELL_SPECIAL.sub(r"\\\1", value)
 
 
 _BASH_TEMPLATE = """\
@@ -121,7 +404,9 @@ fi
 
 _{prog}_completion() {
     local -a response
-    response=("${(@f)$(env COMP_WORDS=\"${words[*]}\" \\
+    # `${(F)words}` joins the word array with NEWLINES so a value with embedded
+    # spaces (e.g. a name "Test Script VB") survives transport as one token.
+    response=("${(@f)$(env COMP_WORDS=\"${(F)words}\" \\
         COMP_CWORD=$((CURRENT-1)) \\
         liquifai-complete {prog} 2>/dev/null)}")
     if (( ${#response[@]} == 0 )); then
@@ -147,7 +432,8 @@ function __fish_{prog}_complete
     set -l prev_words (commandline -opc)
     set -l cur_word (commandline -ct)
     set -l all_words $prev_words $cur_word
-    set -l joined (string join " " -- $all_words)
+    # Join with NEWLINE so a value with embedded spaces survives as one token.
+    set -l joined (string join \\n -- $all_words)
     set -l cword (count $prev_words)
     env COMP_WORDS="$joined" COMP_CWORD="$cword" liquifai-complete {prog} 2>/dev/null
 end
@@ -541,7 +827,7 @@ def _cli_install_completions(argv: Optional[List[str]] = None) -> int:
 # ---------------------------------------------------------------------------
 
 
-def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
+def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, Any]:
     """Snapshot the static command tree of ``app`` to a JSON-friendly dict.
 
     Per command (plain ``@command`` AND ``@script_command``) we record the
@@ -564,12 +850,35 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
       confluid.
     """
     command_paths = {cmd: _introspect_function_keys(func) for cmd, func in app._commands.items()}
+    # Per-command completion info for positionals that registered a provider
+    # (``@command(..., completions={...})``): ``{positional: {key, kind, depends_on}}``.
+    # ``kind`` is ``dependent`` when the provider takes an argument (it receives the
+    # earlier positionals) else ``static``; ``depends_on`` lists the prior positionals
+    # a dependent provider is enumerated against. complete_from_tree reads this to
+    # offer cached real values instead of the ``<name>`` placeholder.
+    positional_completions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for cmd, func in app._commands.items():
+        providers = getattr(func, "__liquifai_completions__", {}) or {}
+        if not providers:
+            continue
+        pos_list = list(getattr(func, "__liquifai_positionals__", []))
+        info: Dict[str, Dict[str, Any]] = {}
+        for pos, provider in providers.items():
+            key = value_cache_key(_path, cmd, pos)
+            if _provider_arity(provider) == 0:
+                info[pos] = {"key": key, "kind": "static", "depends_on": []}
+            else:
+                idx = pos_list.index(pos) if pos in pos_list else 0
+                info[pos] = {"key": key, "kind": "dependent", "depends_on": pos_list[:idx]}
+        positional_completions[cmd] = info
     return {
         "name": app.name,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
         # All resolvable sub-app names (canonical + aliases) — kept for descent.
-        "sub_apps": {n: serialize_app(s) for n, s in app._sub_apps.items()},
+        # The path threaded into a sub-app uses its CANONICAL name (aliases map
+        # back) so a sub-app and its alias share one value-cache key namespace.
+        "sub_apps": {n: serialize_app(s, (*_path, app._sub_app_aliases.get(n, n))) for n, s in app._sub_apps.items()},
         # Alias names only; excluded from TAB suggestions (they still resolve via
         # ``sub_apps`` above) so completion shows the canonical name once, not the
         # abbreviation alongside it.
@@ -582,7 +891,182 @@ def serialize_app(app: "LiquifyApp") -> Dict[str, Any]:
         "positionals": {
             cmd: list(getattr(func, "__liquifai_positionals__", [])) for cmd, func in app._commands.items()
         },
+        # {cmd: {positional: value-cache-key}} — only positionals with a provider.
+        "positional_completions": positional_completions,
     }
+
+
+def _provider_arity(provider: Callable[..., Any]) -> int:
+    """Number of REQUIRED positional params of a completion provider.
+
+    ``0`` → static (zero-arg, globally cached); ``≥1`` → dependent (receives a dict
+    of the earlier positionals). Best-effort: an un-introspectable callable counts
+    as static. ``inspect`` is imported lazily so it never loads on the fast path.
+    """
+    import inspect
+
+    try:
+        params = inspect.signature(provider).parameters.values()
+    except (TypeError, ValueError):
+        return 0
+    return sum(
+        1
+        for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        and p.default is inspect.Parameter.empty
+    )
+
+
+def iter_completion_providers(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Iterator[Dict[str, Any]]:
+    """Yield a spec dict for every registered positional provider.
+
+    Each spec: ``{"key", "provider", "kind", "depends_on", "prior_keys"}`` where
+    ``kind`` is ``static``/``dependent`` (by :func:`_provider_arity`), ``depends_on``
+    is the prior positionals a dependent provider is keyed by, and ``prior_keys`` maps
+    each of those to its own value-cache key (so refresh can read their static values).
+    Walks commands + CANONICAL sub-apps (aliases skipped → each provider once),
+    computing the same :func:`value_cache_key` :func:`serialize_app` bakes into the tree.
+    """
+    for cmd, func in app._commands.items():
+        providers = getattr(func, "__liquifai_completions__", {}) or {}
+        pos_list = list(getattr(func, "__liquifai_positionals__", []))
+        for pos, provider in providers.items():
+            key = value_cache_key(_path, cmd, pos)
+            if _provider_arity(provider) == 0:
+                yield {"key": key, "provider": provider, "kind": "static", "depends_on": [], "prior_keys": {}}
+            else:
+                idx = pos_list.index(pos) if pos in pos_list else 0
+                deps = pos_list[:idx]
+                yield {
+                    "key": key,
+                    "provider": provider,
+                    "kind": "dependent",
+                    "depends_on": deps,
+                    "prior_keys": {d: value_cache_key(_path, cmd, d) for d in deps},
+                }
+    for name, sub in app._sub_apps.items():
+        if name in app._sub_app_aliases:
+            continue  # canonical only — aliases share the same keys
+        yield from iter_completion_providers(sub, (*_path, name))
+
+
+def _cross_product(prior: List[Tuple[str, List[str]]], cap: int) -> Iterator[Dict[str, str]]:
+    """Yield up to ``cap`` input dicts — the cross-product of the prior positionals' values."""
+    import itertools
+
+    names = [d for d, _ in prior]
+    value_lists = [vals for _, vals in prior]
+    for i, combo in enumerate(itertools.product(*value_lists)):
+        if i >= cap:
+            return
+        yield dict(zip(names, combo))
+
+
+def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, int]:
+    """Run every registered positional value-provider and cache its results.
+
+    Runs IN the app process (providers may import the SDK / hit the network). Each
+    provider is best-effort: a failure (offline, auth, exception) is skipped. Returns
+    ``{cache_key: n_values}`` for the ones that succeeded.
+
+    Static providers (zero-arg) are run first and cached globally. DEPENDENT providers
+    are then enumerated against the cross-product of their prior positionals' static
+    values — up to ``max_combos`` combinations (a ``<version>`` that depends on
+    ``<name>`` is pre-cached for every cached name) — and cached per input combo.
+    """
+    specs = list(iter_completion_providers(app))
+    written: Dict[str, int] = {}
+    for s in specs:  # static first, so dependent enumeration can read their caches
+        if s["kind"] != "static":
+            continue
+        try:
+            values = [str(v) for v in (s["provider"]() or [])]
+        except Exception:
+            continue
+        try:
+            write_value_cache(app.name, s["key"], values)
+        except Exception:
+            continue
+        written[s["key"]] = len(values)
+    for s in specs:  # dependent — cross-product of prior positionals' cached values
+        if s["kind"] != "dependent":
+            continue
+        prior: List[Tuple[str, List[str]]] = []
+        ok = True
+        for dep in s["depends_on"]:
+            vals = read_value_cache(app.name, s["prior_keys"].get(dep, ""))
+            if vals is None:
+                ok = False
+                break
+            prior.append((dep, vals))
+        if not ok or not prior:
+            continue
+        total = 0
+        for inputs in _cross_product(prior, max_combos):
+            try:
+                values = [str(v) for v in (s["provider"](inputs) or [])]
+            except Exception:
+                continue
+            try:
+                write_dependent_value_cache(app.name, s["key"], inputs, values)
+            except Exception:
+                continue
+            total += len(values)
+        written[s["key"]] = total
+    return written
+
+
+def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Optional[int]:
+    """Refresh ONE positional's value cache — static (empty ``inputs``) or dependent.
+
+    The targeted counterpart to :func:`refresh_value_caches`, run by the detached
+    ``--refresh-completion-value`` helper the fast path spawns to self-heal a missing/stale
+    cache. Finds the provider whose value-cache key is ``cache_key`` and whose kind matches
+    ``inputs`` (empty → static, non-empty → dependent), runs it, and writes the cache. A
+    dependent refresh also stamps ``changed_at`` when the values changed (drives the
+    ``<…>-updated`` notice). Returns the number of values written, or None on no match /
+    provider failure.
+    """
+    want_dependent = bool(inputs)
+    for s in iter_completion_providers(app):
+        if s["key"] != cache_key or (s["kind"] == "dependent") != want_dependent:
+            continue
+        try:
+            values = [str(v) for v in ((s["provider"](inputs) if want_dependent else s["provider"]()) or [])]
+        except Exception:
+            return None
+        try:
+            if want_dependent:
+                old = read_dependent_value_cache(app.name, cache_key, inputs)
+                # Stamp a change (drives the "<…>-updated" notice) on first population or
+                # change; keep the prior stamp on an unchanged refresh so it ages out.
+                changed_at = (
+                    time.time()
+                    if (old is None or old != values)
+                    else _dependent_changed_at(app.name, cache_key, inputs)
+                )
+                write_dependent_value_cache(app.name, cache_key, inputs, values, changed_at=changed_at)
+            else:
+                write_value_cache(app.name, cache_key, values)
+        except Exception:
+            return None
+        return len(values)
+    return None
+
+
+def has_stale_value_caches(app: "LiquifyApp", ttl: float) -> bool:
+    """True if any STATIC positional cache is missing or older than ``ttl``.
+
+    Dependent caches are refreshed alongside the static ones, so staleness is gauged
+    on the static caches (a refresh redoes both).
+    """
+    for s in iter_completion_providers(app):
+        if s["kind"] != "static":
+            continue
+        age = _value_cache_age(app.name, s["key"])
+        if age is None or age > ttl:
+            return True
+    return False
 
 
 def _collapse_to_flags(paths: Iterable[str]) -> List[str]:
@@ -677,13 +1161,24 @@ def complete(app: "LiquifyApp", words: List[str], cword: int) -> List[str]:
     return complete_from_tree(serialize_app(app), words, cword)
 
 
-def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> List[str]:
+def complete_from_tree(
+    tree: Dict[str, Any],
+    words: List[str],
+    cword: int,
+    lazy_refresh: Optional[Callable[[str, Dict[str, str]], None]] = None,
+) -> List[str]:
     """Compute completion candidates from a serialized command tree.
 
     Args:
         tree: A dict produced by :func:`serialize_app`.
         words: Tokenized command line including the program name at index 0.
         cword: Index of the word being completed (0-based).
+        lazy_refresh: Optional ``(cache_key, inputs)`` callback invoked when a
+            DEPENDENT positional's per-input cache is missing or stale, so the fast
+            path can self-heal it in the background (see
+            :func:`make_lazy_refresh_spawner`). Whatever is cached now (or the
+            placeholder) is still returned immediately; this never blocks. ``None``
+            (the default, used by tests / in-process completion) disables it.
 
     Returns:
         Candidates, one per line. Empty list means "no suggestion".
@@ -691,6 +1186,7 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     parsed = words[1:cword]
     incomplete = words[cword] if 0 <= cword < len(words) else ""
     prev = words[cword - 1] if cword - 1 >= 1 else ""
+    app_name = str(tree.get("name", ""))
 
     if prev in PATH_VALUE_FLAGS:
         return _file_candidates(incomplete, exts=None)
@@ -788,16 +1284,64 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
     if cmd_positionals:
         # Find where the command token sits in ``parsed`` (words[1:cword]).
         cmd_idx = next((j for j, t in enumerate(parsed) if t == cmd_name), None)
-        n_consumed = 0
+        consumed_tokens: List[str] = []
         if cmd_idx is not None:
             for tok in parsed[cmd_idx + 1 :]:
-                # Stop counting at the first flag-like or key=value token —
-                # mirrors _stops_positional() in core.py without importing it.
+                # Stop at the first flag-like or key=value token — mirrors
+                # _stops_positional() in core.py without importing it.
                 if not tok or tok[0] in ("-", "+", "~") or "=" in tok:
                     break
-                n_consumed += 1
+                consumed_tokens.append(tok)
+        n_consumed = len(consumed_tokens)
         if n_consumed < len(cmd_positionals):
-            positional_hint = [f"<{cmd_positionals[n_consumed]}>"]
+            pos_name = cmd_positionals[n_consumed]
+            # If this positional registered a value provider AND its cache is
+            # populated, offer the real cached values; otherwise fall back to the
+            # ``<name>`` placeholder. The cache is stdlib-JSON — the provider never
+            # runs on this hot path.
+            info = ((cur.get("positional_completions") or {}).get(cmd_name) or {}).get(pos_name) or {}
+            cached_values: Optional[List[str]] = None
+            show_notice = False
+            if info.get("kind") == "dependent":
+                # Resolve this slot's values from the cache keyed by the ALREADY-TYPED
+                # earlier positionals (e.g. <version> from the cache for <name>).
+                inputs: Dict[str, str] = {}
+                for dep in info.get("depends_on", []):
+                    di = cmd_positionals.index(dep) if dep in cmd_positionals else -1
+                    if 0 <= di < len(consumed_tokens):
+                        inputs[dep] = consumed_tokens[di]
+                if len(inputs) == len(info.get("depends_on", [])) and inputs:
+                    cached_values = read_dependent_value_cache(app_name, info["key"], inputs)
+                    # Notify (only when it matters): a lazy self-heal that actually
+                    # changed the values flags ``<…-updated>`` for a short window so the
+                    # user sees the background refresh took effect.
+                    if cached_values and _dependent_changed_recently(
+                        app_name, info["key"], inputs, DEPENDENT_NOTICE_WINDOW
+                    ):
+                        show_notice = True
+                    # Self-heal: if this combo's cache is missing or stale, kick off a
+                    # background refresh for it (non-blocking) so new datasets / new
+                    # versions / beyond-the-cap names become current on the NEXT TAB.
+                    if lazy_refresh is not None:
+                        age = _dependent_value_cache_age(app_name, info["key"], inputs)
+                        if age is None or age > DEPENDENT_REFRESH_TTL:
+                            lazy_refresh(info["key"], inputs)
+            elif info.get("key"):
+                cached_values = read_value_cache(app_name, info["key"])
+                # Self-heal STATIC positionals too: a missing/stale name list (e.g. a
+                # brand-new positional that has never been refreshed) populates itself in
+                # the background on first TAB, so it appears on the next one — no manual
+                # `--refresh-completions` needed. Empty ``inputs`` marks a static refresh.
+                if lazy_refresh is not None:
+                    age = _value_cache_age(app_name, info["key"])
+                    if age is None or age > DEPENDENT_REFRESH_TTL:
+                        lazy_refresh(info["key"], {})
+            positional_hint = list(cached_values) if cached_values else [f"<{pos_name}>"]
+            # The notice is a ``<…>`` hint: shown at a bare TAB (alongside the values),
+            # space-free so it stays one token, and dropped by _filter_prefix the moment
+            # the user types a real value prefix.
+            if show_notice:
+                positional_hint = [f"<{pos_name}-updated>"] + positional_hint
 
     # Otherwise the user is at a flag position. Offer the global flags plus this
     # command's own option flags. Empty ``incomplete`` is included so bare
@@ -822,10 +1366,19 @@ def complete_from_tree(tree: Dict[str, Any], words: List[str], cword: int) -> Li
 
 
 def _filter_prefix(items: List[str], prefix: str) -> List[str]:
+    """Keep items that start with ``prefix``, CASE-INSENSITIVELY, preserving order + de-duping.
+
+    Case-insensitive so a lowercase prefix matches server-provided values with arbitrary
+    case (typing ``h`` completes ``Helios_…``) — liquifai filters server-side, so the shell's
+    own ``completion-ignore-case`` never gets a chance to apply. Harmless for the lowercase
+    command/flag candidates. Placeholders (``<name>``) start with ``<`` so a real prefix drops
+    them either way.
+    """
+    low = prefix.lower()
     seen: Set[str] = set()
     out: List[str] = []
     for it in items:
-        if it.startswith(prefix) and it not in seen:
+        if it.lower().startswith(low) and it not in seen:
             out.append(it)
             seen.add(it)
     return out
