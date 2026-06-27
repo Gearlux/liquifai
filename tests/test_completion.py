@@ -1018,3 +1018,509 @@ def test_positional_hint_filtered_by_partial_input() -> None:
     # User is typing "my" — "<name>" doesn't start with "my", so it's filtered out
     out = comp.complete(root, ["sairen", "dataset", "download", "my"], cword=3)
     assert "<name>" not in out
+
+
+# ---------------------------------------------------------------------------
+# Q2 — dynamic positional value completion (cached value providers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def iso_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Isolate the liquifai cache dir under tmp_path for value-cache tests."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _app_with_provider(values: Any) -> LiquifyApp:
+    """root(sairen) → dataset(ds) → download <name> whose name has a value provider."""
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.command("download", positionals=["name", "version"], completions={"name": lambda: list(values)})
+    def download(name: str = "", version: str = "", path: str = "") -> None:
+        pass
+
+    @sub.command("create", positionals=["name"])  # no provider → placeholder only
+    def create(name: str = "") -> None:
+        pass
+
+    root.add_app(sub, "dataset", aliases=["ds"])
+    return root
+
+
+def test_value_cache_roundtrip(iso_cache: Path) -> None:
+    comp.write_value_cache("sairen", "k", ["a", "b"])
+    assert comp.read_value_cache("sairen", "k") == ["a", "b"]
+    assert comp.read_value_cache("sairen", "missing") is None
+
+
+def test_serialized_tree_records_positional_completions() -> None:
+    tree = comp.serialize_app(_app_with_provider(["x"]))
+    sub = tree["sub_apps"]["dataset"]
+    # Only the positional with a provider gets an entry; static, no dependencies.
+    assert sub["positional_completions"]["download"] == {
+        "name": {"key": "dataset__download__name", "kind": "static", "depends_on": []}
+    }
+    assert "create" not in sub["positional_completions"]
+
+
+def test_completion_uses_cached_values(iso_cache: Path) -> None:
+    root = _app_with_provider(["alpha", "beta", "gamma"])
+    # Before refresh → placeholder.
+    assert comp.complete(root, ["sairen", "dataset", "download", ""], cword=3)[0] == "<name>"
+    comp.refresh_value_caches(root)
+    # After refresh → real values lead the candidate list.
+    out = comp.complete(root, ["sairen", "dataset", "download", ""], cword=3)
+    assert out[:3] == ["alpha", "beta", "gamma"]
+    # Prefix-filtered like any candidate.
+    assert comp.complete(root, ["sairen", "dataset", "download", "al"], cword=3) == ["alpha"]
+    # Second positional (no provider) stays a placeholder.
+    assert comp.complete(root, ["sairen", "dataset", "download", "alpha", ""], cword=4)[0] == "<version>"
+
+
+def test_completion_values_shared_via_alias(iso_cache: Path) -> None:
+    root = _app_with_provider(["alpha", "beta"])
+    comp.refresh_value_caches(root)
+    # The `ds` alias resolves to the same sub-app and the same value cache key.
+    out = comp.complete(root, ["sairen", "ds", "download", ""], cword=3)
+    assert out[:2] == ["alpha", "beta"]
+
+
+def test_refresh_value_caches_counts_and_walks_canonical_only(iso_cache: Path) -> None:
+    root = _app_with_provider(["a", "b", "c"])
+    written = comp.refresh_value_caches(root)
+    # Exactly one provider, visited once (not twice for the alias).
+    assert written == {"dataset__download__name": 3}
+    specs = list(comp.iter_completion_providers(root))
+    assert [s["key"] for s in specs] == ["dataset__download__name"]
+    assert specs[0]["kind"] == "static"
+
+
+def test_refresh_swallows_provider_errors(iso_cache: Path) -> None:
+    root = LiquifyApp(name="sairen")
+
+    def boom() -> Any:
+        raise RuntimeError("offline")
+
+    @root.command("download", positionals=["name"], completions={"name": boom})
+    def download(name: str = "") -> None:
+        pass
+
+    # A failing provider is skipped, not raised; no cache written.
+    assert comp.refresh_value_caches(root) == {}
+    assert comp.read_value_cache("sairen", "download__name") is None
+    # Completion still works, falling back to the placeholder.
+    assert comp.complete(root, ["sairen", "download", ""], cword=2)[0] == "<name>"
+
+
+def test_has_stale_value_caches(iso_cache: Path) -> None:
+    root = _app_with_provider(["a"])
+    # Missing cache → stale.
+    assert comp.has_stale_value_caches(root, ttl=600.0) is True
+    comp.refresh_value_caches(root)
+    # Fresh cache, generous ttl → not stale.
+    assert comp.has_stale_value_caches(root, ttl=600.0) is False
+    # Zero ttl → everything counts as stale.
+    assert comp.has_stale_value_caches(root, ttl=0.0) is True
+
+
+def test_docs_and_refresh_flags_are_completable() -> None:
+    root = _app_with_provider(["a"])
+    out = comp.complete(root, ["sairen", "--"], cword=1)
+    assert "--docs" in out and "--refresh-completions" in out
+
+
+# ---------------------------------------------------------------------------
+# Q2 — core integration: completions plumbing + run() flags
+# ---------------------------------------------------------------------------
+
+
+def test_command_stores_completions_on_function() -> None:
+    root = LiquifyApp(name="sairen")
+
+    @root.command("download", positionals=["name"], completions={"name": lambda: ["a"]})
+    def download(name: str = "") -> None:
+        pass
+
+    assert set(getattr(download, "__liquifai_completions__", {})) == {"name"}
+
+
+def test_operation_completions_flow_to_generated_handler() -> None:
+    # @operation(completions=...) → build_commands() → the generated CLI handler
+    # carries the provider so serialize_app/refresh see it.
+    app = LiquifyApp(name="dataset")
+
+    @app.operation(presentation="fields", completions={"name": lambda: ["alpha", "beta"]})
+    def dataset_info(conn: Any, *, name: str) -> dict:
+        return {"name": name}
+
+    app.set_context_factory(lambda: None)
+    app.set_presenter(lambda *a, **k: None)
+    app.build_commands()
+
+    handler = app._commands["info"]
+    assert set(getattr(handler, "__liquifai_completions__", {})) == {"name"}
+    tree = comp.serialize_app(app)
+    assert tree["positional_completions"]["info"] == {"name": {"key": "info__name", "kind": "static", "depends_on": []}}
+
+
+def test_run_refresh_completions_flag(iso_cache: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _app_with_provider(["alpha", "beta", "gamma"])
+    monkeypatch.setattr(sys, "argv", ["sairen", "--refresh-completions"])
+    set_context(None)  # type: ignore[arg-type]
+    root.run()
+    out = capsys.readouterr().out
+    assert "Refreshed" in out and "3 values" in out
+    assert comp.read_value_cache("sairen", "dataset__download__name") == ["alpha", "beta", "gamma"]
+
+
+def test_run_docs_flag_renders_lines(iso_cache: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.command("download", positionals=["name"])
+    def download(name: str = "", path: str = ".") -> None:
+        """Download a dataset.
+
+        Args:
+            path: Destination directory.
+        """
+
+    root.add_app(sub, "dataset")
+    monkeypatch.setattr(sys, "argv", ["sairen", "dataset", "download", "--docs"])
+    set_context(None)  # type: ignore[arg-type]
+    root.run()
+    out = capsys.readouterr().out
+    assert "--path" in out and "Destination directory." in out
+    assert "Current/Default Value" not in out  # lines layout, not the table
+
+
+def test_background_refresh_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _app_with_provider(["a"])
+    monkeypatch.delenv("LIQUIFAI_BG_REFRESH", raising=False)
+    called = []
+
+    def _spy(*a: Any, **k: Any) -> bool:
+        called.append(True)
+        return True
+
+    # Background refresh is opt-in: without LIQUIFAI_BG_REFRESH it must not even
+    # consult staleness (no provider can fire as a side effect of a normal run).
+    monkeypatch.setattr(comp, "has_stale_value_caches", _spy)
+    root._maybe_background_refresh_values()
+    assert called == []
+
+
+def test_background_refresh_opt_in(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _app_with_provider(["a"])
+    monkeypatch.setenv("LIQUIFAI_BG_REFRESH", "1")
+    seen = []
+
+    def _not_stale(*a: Any, **k: Any) -> bool:
+        seen.append(True)
+        return False  # report fresh → opt-in path consults staleness but spawns no thread
+
+    monkeypatch.setattr(comp, "has_stale_value_caches", _not_stale)
+    root._maybe_background_refresh_values()
+    assert seen == [True]
+
+
+# ---------------------------------------------------------------------------
+# Spaces in candidates — wire-protocol robustness (split / unescape / escape)
+# ---------------------------------------------------------------------------
+
+
+def test_split_comp_words_preserves_spaces_newline_join() -> None:
+    # Newline-joined transport (bash IFS=$'\n', zsh ${(F)words}, fish join \n):
+    # an embedded space stays in one token; a half-typed backslash-escape unescapes.
+    assert comp.split_comp_words("myapp\ndataset\ndownload\nTest Scr") == [
+        "myapp",
+        "dataset",
+        "download",
+        "Test Scr",
+    ]
+    assert comp.split_comp_words("myapp\ndataset\ndownload\nTest\\ Scr")[-1] == "Test Scr"
+    # Trailing empty (bare TAB) is preserved.
+    assert comp.split_comp_words("myapp\ndownload\n")[-1] == ""
+
+
+def test_split_comp_words_old_space_join_fallback() -> None:
+    # An old (pre-upgrade) space-joined wrapper has no newline → fall back to
+    # whitespace split (no regression for installs that haven't been refreshed).
+    assert comp.split_comp_words("myapp download foo") == ["myapp", "download", "foo"]
+
+
+def test_escape_candidate() -> None:
+    assert comp.escape_candidate("alpha") == "alpha"  # no specials → unchanged
+    assert comp.escape_candidate("Test Script VB") == "Test\\ Script\\ VB"
+    assert comp.escape_candidate("a(b)c") == "a\\(b\\)c"
+    assert comp.escape_candidate("--path") == "--path"
+    assert comp.escape_candidate("<name>") == "<name>"  # placeholder left verbatim
+
+
+def test_completion_matches_space_containing_prefix(iso_cache: Path) -> None:
+    root = _app_with_provider(["Test Script VB", "Test Other", "alpha"])
+    comp.refresh_value_caches(root)
+    tree = comp.serialize_app(root)
+    # "download Test <TAB>" — the typed prefix has a space (one logical token);
+    # it must match BOTH "Test …" names (not split into "Test" + "").
+    both = [c for c in comp.complete_from_tree(tree, ["sairen", "dataset", "download", "Test "], cword=3)]
+    assert both == ["Test Script VB", "Test Other"]
+    # "download Test S<TAB>" narrows to the one whose space-containing name matches.
+    one = [c for c in comp.complete_from_tree(tree, ["sairen", "dataset", "download", "Test S"], cword=3)]
+    assert one == ["Test Script VB"]
+
+
+# ---------------------------------------------------------------------------
+# Dependent positionals — <version> values depend on the typed <name>
+# ---------------------------------------------------------------------------
+
+
+def _app_with_dependent() -> LiquifyApp:
+    """download <name> <version> where version depends on the chosen name."""
+    versions = {"alpha": ["1.0", "1.1"], "Test Script VB": ["2.0"]}
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.command(
+        "download",
+        positionals=["name", "version"],
+        completions={
+            "name": lambda: list(versions),
+            "version": lambda inputs: versions.get(inputs.get("name", ""), []),
+        },
+    )
+    def download(name: str = "", version: str = "", path: str = "") -> None:
+        pass
+
+    root.add_app(sub, "dataset", aliases=["ds"])
+    return root
+
+
+def test_dependent_kind_recorded_in_tree() -> None:
+    sub = comp.serialize_app(_app_with_dependent())["sub_apps"]["dataset"]
+    pc = sub["positional_completions"]["download"]
+    assert pc["name"]["kind"] == "static"
+    assert pc["version"] == {"key": "dataset__download__version", "kind": "dependent", "depends_on": ["name"]}
+
+
+def test_dependent_version_completes_from_typed_name(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    written = comp.refresh_value_caches(root)
+    # Static name (2) + dependent version pre-enumerated for each name (2+1=3).
+    assert written == {"dataset__download__name": 2, "dataset__download__version": 3}
+    tree = comp.serialize_app(root)
+    # download alpha <TAB> → alpha's versions.
+    assert [c for c in comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", ""], cword=4)][:2] == [
+        "1.0",
+        "1.1",
+    ]
+    # download "Test Script VB" <TAB> → that dataset's versions (space-containing name).
+    assert comp.complete_from_tree(tree, ["sairen", "dataset", "download", "Test Script VB", ""], cword=4)[0] == "2.0"
+    # An unknown name has no dependent cache → placeholder.
+    assert comp.complete_from_tree(tree, ["sairen", "dataset", "download", "nope", ""], cword=4)[0] == "<version>"
+
+
+def test_dependent_refresh_respects_max_combos(iso_cache: Path) -> None:
+    versions = {n: [f"{n}.v"] for n in ["a", "b", "c", "d"]}
+    root = LiquifyApp(name="sairen")
+
+    @root.command(
+        "get",
+        positionals=["name", "version"],
+        completions={"name": lambda: list(versions), "version": lambda inputs: versions[inputs["name"]]},
+    )
+    def get(name: str = "", version: str = "") -> None:
+        pass
+
+    comp.refresh_value_caches(root, max_combos=2)  # only the first 2 names get a version cache
+    tree = comp.serialize_app(root)
+    assert comp.complete_from_tree(tree, ["sairen", "get", "a", ""], cword=3)[0] == "a.v"
+    assert comp.complete_from_tree(tree, ["sairen", "get", "c", ""], cword=3)[0] == "<version>"  # beyond the cap
+
+
+# ---------------------------------------------------------------------------
+# Lazy self-heal of dependent caches (new/stale versions refresh in background)
+# ---------------------------------------------------------------------------
+
+
+def test_complete_lazy_refresh_called_on_missing_cache(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # caches alpha + "Test Script VB" versions
+    tree = comp.serialize_app(root)
+    calls = []
+    # A brand-new dataset the bulk refresh never saw → no cache → lazy refresh queued,
+    # placeholder returned now (non-blocking).
+    out = comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", "newds", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+    )
+    assert out[0] == "<version>"
+    assert calls == [("dataset__download__version", {"name": "newds"})]
+
+
+def test_complete_lazy_refresh_skipped_when_fresh(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)
+    tree = comp.serialize_app(root)
+    calls = []
+    # alpha's version cache is fresh (just refreshed) → no lazy refresh, values served.
+    out = comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+    )
+    assert out[:2] == ["1.0", "1.1"]
+    assert calls == []
+
+
+def test_complete_lazy_refresh_called_when_stale(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)
+    tree = comp.serialize_app(root)
+    monkeypatch.setattr(comp, "DEPENDENT_REFRESH_TTL", -1.0)  # treat any cache as stale
+    calls = []
+    out = comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+    )
+    assert out[:2] == ["1.0", "1.1"]  # stale values still served immediately
+    assert calls == [("dataset__download__version", {"name": "alpha"})]  # ...and a refresh queued
+
+
+def test_refresh_one(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    key = "dataset__download__version"
+    assert comp.refresh_one(root, key, {"name": "alpha"}) == 2
+    assert comp.read_dependent_value_cache("sairen", key, {"name": "alpha"}) == ["1.0", "1.1"]
+    # Unknown key → no match → None, nothing written.
+    assert comp.refresh_one(root, "nope__nope", {"name": "alpha"}) is None
+
+
+def test_run_refresh_completion_value_flag(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _app_with_dependent()
+    key = "dataset__download__version"
+    payload = json.dumps({"key": key, "inputs": {"name": "Test Script VB"}})
+    monkeypatch.setattr(sys, "argv", ["sairen", "--refresh-completion-value", payload])
+    set_context(None)  # type: ignore[arg-type]
+    root.run()
+    # The detached-helper code path wrote that dataset's versions to its per-input cache.
+    assert comp.read_dependent_value_cache("sairen", key, {"name": "Test Script VB"}) == ["2.0"]
+
+
+def test_lazy_spawner_opt_out_and_throttle(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    popen_calls = []
+    monkeypatch.setattr(comp.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
+    spawn = comp.make_lazy_refresh_spawner("sairen")
+
+    # Opt-out env → no spawn.
+    monkeypatch.setenv("LIQUIFAI_NO_LAZY_COMPLETE", "1")
+    spawn("dataset__download__version", {"name": "x"})
+    assert popen_calls == []
+
+    # Enabled: first call spawns; an immediate second call is throttled (marker fresh).
+    monkeypatch.delenv("LIQUIFAI_NO_LAZY_COMPLETE", raising=False)
+    spawn("dataset__download__version", {"name": "x"})
+    spawn("dataset__download__version", {"name": "x"})
+    assert len(popen_calls) == 1
+    assert popen_calls[0][0][0] == "sairen" and popen_calls[0][0][1] == "--refresh-completion-value"
+
+
+# ---------------------------------------------------------------------------
+# "<…>-updated" notice — shown only when a lazy self-heal changed the values
+# ---------------------------------------------------------------------------
+
+
+def test_no_notice_after_bulk_or_unchanged_refresh(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # bulk refresh never stamps changed_at
+    tree = comp.serialize_app(root)
+    out = comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", ""], cword=4)
+    assert "<version-updated>" not in out and out[:2] == ["1.0", "1.1"]
+
+
+def test_notice_shown_when_self_heal_changes_values(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    versions = {"alpha": ["1.0"]}
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.command(
+        "download",
+        positionals=["name", "version"],
+        completions={"name": lambda: list(versions), "version": lambda inp: versions[inp["name"]]},
+    )
+    def download(name: str = "", version: str = "", path: str = "") -> None:
+        pass
+
+    root.add_app(sub, "dataset")
+    comp.refresh_value_caches(root)
+    tree = comp.serialize_app(root)
+    key = "dataset__download__version"
+
+    # A new version is published; the targeted self-heal picks it up → values changed.
+    versions["alpha"] = ["1.0", "2.0"]
+    comp.refresh_one(root, key, {"name": "alpha"})
+
+    out = comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", ""], cword=4)
+    assert out[0] == "<version-updated>" and out[1:3] == ["1.0", "2.0"]  # notice leads, values follow
+    # Typing a real prefix drops the notice (it's a `<…>` hint).
+    assert comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", "1"], cword=4) == ["1.0"]
+    # The notice ages out after the window.
+    monkeypatch.setattr(comp, "DEPENDENT_NOTICE_WINDOW", 0.0)
+    assert "<version-updated>" not in comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", "alpha", ""], cword=4
+    )
+
+
+def test_refresh_one_stamps_changed_only_on_change(iso_cache: Path) -> None:
+    versions = {"x": ["1.0"]}
+    root = LiquifyApp(name="sairen")
+
+    @root.command(
+        "get", positionals=["name", "version"], completions={"name": lambda: ["x"], "version": lambda i: versions["x"]}
+    )
+    def get(name: str = "", version: str = "") -> None:
+        pass
+
+    key = "get__version"
+    comp.refresh_one(root, key, {"name": "x"})  # first population → stamped
+    assert comp._dependent_changed_recently("sairen", key, {"name": "x"}, 60.0)
+    stamp1 = comp._dependent_changed_at("sairen", key, {"name": "x"})
+    comp.refresh_one(root, key, {"name": "x"})  # unchanged → stamp preserved, not bumped
+    assert comp._dependent_changed_at("sairen", key, {"name": "x"}) == stamp1
+
+
+# ---------------------------------------------------------------------------
+# Static positionals also self-heal (a never-refreshed name list fills on use)
+# ---------------------------------------------------------------------------
+
+
+def test_static_self_heal_triggered_when_missing(iso_cache: Path) -> None:
+    root = _app_with_provider(["alpha", "beta"])  # download.name is a STATIC provider
+    tree = comp.serialize_app(root)  # no refresh → cache missing
+    calls = []
+    out = comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", ""], cword=3, lazy_refresh=lambda k, i: calls.append((k, i))
+    )
+    assert out[0] == "<name>"  # placeholder now (nothing cached)
+    assert calls == [("dataset__download__name", {})]  # ...and a STATIC refresh (empty inputs) queued
+
+
+def test_static_self_heal_skipped_when_fresh(iso_cache: Path) -> None:
+    root = _app_with_provider(["alpha", "beta"])
+    comp.refresh_value_caches(root)  # populate the static cache
+    tree = comp.serialize_app(root)
+    calls = []
+    out = comp.complete_from_tree(
+        tree, ["sairen", "dataset", "download", ""], cword=3, lazy_refresh=lambda k, i: calls.append((k, i))
+    )
+    assert out[:2] == ["alpha", "beta"] and calls == []  # served from cache, no refresh queued
+
+
+def test_refresh_one_handles_static_and_dependent(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    # Static: empty inputs → refreshes the whole name list.
+    assert comp.refresh_one(root, "dataset__download__name", {}) == 2
+    assert comp.read_value_cache("sairen", "dataset__download__name") == ["alpha", "Test Script VB"]
+    # Dependent: non-empty inputs → that combo only.
+    assert comp.refresh_one(root, "dataset__download__version", {"name": "alpha"}) == 2
+    # Kind/inputs mismatch → no match.
+    assert comp.refresh_one(root, "dataset__download__name", {"name": "x"}) is None
+    assert comp.refresh_one(root, "dataset__download__version", {}) is None

@@ -16,7 +16,13 @@ from __future__ import annotations
 import os
 import sys
 
-from liquifai.completion import complete_from_tree, read_cache
+from liquifai.completion import (
+    complete_from_tree,
+    escape_candidate,
+    make_lazy_refresh_spawner,
+    read_cache,
+    split_comp_words,
+)
 
 
 def main() -> None:
@@ -27,13 +33,17 @@ def main() -> None:
     if tree is None:
         return
 
-    words = os.environ.get("COMP_WORDS", "").split()
+    # split_comp_words preserves tokens with embedded spaces (e.g. a dataset name
+    # "Test Script VB"); escape_candidate emits each candidate so the shell inserts
+    # it as a single argument. The lazy-refresh spawner self-heals stale/missing
+    # DEPENDENT caches (e.g. a new dataset version) in a detached background process.
+    words = split_comp_words(os.environ.get("COMP_WORDS", ""))
     try:
         cword = int(os.environ.get("COMP_CWORD", "0"))
     except ValueError:
         cword = 0
-    for cand in complete_from_tree(tree, words, cword):
-        print(cand)
+    for cand in complete_from_tree(tree, words, cword, lazy_refresh=make_lazy_refresh_spawner(app_name)):
+        print(escape_candidate(cand))
 
 
 if __name__ == "__main__":

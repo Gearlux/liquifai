@@ -45,11 +45,6 @@ class LiquifyApp:
         self._context_factory: Optional[Callable[[], Any]] = None
         self._mcp_context_factory: Optional[Callable[..., Any]] = None
         self._presenter: Optional[Callable[..., None]] = None
-        # Late-binding resolver: ``fn(op_name) -> Callable | None``; lets
-        # consumers point at a module whose attributes may be monkeypatched
-        # in tests.  ``build_commands()`` uses this instead of closing over
-        # the registered op_func directly.
-        self._op_resolver: Optional[Callable[[str], Optional[Callable[..., Any]]]] = None
 
     def add_app(self, app: "LiquifyApp", name: Optional[str] = None, aliases: Optional[List[str]] = None) -> None:
         """Mount a sub-application to support nested command groups (infinitely sub-appable).
@@ -109,33 +104,13 @@ class LiquifyApp:
         self._presenter = fn
         return fn
 
-    def set_op_resolver(
-        self, fn: Callable[[str], Optional[Callable[..., Any]]]
-    ) -> Callable[[str], Optional[Callable[..., Any]]]:
-        """Register a late-binding resolver for operation callables.
-
-        When :meth:`build_commands` generates a CLI handler, the handler calls
-        ``_op_resolver(op_name)`` at *invocation* time rather than closing over the
-        op_func captured at registration time.  This allows consumers to point at a
-        module whose attributes may be monkeypatched after import (e.g. by test
-        fixtures).  If the resolver returns ``None``, the registered op_func is used
-        as fallback.
-
-        Args:
-            fn: Callable that receives an operation's ``__name__`` string and returns
-                the live callable or ``None``.
-        """
-        self._op_resolver = fn
-        return fn
-
     def build_commands(self) -> None:
         """Register CLI commands for every operation in ``_operations``.
 
         Reads the registered hooks (:meth:`set_context_factory`,
-        :meth:`set_presenter`, :meth:`set_op_resolver`) to build and register one
-        CLI handler per operation.  Call this *after* all hooks are set — typically
-        at the bottom of each domain module, replacing the old
-        ``build_cli_commands(app)`` call.
+        :meth:`set_presenter`) to build and register one CLI handler per
+        operation.  Call this *after* all hooks are set — typically at the bottom
+        of each domain module, replacing the old ``build_cli_commands(app)`` call.
 
         Positionals are derived automatically from the operation signature: every
         keyword-only parameter with **no default** (excluding the ``conn`` / context
@@ -143,11 +118,14 @@ class LiquifyApp:
         """
         for op_name, op_func in self._operations.items():
             meta: Dict[str, Any] = getattr(op_func, "__liquifai_op_metadata__", {})
+            if meta.get("mcp_only", False):
+                continue  # skip CLI generation — this op is MCP-only
             cli_name: str = meta.get("cmd_name", op_name.replace("_", "-"))
             presentation: str = meta.get("presentation", "status")
             columns: Any = meta.get("columns", ())
             title: str = meta.get("title", cli_name.replace("-", " ").title())
             empty: str = meta.get("empty", "No results")
+            completions: Dict[str, Callable[..., Any]] = meta.get("completions", {})
 
             sig = inspect.signature(op_func)
             params_no_ctx = [p for n, p in sig.parameters.items() if n != "conn"]
@@ -157,7 +135,6 @@ class LiquifyApp:
             # Capture all loop variables — Python closures capture by reference.
             def _make_handler(
                 op_func_: Callable[..., Any] = op_func,
-                op_name_: str = op_name,
                 presentation_: str = presentation,
                 columns_: Any = columns,
                 title_: str = title,
@@ -166,13 +143,9 @@ class LiquifyApp:
                 params_no_ctx_: List[inspect.Parameter] = params_no_ctx,
             ) -> Callable[..., None]:
                 def cmd(**kwargs: Any) -> None:
-                    resolver = self._op_resolver
-                    live_op: Optional[Callable[..., Any]] = resolver(op_name_) if resolver is not None else None
-                    if live_op is None:
-                        live_op = op_func_
                     ctx_factory = self._context_factory
                     conn = ctx_factory() if ctx_factory is not None else None
-                    result = live_op(conn, **kwargs) if conn is not None else live_op(**kwargs)
+                    result = op_func_(conn, **kwargs) if conn is not None else op_func_(**kwargs)
                     presenter = self._presenter
                     if presenter is not None:
                         actual_title = title_.format_map(kwargs) if title_ and "{" in title_ else title_
@@ -188,7 +161,7 @@ class LiquifyApp:
                 return cmd
 
             handler = _make_handler()
-            self.command(cli_name, positionals=positionals)(handler)
+            self.command(cli_name, positionals=positionals, completions=completions)(handler)
 
     def command(
         self,
@@ -196,6 +169,7 @@ class LiquifyApp:
         default: bool = False,
         positionals: Optional[List[str]] = None,
         presentation: Optional[Presentation] = None,
+        completions: Optional[Dict[str, Callable[..., Any]]] = None,
         **metadata: Any,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command.
@@ -254,6 +228,7 @@ class LiquifyApp:
                 self._operations[op_name] = f
                 setattr(f, "__liquifai_operation__", op_name)
                 setattr(f, "__liquifai_positionals__", list(positionals or []))
+                setattr(f, "__liquifai_completions__", dict(completions or {}))
                 setattr(
                     f,
                     "__liquifai_op_metadata__",
@@ -264,6 +239,9 @@ class LiquifyApp:
                 # Stored on the function (like ``__liquifai_flow_mode__``) so both
                 # run() and _show_help() can read it without a per-app registry.
                 setattr(f, "__liquifai_positionals__", list(positionals or []))
+                # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
+                # completion). Read by completion.serialize_app / iter_completion_providers.
+                setattr(f, "__liquifai_completions__", dict(completions or {}))
                 if default:
                     self._default_cmd = f
 
@@ -316,6 +294,9 @@ class LiquifyApp:
         self,
         name: Optional[str] = None,
         positionals: Optional[List[str]] = None,
+        presentation: Optional[Presentation] = None,
+        mcp_only: bool = False,
+        completions: Optional[Dict[str, Callable[..., Any]]] = None,
         **metadata: Any,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a function as a named operation (third variant alongside command / script_command).
@@ -323,19 +304,39 @@ class LiquifyApp:
         Unlike ``command()``, ``operation()`` does **not** auto-generate a CLI command —
         that is the caller's responsibility (call :meth:`build_commands` after all hooks are
         set to auto-generate CLI wrappers, or use :func:`liquifai.tools.make_mcp_tools` for
-        MCP tools). Liquifai stores the name, positionals, and any opaque ``**metadata`` on
-        the function and in ``app._operations``.
+        MCP tools). Liquifai stores the name, positionals, and any explicit metadata on the
+        function and in ``app._operations``.
+
+        **CLI name derivation:** the CLI verb is derived from the function name by stripping
+        the app-name prefix (``<app.name>_``) if present, then replacing ``_`` with ``-``.
+        Example: ``dataset_version_create`` on app ``"dataset"`` → CLI verb ``version-create``.
+        If the function name does not start with the app-name prefix, the whole name is used
+        (with ``_``→``-``). The canonical convention is therefore to name every operation
+        ``<app_name>_<action>`` so the prefix strips cleanly. Pass ``name=`` explicitly to
+        override the derived verb when a different function name is necessary.
 
         Args:
             name: Override the operation name (defaults to the function's ``__name__``).
+                Also overrides the CLI verb derivation described above.
             positionals: Ordered positional-argument names (same semantics as in
                 :meth:`command`); passed through to the generated CLI command.
+            presentation: How the CLI auto-generated by :meth:`build_commands` should render
+                the return value — ``"list"`` (table of rows), ``"fields"`` (key/value pairs),
+                or ``"status"`` (plain success message). ``None`` means no special rendering.
+            mcp_only: When ``True``, :meth:`build_commands` skips CLI generation for this
+                operation. The function remains in ``_operations`` and is therefore available
+                to :func:`liquifai.tools.make_mcp_tools`.
             **metadata: Opaque metadata stored on the function as
                 ``__liquifai_op_metadata__`` — Liquifai does not interpret these. Consumers
-                like sairen read ``presentation``, ``columns``, ``title``, ``empty`` etc.
+                like sairen read ``columns``, ``title``, ``empty`` etc.
         """
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+            if presentation is not None and presentation not in get_args(Presentation):
+                raise ValueError(
+                    f"@operation({f.__name__!r}): presentation must be one of "
+                    f"{get_args(Presentation)!r}, got {presentation!r}"
+                )
             op_name = name or f.__name__
             # Derive CLI name using the old group-prefix-strip convention so
             # existing @operation() callers continue to work with configure_app().
@@ -345,11 +346,41 @@ class LiquifyApp:
             self._operations[op_name] = f
             setattr(f, "__liquifai_operation__", op_name)
             setattr(f, "__liquifai_positionals__", list(positionals or []))
-            # Include cmd_name so configure_app() doesn't need to re-derive it.
-            setattr(f, "__liquifai_op_metadata__", {"cmd_name": cmd_name, **metadata})
+            # Include cmd_name and mcp_only always; presentation only when set
+            # (omitting it lets build_commands() fall through to its "status" default).
+            base_meta: Dict[str, Any] = {"cmd_name": cmd_name, "mcp_only": mcp_only}
+            if presentation is not None:
+                base_meta["presentation"] = presentation
+            # Positional value providers (Q2). Stored in metadata so build_commands()
+            # forwards them to the generated CLI handler via command(completions=...).
+            if completions:
+                base_meta["completions"] = dict(completions)
+            setattr(f, "__liquifai_op_metadata__", {**base_meta, **metadata})
             return f
 
         return decorator
+
+    def set_completions(self, op_name: str, completions: Dict[str, Callable[..., Any]]) -> None:
+        """Attach positional value providers to an already-registered operation.
+
+        Companion to ``@operation(..., completions=...)`` for when the provider is
+        wired separately from the decorator (e.g. to avoid an import cycle between a
+        domain module and its providers). Each entry maps a positional name to a
+        ``Callable[[], List[str]]`` whose cached result completes that ``<name>``
+        slot on TAB (see :mod:`liquifai.completion`). Must be called **before**
+        :meth:`build_commands` so the generated CLI handler carries the providers.
+
+        Raises:
+            KeyError: if ``op_name`` is not a registered operation.
+        """
+        fn = self._operations.get(op_name)
+        if fn is None:
+            raise KeyError(f"{self.name}: no registered operation {op_name!r}")
+        meta = getattr(fn, "__liquifai_op_metadata__", None)
+        if not isinstance(meta, dict):
+            meta = {}
+            setattr(fn, "__liquifai_op_metadata__", meta)
+        meta.setdefault("completions", {}).update(completions)
 
     def _completion_env_var(self) -> str:
         return f"_{self.name.upper().replace('-', '_')}_COMPLETE"
@@ -358,15 +389,17 @@ class LiquifyApp:
         """If the shell is asking for completions, print them and return True."""
         if self._completion_env_var() not in os.environ:
             return False
-        from liquifai.completion import complete
+        from liquifai.completion import complete, escape_candidate, split_comp_words
 
-        words = os.environ.get("COMP_WORDS", "").split()
+        # split_comp_words preserves tokens with embedded spaces; escape_candidate
+        # emits each candidate so the shell inserts it as a single argument.
+        words = split_comp_words(os.environ.get("COMP_WORDS", ""))
         try:
             cword = int(os.environ.get("COMP_CWORD", "0"))
         except ValueError:
             cword = 0
         for cand in complete(self, words, cword):
-            print(cand)
+            print(escape_candidate(cand))
         sys.exit(0)
 
     def _maybe_handle_completion_install(self, argv: List[str]) -> bool:
@@ -417,6 +450,89 @@ class LiquifyApp:
         except Exception:
             pass
 
+    def _maybe_handle_refresh_completions(self, argv: List[str]) -> bool:
+        """Handle ``--refresh-completions`` early (before bootstrap).
+
+        Runs every registered positional value provider (``@command(...,
+        completions=...)``) in THIS process — providers may import the heavy SDK
+        and hit the network — and writes each result to its value cache so TAB
+        can offer real values for a ``<name>`` slot. Returns True if handled.
+        """
+        if "--refresh-completions" not in argv:
+            return False
+        from liquifai.completion import refresh_value_caches, write_cache
+
+        try:
+            write_cache(self)  # keep the command tree fresh too
+        except Exception:
+            pass
+        written = refresh_value_caches(self)
+        total = sum(written.values())
+        if written:
+            console.print(
+                f"[green]Refreshed[/green] {len(written)} completion value cache(s) "
+                f"([cyan]{total}[/cyan] values) for [cyan]{self.name}[/cyan]."
+            )
+        else:
+            console.print(f"[dim]No positional completion providers registered for {self.name}.[/dim]")
+        return True
+
+    def _maybe_handle_refresh_completion_value(self, argv: List[str]) -> bool:
+        """Handle ``--refresh-completion-value '<json>'`` early (background self-heal).
+
+        The detached helper the fast path spawns to refresh ONE dependent positional's
+        cache for a single input combo (``{"key": ..., "inputs": {...}}``). Runs the
+        targeted provider and writes the cache, then exits — no command, no bootstrap.
+        Silent and best-effort (it runs in the background). Returns True if handled.
+        """
+        if "--refresh-completion-value" not in argv:
+            return False
+        import json
+
+        from liquifai.completion import refresh_one
+
+        idx = argv.index("--refresh-completion-value")
+        try:
+            spec = json.loads(argv[idx + 1]) if idx + 1 < len(argv) else {}
+            refresh_one(self, str(spec.get("key", "")), dict(spec.get("inputs", {}) or {}))
+        except Exception:
+            pass
+        return True
+
+    def _maybe_background_refresh_values(self, ttl: float = 600.0) -> None:
+        """Opportunistically refresh stale positional value caches in the background.
+
+        **Opt-in** — does nothing unless ``$LIQUIFAI_BG_REFRESH`` is set. When
+        enabled, after a successful command, if any registered provider's value
+        cache is missing or older than ``ttl`` seconds, the providers run in a
+        detached daemon thread so the next TAB sees fresh values without blocking
+        the command that just ran. Best-effort: any failure is swallowed.
+
+        It is OFF by default because a provider may hit the network (e.g. query a
+        platform), and a normal run should never trigger a surprise background
+        request — the deterministic path is ``--refresh-completions``. Set
+        ``LIQUIFAI_BG_REFRESH=1`` (e.g. in a project rc) to keep caches warm for free.
+        """
+        if not os.environ.get("LIQUIFAI_BG_REFRESH"):
+            return
+        try:
+            import threading
+
+            from liquifai.completion import has_stale_value_caches, refresh_value_caches
+
+            if not has_stale_value_caches(self, ttl):
+                return
+
+            def _bg() -> None:
+                try:
+                    refresh_value_caches(self)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_bg, daemon=True, name=f"liquifai-refresh-{self.name}").start()
+        except Exception:
+            pass
+
     def run(self) -> Any:
         """Main entry point for the CLI."""
         # 0. SHELL COMPLETION — must short-circuit before any bootstrap so
@@ -424,6 +540,10 @@ class LiquifyApp:
         if self._maybe_emit_completion():
             return None
         if self._maybe_handle_completion_install(sys.argv[1:]):
+            return None
+        if self._maybe_handle_refresh_completion_value(sys.argv[1:]):
+            return None
+        if self._maybe_handle_refresh_completions(sys.argv[1:]):
             return None
 
         argv = sys.argv[1:]
@@ -471,9 +591,13 @@ class LiquifyApp:
         if not target_func:
             target_func = target_app._default_cmd
 
-        # 2. Check for help (also show help when subgroup reached without a command)
-        if "--help" in argv or (not target_func and not target_app._default_cmd):
-            self._show_help(target_app, target_func, config_path=config_path)
+        # 2. Check for help (also show help when subgroup reached without a command).
+        # ``--docs`` is a help variant that renders the same code-extracted option
+        # documentation one option per line (greppable / pipe-friendly) instead of
+        # a Rich table.
+        wants_docs = "--docs" in argv
+        if "--help" in argv or wants_docs or (not target_func and not target_app._default_cmd):
+            self._show_help(target_app, target_func, config_path=config_path, layout="lines" if wants_docs else "table")
             # Refresh the completion cache so freshly added commands appear under
             # TAB without first requiring a successful real run — a hidden
             # papercut otherwise, since --help is the natural way to discover
@@ -537,6 +661,9 @@ class LiquifyApp:
         # Refresh the completion cache so plugin/command changes propagate
         # to the next TAB. Best-effort: never let this break a real run.
         self._refresh_completion_cache()
+        # Keep positional value caches warm (Q2) — refreshes stale ones in a
+        # detached daemon thread, never blocking the command that just ran.
+        self._maybe_background_refresh_values()
 
         return result
 
@@ -809,6 +936,7 @@ class LiquifyApp:
         app: "LiquifyApp",
         target_func: Optional[Callable[..., Any]] = None,
         config_path: Optional[Path] = None,
+        layout: str = "table",
     ) -> None:
         """Beautiful help menu via Rich.
 
@@ -816,6 +944,10 @@ class LiquifyApp:
         the help path flows the DI graph via :meth:`liquify` and shows every
         configurable kwarg reachable through the flowed instance tree. A
         flow failure downgrades to the static-type view with a brief note.
+
+        ``layout`` is forwarded to :func:`liquifai.report.show_configuration`:
+        ``"table"`` (default, Rich grid) or ``"lines"`` (one option per line —
+        the ``--docs`` rendering).
         """
         console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Framework")
         if app.description:
@@ -846,9 +978,10 @@ class LiquifyApp:
                     target_func,
                     config_map=flowed_kwargs,
                     title=f"Command Configuration (flowed from {config_path.name})",
+                    layout=layout,
                 )
             else:
-                show_configuration(target_func, title="Command Configuration Options")
+                show_configuration(target_func, title="Command Configuration Options", layout=layout)
         else:
             table = Table(box=None, padding=(0, 2))
             table.add_column("Command/Group", style="cyan")
