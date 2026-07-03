@@ -357,6 +357,73 @@ def split_comp_words(comp_words: str) -> List[str]:
     return [_unescape_word(p) for p in parts]
 
 
+def words_from_comp_line(comp_line: str, comp_point: int) -> Tuple[List[str], int]:
+    """Tokenize a shell command line up to the cursor, QUOTE/ESCAPE-aware.
+
+    Bash's raw ``$COMP_WORDS`` array splits ``$COMP_LINE`` on ``$COMP_WORDBREAKS``
+    (which includes space) WITHOUT honoring quotes or backslash escapes, so a value
+    like ``"Helios Base Model"`` (or ``Helios\\ Base\\ Model``) is shattered into
+    several words — which corrupts positional counting (the shell then falls back to
+    filename completion). Re-tokenizing the raw ``$COMP_LINE`` here — as bash's own
+    parser would — keeps such a value as ONE token. Tolerant of an unterminated final
+    quote (the user is still typing), which runs to the end as one token.
+
+    (zsh's ``$words`` and fish's ``commandline -opc`` are already quote-aware, so only
+    bash needs this; those wrappers keep using the ``COMP_WORDS`` path.)
+
+    Returns ``(words, cword)`` where ``words[0]`` is the program name and
+    ``words[cword]`` is the (possibly empty) word under the cursor.
+    """
+    if comp_point < 0 or comp_point > len(comp_line):
+        comp_point = len(comp_line)
+    text = comp_line[:comp_point]
+    words: List[str] = []
+    cur: List[str] = []
+    in_word = False  # a token has started (incl. an empty quoted "")
+    quote = ""  # "" | "'" | '"'
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote:
+            # Inside "..." a backslash escapes ", \, $ and ` (bash rules); inside
+            # '...' nothing is special. An unterminated quote falls through to EOF.
+            if quote == '"' and c == "\\" and i + 1 < n and text[i + 1] in '"\\$`':
+                cur.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = ""
+                i += 1
+                continue
+            cur.append(c)
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            in_word = True
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            cur.append(text[i + 1])
+            in_word = True
+            i += 2
+            continue
+        if c in (" ", "\t"):
+            if in_word:
+                words.append("".join(cur))
+                cur = []
+                in_word = False
+            i += 1
+            continue
+        cur.append(c)
+        in_word = True
+        i += 1
+    # Flush the final token. If the line ends on unquoted whitespace, the current
+    # word is empty (bare TAB after a space) — represent it as a trailing "".
+    words.append("".join(cur))
+    return words, len(words) - 1
+
+
 def escape_candidate(value: str) -> str:
     """Backslash-escape a candidate so the shell inserts it as ONE token.
 
@@ -374,7 +441,11 @@ _BASH_TEMPLATE = """\
 _{prog}_completion() {
     local IFS=$'\\n'
     local raw
-    raw=$(env COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD \\
+    # Pass COMP_LINE/COMP_POINT (the raw line + cursor) so liquifai-complete can
+    # re-tokenize quote-aware — bash's own COMP_WORDS splits "Helios Base Model"
+    # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback.
+    raw=$(env COMP_LINE="$COMP_LINE" COMP_POINT="$COMP_POINT" \\
+        COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD \\
         liquifai-complete {prog} 2>/dev/null)
     COMPREPLY=()
     for item in $raw; do
@@ -445,11 +516,14 @@ complete -c {prog} -f -a "(__fish_{prog}_complete)"
 # wires shell completion for an alias by rewriting COMP_WORDS / CURRENT
 # before delegating to the standard `liquifai-complete` entry.
 _BASH_HELPERS = r"""
-# Shared body invoked by every per-alias delegator. Builds COMP_WORDS as
-# `<prefix> <typed-rest>`, recomputes COMP_CWORD, and delegates to the
-# fast `liquifai-complete` entry. We iterate manually instead of using
-# ${arr[*]:n} because bash 3.2 leaks a stray \x7f byte there for empty
-# trailing elements (becomes a bogus incomplete prefix).
+# Shared body invoked by every per-alias delegator. Delegates to the fast
+# `liquifai-complete` entry as if the app itself had been typed. Prefers a
+# rewritten COMP_LINE (alias token -> `<app> <prefix>`, cursor shifted) so
+# liquifai-complete re-tokenizes quote-aware and a value like "Helios Base
+# Model" stays ONE word; also builds the legacy COMP_WORDS/COMP_CWORD as a
+# fallback (space-joined; shatters spaces — old liquifai-complete only). We
+# iterate COMP_WORDS manually instead of ${arr[*]:n} because bash 3.2 leaks a
+# stray \x7f byte there for empty trailing elements.
 _liquifai_alias_complete() {
     local prefix_str="$1"
     local prefix_len="$2"
@@ -465,8 +539,17 @@ _liquifai_alias_complete() {
     done
     local words="$prefix_str $cur"
     local cword=$((COMP_CWORD + prefix_len - 1))
+    # Quote-aware path: rewrite the raw line's leading alias token to
+    # `<app> <prefix...>` and shift the cursor by the length delta.
+    local line_env="" point_env=""
+    if [ -n "$COMP_LINE" ]; then
+        local alias_tok="${COMP_WORDS[0]}"
+        line_env="${prefix_str}${COMP_LINE:${#alias_tok}}"
+        point_env=$((COMP_POINT - ${#alias_tok} + ${#prefix_str}))
+    fi
     local raw
-    raw=$(env COMP_WORDS="$words" COMP_CWORD="$cword" liquifai-complete "$app" 2>/dev/null)
+    raw=$(env COMP_LINE="$line_env" COMP_POINT="$point_env" \
+        COMP_WORDS="$words" COMP_CWORD="$cword" liquifai-complete "$app" 2>/dev/null)
     COMPREPLY=()
     local line
     while IFS= read -r line; do
@@ -507,8 +590,12 @@ _liquifai_alias_complete() {
     local prefix_str="$1"
     local prefix_len="$2"
     local app="$3"
-    local cur="${(j: :)words[2,-1]}"
-    local merged="$prefix_str $cur"
+    # zsh's $words is already quote-aware; NEWLINE-join (prefix words + the typed
+    # rest) so split_comp_words preserves a value with embedded spaces ("Helios
+    # Base Model") as ONE token — matching the main zsh wrapper's ${(F)words}.
+    local -a merged_arr
+    merged_arr=(${=prefix_str} "${(@)words[2,-1]}")
+    local merged="${(F)merged_arr}"
     local cword=$((CURRENT + prefix_len - 2))
     local -a response
     response=("${(@f)$(env COMP_WORDS="$merged" COMP_CWORD="$cword" liquifai-complete "$app" 2>/dev/null)}")
