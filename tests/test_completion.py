@@ -285,6 +285,27 @@ def test_bash_script_suppresses_trailing_space_for_directories() -> None:
     assert "command -v compopt" in script
 
 
+def test_bash_script_forwards_comp_line_for_quote_aware_tokenizing() -> None:
+    """The bash wrapper must forward $COMP_LINE/$COMP_POINT so liquifai-complete can
+    re-tokenize quote-aware (bash's own $COMP_WORDS splits "Helios Base Model")."""
+    script = comp.render_script("marainer", "bash")
+    assert 'COMP_LINE="$COMP_LINE"' in script
+    assert 'COMP_POINT="$COMP_POINT"' in script
+    # COMP_WORDS stays too, as the fallback for old installs.
+    assert "COMP_WORDS=" in script
+
+
+def test_bash_alias_helper_forwards_rewritten_comp_line() -> None:
+    """The alias delegator (liquifai-bind-alias) must also rewrite the raw line's
+    alias token to `<app> <prefix>` and forward COMP_LINE/COMP_POINT, so a bound
+    alias (e.g. `melody` -> `sairen`) is quote-aware like the app's own wrapper."""
+    helpers = comp.render_helpers("bash")
+    assert "_liquifai_alias_complete" in helpers
+    assert 'COMP_LINE="$line_env"' in helpers
+    assert 'COMP_POINT="$point_env"' in helpers
+    assert "${COMP_LINE:${#alias_tok}}" in helpers  # alias token -> app+prefix
+
+
 def test_zsh_script_suppresses_trailing_space_for_directories() -> None:
     """Zsh's `compadd` adds a trailing space by default; for directory
     candidates we need `-S ''` so the user can keep tabbing in.
@@ -294,6 +315,49 @@ def test_zsh_script_suppresses_trailing_space_for_directories() -> None:
     # Conditional on `*/` so non-directory candidates still get a trailing
     # space (the normal "ready for next arg" UX).
     assert "*/" in script
+
+
+# ------------------------- words_from_comp_line ---------------------------
+# Quote/escape-aware re-tokenization of bash's raw $COMP_LINE (bash's own
+# $COMP_WORDS splits "Helios Base Model" on spaces — see the mandate).
+
+
+@pytest.mark.parametrize(
+    "line,expected_words,expected_cword",
+    [
+        # bare trailing space -> empty current word
+        ("app cmd arg ", ["app", "cmd", "arg", ""], 3),
+        # double-quoted value with spaces stays ONE word
+        ('app cmd "a b c" ', ["app", "cmd", "a b c", ""], 3),
+        # single-quoted value with spaces stays ONE word
+        ("app cmd 'a b' ", ["app", "cmd", "a b", ""], 3),
+        # backslash-escaped spaces stay ONE word
+        ("app cmd a\\ b\\ c ", ["app", "cmd", "a b c", ""], 3),
+        # completing the value itself (no trailing space) — unterminated quote
+        ('app cmd "a b', ["app", "cmd", "a b"], 2),
+        # partial command word
+        ("app cm", ["app", "cm"], 1),
+        # a following positional after a quoted spaced value
+        ('app cmd "a b" ver', ["app", "cmd", "a b", "ver"], 3),
+    ],
+)
+def test_words_from_comp_line(line: str, expected_words: list, expected_cword: int) -> None:
+    words, cword = comp.words_from_comp_line(line, len(line))
+    assert words == expected_words
+    assert cword == expected_cword
+
+
+def test_words_from_comp_line_respects_comp_point() -> None:
+    # Cursor mid-line: only text before the cursor is tokenized.
+    line = "app cmd xyz"
+    words, cword = comp.words_from_comp_line(line, 5)  # -> "app c"
+    assert words == ["app", "c"]
+    assert cword == 1
+
+
+def test_words_from_comp_line_out_of_range_point_clamps() -> None:
+    words, cword = comp.words_from_comp_line("app x", 999)
+    assert words == ["app", "x"] and cword == 1
 
 
 # ----------------------------- install_script -----------------------------
@@ -891,6 +955,24 @@ def test_fast_complete_main_serves_from_cache(app: LiquifyApp, capsys: Any, monk
     out = capsys.readouterr().out.splitlines()
     assert "greet" in out
     assert "group" in out
+
+
+def test_fast_complete_main_prefers_comp_line(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    # When COMP_LINE/COMP_POINT are present they win over COMP_WORDS (the deliberately
+    # wrong COMP_WORDS below would yield nothing), so bash's quote-aware line drives it.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    comp.write_cache(app)
+    monkeypatch.setattr(sys, "argv", ["liquifai-complete", "myapp"])
+    monkeypatch.setenv("COMP_LINE", "myapp gr")
+    monkeypatch.setenv("COMP_POINT", str(len("myapp gr")))
+    monkeypatch.setenv("COMP_WORDS", "myapp zzz")
+    monkeypatch.setenv("COMP_CWORD", "1")
+
+    from liquifai import _fast_complete
+
+    _fast_complete.main()
+    out = capsys.readouterr().out.splitlines()
+    assert "greet" in out and "group" in out
 
 
 def test_fast_complete_main_silent_on_cache_miss(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
