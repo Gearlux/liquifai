@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 import confluid
-import logflow
+import loggair
 
 from liquifai import LiquifyApp, get_context
 
@@ -60,8 +60,8 @@ def train(trainer: Trainer, name: str = "Experiment") -> None:
     """
     Run a simulated training experiment with automatic injection.
     """
-    # 1. Access the logger (automatically initialized by Liquify via LogFlow)
-    logger = logflow.get_logger("train")
+    # 1. Access the logger (automatically initialized by Liquify via Loggair)
+    logger = loggair.get_logger("train")
 
     logger.info(f"Starting {name}...")
     logger.debug(f"Configuration received: {trainer}")

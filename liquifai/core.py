@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Literal, Optional, Set, Tuple, get_args
 
 import confluid
-import logflow
+import loggair
 from confluid import materialize
-from logflow import get_logger
+from loggair import get_logger
 from rich.console import Console
 from rich.table import Table
 
@@ -761,7 +761,7 @@ class LiquifyApp:
         )
         file_level = self.context.file_level or self.context.log_level or "DEBUG"
 
-        logflow.configure_logging(
+        loggair.configure_logging(
             console_level=console_level,
             file_level=file_level,
             log_dir=self.context.log_dir,
@@ -907,7 +907,7 @@ class LiquifyApp:
 
         If ``config_path`` is None and a context already exists, the current
         context's config is used verbatim. Otherwise the config is loaded
-        lazily here (no logflow / no CLI override merge — intended for
+        lazily here (no loggair / no CLI override merge — intended for
         read-only introspection).
         """
         if self.context is None:
