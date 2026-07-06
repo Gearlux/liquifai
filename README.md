@@ -1,6 +1,6 @@
 # Liquify
 
-**Liquify** is a modern, type-safe application framework for Python, designed to bind **LogFlow** and **Confluid** into high-performance CLI applications.
+**Liquify** is a modern, type-safe application framework for Python, designed to bind **Loggair** and **Confluid** into high-performance CLI applications.
 
 ## Key Features
 - **Zero-Boilerplate Startup:** Automatically handles logging and hierarchical config initialization.
@@ -12,7 +12,7 @@
 ## Design Goals & Requirements
 
 ### CLI Framework
-- **Zero-Boilerplate Startup:** Automate the bootstrapping of LogFlow and Confluid.
+- **Zero-Boilerplate Startup:** Automate the bootstrapping of Loggair and Confluid.
 - **Contextual Scripting:** Support `@app.script_command()` which promotes the first positional argument to a configuration file path.
 - **Type-Safe DI:** Inject fully-configured objects directly into command signatures based on type hints.
 - **Default Command Redirection:** Support running a default command if no subcommand is provided.

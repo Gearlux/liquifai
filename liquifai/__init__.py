@@ -3,7 +3,7 @@ Liquify: A streamlined, type-safe application framework.
 
 Top-level imports are lazy via :pep:`562` ``__getattr__`` so importing
 ``liquifai.completion`` (or the ``liquifai-complete`` fast-path entry) does
-not pay the cost of pulling in confluid / logflow / rich.
+not pay the cost of pulling in confluid / loggair / rich.
 """
 
 from typing import TYPE_CHECKING, Any
