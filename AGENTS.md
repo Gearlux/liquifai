@@ -1,6 +1,6 @@
 # Liquify Mandates
 
-- **Zero Boilerplate:** Application startup MUST automatically initialize **LogFlow** logging and **Confluid** configuration. Users should never write bootstrap code.
+- **Zero Boilerplate:** Application startup MUST automatically initialize **Loggair** logging and **Confluid** configuration. Users should never write bootstrap code.
 - **Type-Safe DI:** Command function signatures define the dependency contract. Liquify MUST resolve dependencies from Confluid config by inspecting type annotations.
 - **Bootstrap Lifecycle:** The 5-phase lifecycle (parse globals, init context, configure logging, load config, execute) MUST remain strict and sequential. Never skip or reorder phases.
 - **Config Promotion:** If the first CLI argument is not a registered command, it MUST be treated as a config file path. This convention is non-negotiable.

@@ -2,7 +2,7 @@
 
 Registered as the ``liquifai-complete`` console script. Imports only
 stdlib + :mod:`liquifai.completion` (which itself avoids touching
-``liquifai.core`` so logflow / confluid / rich never load on the hot path).
+``liquifai.core`` so loggair / confluid / rich never load on the hot path).
 
 Wire protocol: the shell wrapper sets either ``COMP_LINE`` + ``COMP_POINT`` (the
 raw command line + cursor offset — bash, quote-aware) OR ``COMP_WORDS`` +
