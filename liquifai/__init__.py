@@ -8,11 +8,23 @@ not pay the cost of pulling in confluid / loggair / rich.
 
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["LiquifyApp", "LiquifyContext", "get_context", "set_context", "make_mcp_tools", "Presentation"]
+__all__ = [
+    "LiquifyApp",
+    "LiquifyContext",
+    "get_context",
+    "set_context",
+    "make_mcp_tools",
+    "Presentation",
+    "LiquifaiError",
+    "CommandDefinitionError",
+    "UnknownOperationError",
+    "UnsupportedShellError",
+]
 
 if TYPE_CHECKING:
     from liquifai.context import LiquifyContext, get_context, set_context
     from liquifai.core import LiquifyApp, Presentation
+    from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError, UnsupportedShellError
     from liquifai.tools import make_mcp_tools
 
 
@@ -33,4 +45,8 @@ def __getattr__(name: str) -> Any:
         from liquifai.core import Presentation
 
         return Presentation
+    if name in ("LiquifaiError", "CommandDefinitionError", "UnknownOperationError", "UnsupportedShellError"):
+        from liquifai import exceptions
+
+        return getattr(exceptions, name)
     raise AttributeError(f"module 'liquifai' has no attribute {name!r}")

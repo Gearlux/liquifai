@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from liquifai.context import LiquifyContext, set_context
+from liquifai.exceptions import CommandDefinitionError, UnknownOperationError
 
 FlowMode = Literal["manual", "auto"]
 
@@ -215,7 +216,7 @@ class LiquifyApp:
             cmd_name = name or f.__name__.replace("_", "-")
 
             if presentation is not None and presentation not in get_args(Presentation):
-                raise ValueError(
+                raise CommandDefinitionError(
                     f"@command({f.__name__!r}): presentation must be one of "
                     f"{get_args(Presentation)!r}, got {presentation!r}"
                 )
@@ -278,7 +279,7 @@ class LiquifyApp:
                 positionals.
         """
         if flow_mode not in ("manual", "auto"):
-            raise ValueError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
+            raise CommandDefinitionError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             cmd_name = name or f.__name__.replace("_", "-")
@@ -333,7 +334,7 @@ class LiquifyApp:
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             if presentation is not None and presentation not in get_args(Presentation):
-                raise ValueError(
+                raise CommandDefinitionError(
                     f"@operation({f.__name__!r}): presentation must be one of "
                     f"{get_args(Presentation)!r}, got {presentation!r}"
                 )
@@ -371,11 +372,12 @@ class LiquifyApp:
         :meth:`build_commands` so the generated CLI handler carries the providers.
 
         Raises:
-            KeyError: if ``op_name`` is not a registered operation.
+            liquifai.exceptions.UnknownOperationError: (a ``KeyError``) if
+                ``op_name`` is not a registered operation.
         """
         fn = self._operations.get(op_name)
         if fn is None:
-            raise KeyError(f"{self.name}: no registered operation {op_name!r}")
+            raise UnknownOperationError(f"{self.name}: no registered operation {op_name!r}")
         meta = getattr(fn, "__liquifai_op_metadata__", None)
         if not isinstance(meta, dict):
             meta = {}

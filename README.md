@@ -48,6 +48,18 @@ if __name__ == "__main__":
     app.run()
 ```
 
+## Error Handling
+
+Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits the builtin it replaces, so pre-existing `except ValueError:` / `except KeyError:` code keeps working unchanged:
+
+| Exception | Also a | Raised when |
+|---|---|---|
+| `CommandDefinitionError` | `ValueError` | a `@command` / `@script_command` / `@operation` declaration is invalid (bad `presentation` / `flow_mode`) |
+| `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
+| `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
+
+Configuration-loading failures propagate Confluid's own hierarchy (`confluid.ConfluidError` and subclasses) — `LiquifaiError` covers CLI-definition errors only.
+
 ## Installation
 ```bash
 pip install git+https://github.com/Gearlux/liquifai.git@main
