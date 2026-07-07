@@ -35,6 +35,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
+# Pure-stdlib module — safe for the ``liquifai-complete`` fast path, which must
+# never pull in confluid/loggair/rich (see the completion mandate).
+from liquifai.exceptions import UnsupportedShellError
+
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
@@ -640,7 +644,7 @@ _HELPERS_END_MARKER = "# <<< liquifai shared helpers <<<"
 def render_script(prog: str, shell: str) -> str:
     """Render the shell completion script for ``prog`` in ``shell``."""
     if shell not in SHELLS:
-        raise ValueError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
+        raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
     template = {"bash": _BASH_TEMPLATE, "zsh": _ZSH_TEMPLATE, "fish": _FISH_TEMPLATE}[shell]
     return template.replace("{prog}", prog)
 
@@ -650,7 +654,7 @@ def render_helpers(shell: str) -> str:
     if shell == "fish":
         return ""
     if shell not in ("bash", "zsh"):
-        raise ValueError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
+        raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
     return _BASH_HELPERS if shell == "bash" else _ZSH_HELPERS
 
 
@@ -695,7 +699,7 @@ def install_script(
     Returns the path that was created or modified.
     """
     if shell not in SHELLS:
-        raise ValueError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
+        raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
     home = home or Path.home()
 
     if shell == "fish":
