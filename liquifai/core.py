@@ -876,14 +876,19 @@ class LiquifyApp:
                 if isinstance(config_block, Fluid):
                     # User wrote `name: !class:...` — the Fluid already carries
                     # the full kwargs; materialize it directly so its payload
-                    # isn't discarded by the marker-dict path below.
+                    # isn't discarded by the synthesized-Instance path below.
                     kwargs[name] = materialize(config_block, context=self.context.config_data)
                 else:
-                    marker_dict = {
-                        "_confluid_class_": cls_name,
-                        **(config_block if isinstance(config_block, dict) else {}),
-                    }
-                    kwargs[name] = materialize(marker_dict, context=self.context.config_data)
+                    # Synthesize an Instance Fluid for the annotated class
+                    # (kwargs assigned post-construction so a config key
+                    # literally named ``target`` can't collide with the Fluid
+                    # ctor's own parameter). Confluid's IR is Fluid objects —
+                    # the legacy ``{"_confluid_class_": ...}`` marker dicts
+                    # are gone.
+                    instance = confluid.Instance(cls_name)
+                    if isinstance(config_block, dict):
+                        instance.kwargs.update(config_block)
+                    kwargs[name] = materialize(instance, context=self.context.config_data)
             else:
                 # Non-configurable: Resolve from context data or use default
                 if isinstance(cfg, dict) and name in cfg:
