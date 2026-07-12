@@ -1024,28 +1024,22 @@ class LiquifyApp:
 
 @contextmanager
 def _confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
-    """Activate confluid's thread-local context so bare ``flow()`` resolves ``!ref:``.
+    """Activate confluid's context so bare ``flow()`` resolves ``!ref:``.
 
     ``materialize()`` already does this internally, but liquifai's deep-flow
     runs *after* ``_resolve_kwargs`` has returned (with confluid's context
     restored). For non-configurable parameters whose YAML values contain
     nested ``!ref:`` markers, we need the context active again during the
     deep-flow walk — otherwise references silently fail to resolve.
-    """
-    from confluid.loader import _state
 
-    old_ctx = getattr(_state, "context", None)
-    old_flow_memo = getattr(_state, "flow_memo", None)
-    old_instance_memo = getattr(_state, "instance_memo", None)
-    _state.context = context_data
-    _state.flow_memo = {}
-    _state.instance_memo = {}
-    try:
+    Thin wrapper over the public :func:`confluid.active_context` (which this
+    helper predates — it used to reach into confluid's engine state directly).
+    Kept under its historical name for existing callers/tests.
+    """
+    from confluid import active_context
+
+    with active_context(context_data):
         yield
-    finally:
-        _state.context = old_ctx
-        _state.flow_memo = old_flow_memo
-        _state.instance_memo = old_instance_memo
 
 
 def _deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
