@@ -6,10 +6,53 @@ introspect live annotation objects on tool parameters.
 
 import functools
 import inspect
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple, Union, cast
 
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
+
+
+def split_context_param(
+    op_func: Callable[..., Any], context_param: str = "conn"
+) -> Tuple[inspect.Signature, List[inspect.Parameter]]:
+    """Return ``op_func``'s signature and its parameters minus the context one.
+
+    The shared first step of wrapping an operation for an outward surface
+    (CLI handler in :meth:`liquifai.core.LiquifyApp.build_commands`, MCP tool
+    in :func:`make_mcp_tools`): the ``conn`` context parameter is supplied by
+    the wrapper's context factory, never by the caller, so it is stripped
+    from the advertised parameter list.
+    """
+    sig = inspect.signature(op_func)
+    params = [p for n, p in sig.parameters.items() if n != context_param]
+    return sig, params
+
+
+def graft_signature(
+    fn: Callable[..., Any],
+    op_sig: inspect.Signature,
+    params: List[inspect.Parameter],
+    *,
+    return_annotation: Any,
+    extra_params: Sequence[inspect.Parameter] = (),
+) -> None:
+    """Stamp ``fn`` with a synthesized ``__signature__`` / ``__annotations__``.
+
+    The shared second step: introspection consumers (FastMCP JSON-Schema
+    generation, liquifai's own DI/help/completion walkers) read the wrapper's
+    signature, so it must advertise ``extra_params`` (e.g. context-factory
+    params) followed by the operation's own ``params``. Extra params fall
+    back to ``Any`` when unannotated (a factory is often a lambda).
+    """
+    extra = list(extra_params)
+    fn.__signature__ = op_sig.replace(  # type: ignore[attr-defined]
+        parameters=extra + params, return_annotation=return_annotation
+    )
+    fn.__annotations__ = {
+        **{p.name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any) for p in extra},
+        **{p.name: p.annotation for p in params if p.annotation is not inspect.Parameter.empty},
+        "return": return_annotation,
+    }
 
 
 def make_mcp_tools(
@@ -79,10 +122,7 @@ def make_mcp_tools(
     tools: List[Callable[..., Dict[str, Any]]] = []
 
     for _op_name, op_func in ops_items:
-        op_sig = inspect.signature(op_func)
-        op_params = [p for n, p in op_sig.parameters.items() if n != "conn"]
-        new_params = factory_params + op_params
-        new_sig = op_sig.replace(parameters=new_params, return_annotation=Dict[str, Any])
+        op_sig, op_params = split_context_param(op_func)
 
         # Capture loop variables — Python closures capture by reference.
         def _make_tool(
@@ -109,14 +149,7 @@ def make_mcp_tools(
             return tool
 
         tool = _make_tool()
-        tool.__signature__ = new_sig  # type: ignore[attr-defined]
-        tool.__annotations__ = {
-            # Include every factory param; fall back to Any when the factory
-            # (e.g. a lambda) carries no annotation.
-            **{p.name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any) for p in factory_params},
-            **{p.name: p.annotation for p in op_params if p.annotation is not inspect.Parameter.empty},
-            "return": Dict[str, Any],
-        }
+        graft_signature(tool, op_sig, op_params, return_annotation=Dict[str, Any], extra_params=factory_params)
         tools.append(tool)
 
     return tools

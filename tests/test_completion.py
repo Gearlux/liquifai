@@ -676,27 +676,9 @@ def test_complete_signature_union_with_config(tmp_path: Path) -> None:
 # ------------------------ end-to-end via LiquifyApp ----------------------
 
 
-def test_app_emits_completion_via_env(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
-    monkeypatch.setenv("_MYAPP_COMPLETE", "complete_bash")
-    monkeypatch.setenv("COMP_WORDS", "myapp gr")
-    monkeypatch.setenv("COMP_CWORD", "1")
-    monkeypatch.setattr(sys, "argv", ["myapp"])
-    set_context(None)  # type: ignore[arg-type]
-
-    with pytest.raises(SystemExit) as exc:
-        app.run()
-    assert exc.value.code == 0
-    captured = capsys.readouterr()
-    lines = [ln for ln in captured.out.splitlines() if ln]
-    assert "greet" in lines
-    assert "group" in lines
-    assert "train" not in lines
-
-
 def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     app.run()
@@ -716,7 +698,6 @@ def test_app_show_completion_tolerates_cache_write_failure(app: LiquifyApp, caps
     must still be printed — script output is the primary contract,
     cache-priming is a best-effort side effect."""
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     def boom(_self: Any) -> Path:
@@ -734,7 +715,6 @@ def test_app_install_completion_writes_rc_and_cache(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--install-completion", "zsh"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     app.run()
@@ -743,11 +723,6 @@ def test_app_install_completion_writes_rc_and_cache(
     assert "liquifai-complete myapp" in rc.read_text()
     cache = tmp_path / "cache" / "liquifai" / "myapp.json"
     assert cache.exists()
-
-
-def test_completion_env_var_normalizes_dashes() -> None:
-    a = LiquifyApp(name="my-app")
-    assert a._completion_env_var() == "_MY_APP_COMPLETE"
 
 
 # ------------- install_script with target_rc (workspace-local rc) -------------
@@ -823,7 +798,8 @@ def _make_stub_script(path: Path, exit_code: int, stdout: str) -> None:
     path.chmod(0o755)
 
 
-def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -855,7 +831,8 @@ def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> Non
     assert found == ["marainer"]
 
 
-def test_install_for_apps_auto_discover(tmp_path: Path) -> None:
+def test_install_for_apps_auto_discover(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -880,13 +857,15 @@ def test_install_for_apps_auto_discover(tmp_path: Path) -> None:
     assert "_ls-fake_completion" not in body
 
 
-def test_discover_liquifai_apps_missing_bindir(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_missing_bindir(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == []
 
 
-def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path, monkeypatch: Any) -> None:
     """Concurrent probing must still yield names in deterministic (sorted) bin
     order, regardless of which probe thread finishes first."""
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -898,6 +877,60 @@ def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path) -> None:
             stdout=f"_{app}_completion() {{ :; }}; liquifai-complete {app}",
         )
     assert comp.discover_liquifai_apps(prefix=prefix) == ["alpha", "mid", "zebra"]
+
+
+# ----------------- entry-point-group discovery (liquifai.apps) -----------------
+
+
+class _FakeEp:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def test_declared_liquifai_apps_reads_entry_point_group(monkeypatch: Any) -> None:
+    import importlib.metadata as md
+
+    monkeypatch.setattr(
+        md,
+        "entry_points",
+        lambda group: [_FakeEp("zeta"), _FakeEp("alpha"), _FakeEp("alpha")] if group == "liquifai.apps" else [],
+    )
+    assert comp.declared_liquifai_apps() == ["alpha", "zeta"]
+
+
+def test_declared_liquifai_apps_metadata_failure_is_empty(monkeypatch: Any) -> None:
+    import importlib.metadata as md
+
+    def boom(group: str) -> Any:
+        raise RuntimeError("corrupt metadata")
+
+    monkeypatch.setattr(md, "entry_points", boom)
+    assert comp.declared_liquifai_apps() == []
+
+
+def test_discover_returns_declared_without_probing(tmp_path: Path, monkeypatch: Any) -> None:
+    """A declared app is NEVER probed — even when its binary is present —
+    and discovery still probes the undeclared remainder."""
+    prefix = tmp_path / "venv"
+    bindir = prefix / "bin"
+    bindir.mkdir(parents=True)
+    # Declared app: a binary that would FAIL the probe (exit 2). If discovery
+    # probed it anyway, it would drop out — its presence in the result proves
+    # the declared tier bypasses probing.
+    _make_stub_script(bindir / "declared-app", exit_code=2, stdout="")
+    # Undeclared genuine liquifai app: must still be found via the probe.
+    _make_stub_script(
+        bindir / "legacy-app",
+        exit_code=0,
+        stdout="_legacy-app_completion() { :; }; liquifai-complete legacy-app",
+    )
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: ["declared-app"])
+    assert comp.discover_liquifai_apps(prefix=prefix) == ["declared-app", "legacy-app"]
+
+
+def test_discover_missing_bindir_still_returns_declared(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: ["only-declared"])
+    assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == ["only-declared"]
 
 
 # --------------------------- CLI: --target-rc entry ---------------------------
@@ -1458,7 +1491,9 @@ def test_complete_lazy_refresh_called_when_stale(iso_cache: Path, monkeypatch: p
     root = _app_with_dependent()
     comp.refresh_value_caches(root)
     tree = comp.serialize_app(root)
-    monkeypatch.setattr(comp, "DEPENDENT_REFRESH_TTL", -1.0)  # treat any cache as stale
+    # The engine reads refresh policy late through the cache MODULE, so the
+    # patch targets the owning submodule (comp.cache), not the package re-export.
+    monkeypatch.setattr(comp.cache, "DEPENDENT_REFRESH_TTL", -1.0)  # treat any cache as stale
     calls = []
     out = comp.complete_from_tree(
         tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
@@ -1489,7 +1524,7 @@ def test_run_refresh_completion_value_flag(iso_cache: Path, monkeypatch: pytest.
 
 def test_lazy_spawner_opt_out_and_throttle(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     popen_calls = []
-    monkeypatch.setattr(comp.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
     spawn = comp.make_lazy_refresh_spawner("sairen")
 
     # Opt-out env → no spawn.
@@ -1545,7 +1580,7 @@ def test_notice_shown_when_self_heal_changes_values(iso_cache: Path, monkeypatch
     # Typing a real prefix drops the notice (it's a `<…>` hint).
     assert comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", "1"], cword=4) == ["1.0"]
     # The notice ages out after the window.
-    monkeypatch.setattr(comp, "DEPENDENT_NOTICE_WINDOW", 0.0)
+    monkeypatch.setattr(comp.cache, "DEPENDENT_NOTICE_WINDOW", 0.0)
     assert "<version-updated>" not in comp.complete_from_tree(
         tree, ["sairen", "dataset", "download", "alpha", ""], cword=4
     )

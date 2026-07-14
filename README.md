@@ -48,6 +48,32 @@ if __name__ == "__main__":
     app.run()
 ```
 
+## CLI Overrides
+
+Any token left after the command, positionals, and global flags is parsed as a
+config override. All forms interoperate in one invocation:
+
+| Form | Example | Effect |
+|---|---|---|
+| `--key value` | `--max_epochs 10` | set `max_epochs` (broadcast into matching nested configs) |
+| `--key=value` | `--trainer.lr=0.001` | equals form; dotted keys target nested blocks |
+| `key=value` | `model.dropout=0.2` | bare form, no dashes |
+| `--key+` / `--key-` | `--debug+` | polarity: explicit `True` / `False` |
+| `--key` | `--verbose` | implicit `True` |
+| `+key=value` | `+new_feature=true` | add a new key |
+| `~key` | `~trainer.stale` | delete the dotted key from the config |
+
+A token that matches **none** of these forms is not applied and liquifai logs a
+**warning** naming it (`Ignoring unrecognized CLI token 'lr' — expected one of:
+…`). Previously such tokens were dropped silently — a typo'd `lr 0.1` instead
+of `--lr 0.1` would run the whole job on defaults without a trace.
+
+The single source of truth for the global-flag vocabulary and token
+classification is `liquifai/grammar.py` (stdlib-only); the parser, `--help`,
+and shell completion all derive from it, so they cannot drift apart. Override
+parsing/application lives in `liquifai/overrides.py`, and annotation-driven
+dependency injection in `liquifai/di.py`.
+
 ## Error Handling
 
 Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits the builtin it replaces, so pre-existing `except ValueError:` / `except KeyError:` code keeps working unchanged:
@@ -60,7 +86,25 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 
 Configuration-loading failures propagate Confluid's own hierarchy (`confluid.ConfluidError` and subclasses) — `LiquifaiError` covers CLI-definition errors only.
 
+### CLI failure contract
+
+When a command runs via `app.run()`:
+
+| Failure | Behavior | Exit code |
+|---|---|---|
+| `LiquifaiError` or `confluid.ConfluidError` (bad config, unresolvable class, invalid declaration) | One clean `Error: …` line on the console; full traceback written to the log file at DEBUG | 1 |
+| Same, with `--debug` on the line | The exception **propagates** — full traceback on the console | (Python default) |
+| Missing `--config` file | Dedicated `Configuration file not found` message | 1 |
+| Unknown command/group | `Unknown command or group` (or help when no default command exists) | 1 |
+| Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
+
 ## Installation
+```bash
+pip install liquifai                     # from PyPI
+```
+
+Or straight from GitHub:
+
 ```bash
 pip install git+https://github.com/Gearlux/liquifai.git@main
 ```
@@ -139,14 +183,32 @@ liquifai-install-completions --target-rc ./.project.bashrc.completion marainer a
 #   [ -f ./.project.bashrc.completion ] && source ./.project.bashrc.completion
 ```
 
-Auto-discovery probes each executable in `sys.prefix/bin` with
-`--show-completion bash` and keeps the ones that emit Liquifai's completion
-marker. A Liquifai app handles that flag early, but a heavy app still imports
-its full stack (torch, Lightning, …) at module load *before* the handler
-runs, so an individual probe is **not** cheap. Discovery therefore runs the
-probes concurrently (a small bounded thread pool) so a populated ML venv
-resolves in tens of seconds instead of minutes. The aisland workspace runs
-this step as part of `bash aisland/setup.sh`.
+Auto-discovery has two tiers:
+
+1. **Entry-point group (preferred — instant).** An app declares itself in the
+   `liquifai.apps` entry-point group; discovery then reads it straight from
+   installed dist metadata (milliseconds, deterministic, immune to probe
+   timeouts):
+
+   ```toml
+   # pyproject.toml — name = the app/binary name, value = the LiquifyApp instance
+   [project.entry-points."liquifai.apps"]
+   marainer = "marainer.cli:app"
+   ```
+
+   Entry-point changes need an (editable) reinstall to become visible — the
+   same rule as `confluid.configurables`.
+
+2. **Probe fallback (slow — for apps that haven't opted in).** Remaining
+   executables in `sys.prefix/bin` are probed with `--show-completion bash`,
+   keeping the ones that emit Liquifai's completion marker. A Liquifai app
+   handles that flag early, but a heavy app still imports its full stack
+   (torch, Lightning, …) at module load *before* the handler runs, so an
+   individual probe is **not** cheap. The probes run concurrently (a small
+   bounded thread pool) so a populated ML venv resolves in tens of seconds
+   instead of minutes.
+
+The aisland workspace runs this step as part of `bash aisland/setup.sh`.
 
 ### Dynamic positional values (complete `<name>` from a live source)
 
