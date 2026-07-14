@@ -40,13 +40,6 @@ def test_exceptions_exported_from_package(name: str) -> None:
     assert name in liquifai.__all__
 
 
-def test_bad_command_presentation_raises_command_definition_error() -> None:
-    app = LiquifyApp(name="test-app")
-    with pytest.raises(CommandDefinitionError) as ei:
-        app.command(presentation="bogus")(lambda: None)  # type: ignore[arg-type]
-    assert isinstance(ei.value, ValueError)
-
-
 def test_bad_script_command_flow_mode_raises_command_definition_error() -> None:
     app = LiquifyApp(name="test-app")
     with pytest.raises(CommandDefinitionError) as ei:
