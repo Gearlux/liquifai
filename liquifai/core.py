@@ -19,7 +19,7 @@ from liquifai.overrides import expand_strings, parse_override_args
 
 FlowMode = Literal["manual", "auto"]
 
-#: Valid values for the ``presentation`` parameter of :meth:`LiquifyApp.command`.
+#: Valid values for the ``presentation`` parameter of :meth:`LiquifyApp.operation`.
 Presentation = Literal["list", "fields", "status"]
 
 console = Console()
@@ -69,7 +69,7 @@ class LiquifyApp:
         self._script_cmds: Set[str] = set()
         # Named operations: consumers (MCP server, agent, configure_app) read this
         # to auto-generate tools/commands without boilerplate. Populated by
-        # @app.operation() and @app.command(..., presentation=...).
+        # @app.operation().
         self._operations: Dict[str, Callable[..., Any]] = {}
         # Hooks registered by consumers (e.g. sairen) to wire context injection
         # and result presentation into auto-generated CLI commands and MCP tools.
@@ -94,7 +94,7 @@ class LiquifyApp:
     def set_context_factory(self, fn: Callable[[], Any]) -> Callable[[], Any]:
         """Register a no-arg factory that builds the context object (e.g. a connection).
 
-        When a command with ``presentation=`` is invoked via the CLI, the generated
+        When an :meth:`operation`-generated CLI command is invoked, the generated
         handler calls this factory to obtain the context it passes as the first argument
         to the underlying operation.  Typically the factory reads from
         :func:`liquifai.get_context` so CLI config (``--server``, ``--dry_run``, …)
@@ -197,83 +197,45 @@ class LiquifyApp:
         name: Optional[str] = None,
         default: bool = False,
         positionals: Optional[List[str]] = None,
-        presentation: Optional[Presentation] = None,
         completions: Optional[Dict[str, Callable[..., Any]]] = None,
-        **metadata: Any,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register a command.
+        """Register a command: the decorated function is the full CLI handler.
 
-        When called **without** ``presentation`` this behaves exactly as before:
-        the decorated function is the full CLI handler, stored in ``_commands``.
-
-        When called **with** ``presentation`` the function is treated as a *pure
-        operation*: it is stored in ``_operations`` (for MCP / agent discovery)
-        and the CLI handler is **not** registered here — the caller is expected to
-        call ``configure_app()`` (or equivalent) to wire the handler after the
-        app-level hooks (:meth:`set_context_factory`, :meth:`set_presenter`) are
-        set.  The ``cmd_name`` is stored in ``__liquifai_op_metadata__`` so
-        ``configure_app`` can register the correct CLI name without re-deriving it.
+        For *pure operations* (functions returning data, rendered by an
+        app-level presenter and surfaced as MCP tools) use :meth:`operation`
+        instead — the former ``@command(presentation=...)`` dual-mode was
+        removed in favour of that single registration path.
 
         Args:
             name: Override the CLI name. Defaults to the function name with
                 underscores replaced by hyphens.
             default: Make this the group's default command (runs when no
-                command token is given). Ignored when ``presentation`` is set.
-            positionals: Explicit ordered positional-argument names. When
-                ``presentation`` is set, positionals are derived from the
-                signature instead (no-default keyword params); this arg is
-                stored for backward compatibility but ignored by
-                ``configure_app``.
-            presentation: When provided (``"list"``, ``"fields"``, or
-                ``"status"``), the function is registered as a pure operation.
-                Leading non-flag tokens after the command name are
-                bound, in order, to these names as string values in the config
-                (so DI resolves the matching command-function parameters).
-                ``download`` with ``positionals=["name", "version"]`` lets the
-                user write ``app download foo 1.0`` instead of
+                command token is given).
+            positionals: Explicit ordered positional-argument names. Leading
+                non-flag tokens after the command name are bound, in order, to
+                these names as string values in the config (so DI resolves the
+                matching command-function parameters). ``download`` with
+                ``positionals=["name", "version"]`` lets the user write
+                ``app download foo 1.0`` instead of
                 ``app download --name foo --version 1.0`` — both forms work, and
                 consumption stops at the first ``--flag`` / ``+add`` / ``~del``
                 / ``key=value`` token. Values are bound verbatim as strings; a
                 command that needs another type coerces in its body.
-            **metadata: Opaque metadata forwarded to ``__liquifai_op_metadata__``
-                when ``presentation`` is set (e.g. ``columns``, ``title``,
-                ``empty``). Ignored for plain commands.
+            completions: ``{positional: provider}`` value providers (Q2 dynamic
+                completion) attached to the handler.
         """
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             cmd_name = name or f.__name__.replace("_", "-")
-
-            if presentation is not None and presentation not in get_args(Presentation):
-                raise CommandDefinitionError(
-                    f"@command({f.__name__!r}): presentation must be one of "
-                    f"{get_args(Presentation)!r}, got {presentation!r}"
-                )
-
-            if presentation is not None:
-                # Pure-operation path: store in _operations so configure_app,
-                # make_mcp_tools, and the agent can discover it. The cmd_name is
-                # baked into metadata so configure_app registers the right CLI name.
-                op_name = f.__name__
-                self._operations[op_name] = f
-                setattr(f, "__liquifai_operation__", op_name)
-                setattr(f, "__liquifai_positionals__", list(positionals or []))
-                setattr(f, "__liquifai_completions__", dict(completions or {}))
-                setattr(
-                    f,
-                    "__liquifai_op_metadata__",
-                    {"presentation": presentation, "cmd_name": cmd_name, **metadata},
-                )
-            else:
-                self._commands[cmd_name] = f
-                # Stored on the function (like ``__liquifai_flow_mode__``) so both
-                # run() and _show_help() can read it without a per-app registry.
-                setattr(f, "__liquifai_positionals__", list(positionals or []))
-                # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
-                # completion). Read by completion.serialize_app / iter_completion_providers.
-                setattr(f, "__liquifai_completions__", dict(completions or {}))
-                if default:
-                    self._default_cmd = f
-
+            self._commands[cmd_name] = f
+            # Stored on the function (like ``__liquifai_flow_mode__``) so both
+            # run() and _show_help() can read it without a per-app registry.
+            setattr(f, "__liquifai_positionals__", list(positionals or []))
+            # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
+            # completion). Read by completion.serialize_app / iter_completion_providers.
+            setattr(f, "__liquifai_completions__", dict(completions or {}))
+            if default:
+                self._default_cmd = f
             return f
 
         return decorator
