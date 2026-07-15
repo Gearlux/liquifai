@@ -527,6 +527,12 @@ class LiquifyApp:
         if self._maybe_handle_refresh_completions(sys.argv[1:]):
             return None
 
+        # App identity for confluid's XDG config search: relative config
+        # paths (promoted tokens, --config, include: entries) resolve under
+        # ~/.config/<app>/ before ~/.config/confluid/. run() executes only on
+        # the root app, so sub-apps never clobber it.
+        confluid.set_app_name(self.name)
+
         argv = sys.argv[1:]
 
         # 1. IDENTIFY COMMAND, GROUP & PROMOTION
@@ -602,6 +608,10 @@ class LiquifyApp:
                 i += 1
                 if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
                     cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
+                    # Resolve through confluid's search tiers (./ -> ./config/
+                    # -> XDG dirs) so `myapp train myexp` finds e.g.
+                    # ~/.config/myapp/myexp.yaml, not only a CWD file.
+                    cp = confluid.resolve_config_path(cp)
                     if cp.exists():
                         config_path, i = cp, i + 1
                 # Consume leading positional tokens declared via
@@ -641,6 +651,11 @@ class LiquifyApp:
         final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(inv.remaining_argv)
         if final_config_path:
             config_path = final_config_path
+        if config_path is not None:
+            # Resolve once through confluid's search tiers so the context,
+            # the not-found error, and the "Loaded configuration from:" line
+            # all show the REAL file (possibly an XDG one).
+            config_path = confluid.resolve_config_path(config_path)
 
         # 3b. BIND DIMENSION FLAGS — raw-load the config (if any) to discover
         # which `--KEY` flags should activate scope dimensions, then re-parse
@@ -914,6 +929,9 @@ class LiquifyApp:
         read-only introspection).
         """
         if self.context is None:
+            # Same XDG-lookup identity as run() — lazy introspection must
+            # resolve relative config paths the way a real run would.
+            confluid.set_app_name(self.name)
             ctx = LiquifyContext(
                 name=self.name,
                 config_path=config_path,

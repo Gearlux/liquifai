@@ -18,7 +18,7 @@ Each topic has its own guide, and every guide has a runnable companion script in
 
 | Guide | What it covers | Example |
 |---|---|---|
-| [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion, DI block lookup, positional arguments, flow modes | `positionals_app.py` et al. |
+| [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion (with `./config/` + XDG search paths), DI block lookup, positional arguments, flow modes | `positionals_app.py` et al. |
 | [CLI Overrides](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md) | The override grammar (`--key value`, dotted keys, polarity, add/delete) and the dropped-token warning | `overrides_app.py` |
 | [Global Flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md) | Log control (`--level`, `--log-dir`, …), `--scope` / dimension flags, `--debug`, `--docs` | `global_flags_app.py` |
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
