@@ -6,6 +6,12 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased] — 0.1.0, the first public release
 
+- **XDG config search paths**: relative config paths (promoted script-command
+  tokens and `--config` values) resolve through confluid's search tiers —
+  `./` → `./config/` → `~/.config/<app-name>/` → `~/.config/confluid/` →
+  `$XDG_CONFIG_DIRS` — with the confluid app name set to the running app's
+  name at startup. Note this makes config promotion more eager: a positional
+  token is consumed as a config path when a matching YAML exists in any tier.
 - **Core framework**: `LiquifyApp` with the strict 5-phase bootstrap
   lifecycle, `@command` / `@script_command` (config promotion, `flow_mode`),
   confluid-driven dependency injection, CLI overrides with broadcast,

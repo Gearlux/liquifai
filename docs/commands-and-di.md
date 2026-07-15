@@ -48,6 +48,16 @@ command runs. If the argument has no suffix, `<arg>.yaml` is tried — and if th
 **first CLI argument is not a registered command at all**, it is treated as a
 config path for the default command (so `my-app experiment.yaml` works).
 
+A relative config path (promoted token or `--config` value) resolves through
+confluid's search tiers, local first: `./` → `./config/` → the XDG config
+dirs (`~/.config/<app-name>/`, then `~/.config/confluid/`, then
+`$XDG_CONFIG_DIRS`). Liquifai sets the confluid app name to the running app's
+name at startup, so `my-app train myexp` finds `~/.config/my-app/myexp.yaml`
+when no local `myexp.yaml` exists. `include:` entries inside a config resolve
+the same way. See confluid's
+[Config-File Search Paths](https://github.com/Gearlux/confluid/blob/main/docs/search-paths.md)
+guide.
+
 ```python
 @app.script_command()
 def train(trainer: MyTrainer) -> None:
