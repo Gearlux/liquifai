@@ -24,6 +24,21 @@ Each topic has its own guide, and every guide has a runnable companion script in
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
 | [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md) | Install, aliases, workspace-local setup, dynamic & dependent positional values | `completion_providers.py` |
 
+For everything at once, [`examples/pypeek/`](https://github.com/Gearlux/liquifai/tree/main/examples/pypeek)
+is a complete, installable showcase app — a small PyPI query CLI whose
+`<package>` completes from your installed distributions (offline) and whose
+`<version>` completes from the live PyPI API (dependent completion with the
+background self-heal cache), plus the failure contract, override broadcast,
+and dry-run in action.
+
+Its counterpart [`examples/linefit/`](https://github.com/Gearlux/liquifai/tree/main/examples/linefit)
+is a **training-style** installable CLI (think Lightning CLI): `fit` /
+`validate` / `test` / `predict` script commands with config promotion, a YAML
+that instantiates the model/data/optimizer via confluid tags (the optimizer
+`!lazy:` until the run supplies the live model), dotted CLI overrides reaching
+any knob, and a `print-config` verb that dumps the fully-merged configuration
+as a reloadable recipe.
+
 ## Design Goals & Requirements
 
 ### CLI Framework

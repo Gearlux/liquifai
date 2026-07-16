@@ -6,6 +6,20 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased] — 0.1.0, the first public release
 
+- **`examples/linefit/` training-style showcase app**: an installable CLI in
+  the Lightning-CLI shape — `fit`/`validate`/`test`/`predict` script commands
+  with config promotion and signature DI, YAML `!class:`/`!lazy:` wiring of
+  model/data/optimizer (the optimizer deferred until the run supplies the live
+  model), dotted CLI overrides, an app-side `print-config` verb dumping the
+  merged config as a reloadable recipe, and the failure contract. Runs fully
+  offline; CI drives every verb via its `run.py` self-test (the
+  `examples/*/run.py` glob).
+- **`examples/pypeek/` showcase app**: a small, installable PyPI query CLI
+  demonstrating the whole surface end to end — operations → CLI (+ MCP), a
+  `@configurable` client with CLI override broadcast, static (installed
+  distributions, offline) + dependent (live PyPI versions) positional
+  completion with the lazy self-heal cache, the failure contract, dry-run,
+  and the `liquifai.apps` entry-point declaration.
 - **XDG config search paths**: relative config paths (promoted script-command
   tokens and `--config` values) resolve through confluid's search tiers —
   `./` → `./config/` → `~/.config/<app-name>/` → `~/.config/confluid/` →

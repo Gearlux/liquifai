@@ -114,3 +114,4 @@ promotion, `my-app experiment.yaml` too).
 - [`examples/simple_app.py`](../examples/simple_app.py) — a `@configurable` component + logger wiring.
 - [`examples/positionals_app.py`](../examples/positionals_app.py) — positional binding and its interop with flags.
 - [`examples/liquifai_app.py`](../examples/liquifai_app.py) — fuller confluid + loggair wiring.
+- [`examples/linefit/`](../examples/linefit/README.md) — an installable training-style CLI built on `@script_command`: config promotion, `flow_mode="auto"` with a `Lazy` optimizer, dotted overrides, and a `print-config` reproducibility verb.
