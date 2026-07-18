@@ -152,7 +152,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
             # ``Sample([input, target, metadata])`` wraps the entire triplet
             # into the ``input`` field with target/metadata at their defaults
             # — silently breaking any dataset whose elements are NamedTuples
-            # (most notably ``dataflux.sample.Sample``).
+            # (most notably ``sampleflux.sample.Sample``).
             if hasattr(type(value), "_fields"):
                 return type(value)(*out)
             return type(value)(out)
