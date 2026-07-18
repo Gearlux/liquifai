@@ -1136,6 +1136,169 @@ def test_positional_hint_filtered_by_partial_input() -> None:
 
 
 # ---------------------------------------------------------------------------
+# sairen `dataset version-create` regressions — positionals offered as flags,
+# boolean flags triggering the value-slot silence (file fallback), and
+# already-consumed flags being re-offered.
+# ---------------------------------------------------------------------------
+
+
+def _version_create_app() -> LiquifyApp:
+    """Mirror sairen's `dataset version-create` command shape end-to-end.
+
+    Registered through the REAL derivation path (`@operation` +
+    `build_commands()`), so required keyword-only params become positionals
+    exactly like the liquifai.bridge-synthesized sairen ops (`conn` first,
+    every real param KEYWORD_ONLY, required ones without a default).
+    """
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.operation(presentation="status")
+    def version_create(
+        conn: object,
+        *,
+        name: str,
+        source_version: str,
+        path: str = ".",
+        append: bool = False,
+        diff_only_upload: bool = False,
+        target_version: str = "",
+        description: str = "",
+    ) -> dict:
+        """Create a dataset version."""
+        return {}
+
+    sub.build_commands()
+    root.add_app(sub, "dataset")
+    return root
+
+
+#: The exact command line from the bug report, cursor at the trailing word.
+_VC_LINE = [
+    "sairen",
+    "dataset",
+    "version-create",
+    "helios_train_embeddings",
+    "1.0",
+    "--target_version",
+    "2.0",
+    "--append",
+    "",
+]
+
+
+def test_positional_not_offered_as_flag() -> None:
+    """A declared positional must never be advertised as a `--flag` — the flag
+    spelling still PARSES at runtime (positional/`key=value`/`--flag` interop),
+    it just isn't offered by TAB."""
+    out = comp.complete(_version_create_app(), ["sairen", "dataset", "version-create", "helios", ""], cword=4)
+    assert out[0] == "<source_version>"  # the positional hint is the advertisement
+    assert "--source_version" not in out
+    assert "--name" not in out
+    # The real options are still there.
+    assert "--target_version" in out
+    assert "--append" in out
+
+
+def test_positional_excluded_from_serialized_flags() -> None:
+    tree = comp.serialize_app(_version_create_app())
+    sub_tree = tree["sub_apps"]["dataset"]
+    assert sub_tree["positionals"]["version-create"] == ["name", "source_version"]
+    assert "source_version" not in sub_tree["signature_paths"]["version-create"]
+    assert "--source_version" not in sub_tree["signature_flags"]["version-create"]
+    assert "--target_version" in sub_tree["signature_flags"]["version-create"]
+
+
+def test_bool_flags_in_serialized_tree() -> None:
+    """The tree records which command flags are boolean (take no value), so the
+    stdlib-only fast path can tell `--append` from `--target_version`."""
+    tree = comp.serialize_app(_version_create_app())
+    bool_flags = tree["sub_apps"]["dataset"]["signature_bool_flags"]["version-create"]
+    assert "--append" in bool_flags
+    assert "--diff_only_upload" in bool_flags
+    assert "--target_version" not in bool_flags
+    assert "--path" not in bool_flags
+
+
+def test_bool_flag_then_tab_offers_remaining_flags() -> None:
+    """`… --target_version 2.0 --append <TAB>`: `--append` is boolean, so this
+    is NOT a value slot — offer the remaining flags instead of returning []
+    (which makes the shell fall back to filename completion)."""
+    out = comp.complete(_version_create_app(), _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--path" in out
+
+
+def test_consumed_flag_not_reoffered() -> None:
+    """Flags already typed on the line drop out of the candidate list."""
+    # `… --target_version 2.0 <TAB>` — flags are offered here even pre-fix,
+    # so this reproduces the re-offer on its own (not vacuously).
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", "2.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=7)
+    assert "--append" in out  # anchor: the flag branch is active
+    assert "--target_version" not in out
+    # And on the full bug-report line both consumed flags stay gone.
+    out = comp.complete(_version_create_app(), _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--target_version" not in out
+    assert "--append" not in out
+
+
+def test_value_flag_then_tab_still_silent() -> None:
+    """`… --target_version <TAB>` expects a value — the silence (shell file
+    completion) is still correct for value-taking flags."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert out == []
+
+
+def test_global_bool_flag_then_tab_not_silent() -> None:
+    """A global NON-value flag (`--debug`) before the cursor is not a value
+    slot either — completion keeps offering hints/flags."""
+    words = ["sairen", "dataset", "version-create", "--debug", ""]
+    out = comp.complete(_version_create_app(), words, cword=4)
+    assert "<name>" in out
+    assert "--target_version" in out
+
+
+def test_key_equals_value_prev_not_silent() -> None:
+    """`--key=value` is self-contained — the next word is not its value."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version=2.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert "--append" in out
+    assert "--target_version" not in out  # consumed via the equals form
+
+
+def test_polarity_prev_not_silent() -> None:
+    """`--key+` / `--key-` polarity forms are self-contained too."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--append+", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert "--target_version" in out
+    assert "--append" not in out  # consumed via the polarity form
+
+
+def test_flag_provided_positional_skips_hint() -> None:
+    """A positional supplied in its (still valid) `--flag` spelling counts as
+    filled — the hint moves past it."""
+    words = ["sairen", "dataset", "version-create", "helios", "--source_version", "1.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert not any(c.startswith("<") for c in out)
+
+
+def test_bool_flag_tab_after_cache_roundtrip(tmp_path: Path, monkeypatch: Any) -> None:
+    """The bool-flag info must survive the JSON cache round-trip (the fast path
+    reads the cached tree, never the live app)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    root = _version_create_app()
+    comp.write_cache(root)
+    tree = comp.read_cache("sairen")
+    assert tree is not None
+    out = comp.complete_from_tree(tree, _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--target_version" not in out
+
+
+# ---------------------------------------------------------------------------
 # Q2 — dynamic positional value completion (cached value providers)
 # ---------------------------------------------------------------------------
 

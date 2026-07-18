@@ -6,6 +6,17 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased] — 0.1.0, the first public release
 
+- **Completion/help treat positionals and boolean flags correctly**
+  (2026-07-16): a declared positional is advertised only by its
+  `<placeholder>`/cached-value hint — its `--flag` spelling no longer appears
+  in TAB candidates or the `--help` options table (which now renders a
+  dedicated "Positional Arguments" block); the spelling still parses. The
+  completion tree (cache v6) records `bool`-typed flags, so a store-true flag
+  (`--append`) no longer opens a value slot (which silenced completion and
+  made the shell fall back to filenames) — same for global non-value flags
+  and the self-contained `--key=value` / `--key+` / `--key-` forms. Options
+  already typed on the line drop out of the suggestions, and a positional
+  supplied via its flag spelling counts as filled for the hint.
 - **`examples/linefit/` training-style showcase app**: an installable CLI in
   the Lightning-CLI shape — `fit`/`validate`/`test`/`predict` script commands
   with config promotion and signature DI, YAML `!class:`/`!lazy:` wiring of
