@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.table import Table
@@ -9,6 +9,7 @@ def show_configuration(
     config_map: Optional[Dict[str, Any]] = None,
     title: str = "Available Configuration Options",
     layout: str = "table",
+    positionals: Optional[List[str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
@@ -31,11 +32,19 @@ def show_configuration(
     * ``"lines"``: one option per physical line (``--flag  type  = value  doc``),
       aligned and greppable / pipe-friendly — the ``--docs`` rendering. The
       extracted documentation is identical; only the presentation differs.
+
+    ``positionals`` (the command's declared positional names, in order) are
+    rendered as their own "Positional Arguments" block and EXCLUDED from the
+    options — mirroring completion, which never offers a positional as its
+    ``--flag`` spelling (the spelling still parses; it just isn't advertised).
     """
     from confluid import get_hierarchy, get_hierarchy_from_instance
 
+    pos_names = list(positionals or [])
+    _render_positionals(target, pos_names, layout)
+
     if _looks_like_flowed_graph(config_map):
-        hierarchy = get_hierarchy_from_instance(config_map)
+        hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
         if layout == "lines":
             _render_lines(hierarchy, title, flowed=True)
         else:
@@ -43,13 +52,15 @@ def show_configuration(
         return
 
     if layout == "lines":
-        _render_lines(get_hierarchy(target), title, flowed=False, config_map=config_map)
+        _render_lines(
+            _drop_positional_paths(get_hierarchy(target), pos_names), title, flowed=False, config_map=config_map
+        )
         return
 
     # Static-type path (legacy behaviour)
     from confluid import shortest_unique_paths
 
-    hierarchy = get_hierarchy(target)
+    hierarchy = _drop_positional_paths(get_hierarchy(target), pos_names)
     all_paths = list(hierarchy.keys())
     display_map = shortest_unique_paths(all_paths)
 
@@ -71,6 +82,57 @@ def show_configuration(
         if len(val_str) > 50:
             val_str = val_str[:47] + "..."
         table.add_row(f"--{short_path}", type_str, val_str, doc)
+    console.print(table)
+
+
+def _drop_positional_paths(hierarchy: Dict[str, Any], positionals: List[str]) -> Dict[str, Any]:
+    """Remove entries rooted at a declared positional from an options hierarchy."""
+    if not positionals:
+        return hierarchy
+    roots = set(positionals)
+    return {p: v for p, v in hierarchy.items() if p.split(".", 1)[0] not in roots}
+
+
+def _render_positionals(target: Any, positionals: List[str], layout: str) -> None:
+    """Render the command's positional arguments as their own block.
+
+    Type/doc come from the SAME :func:`confluid.get_hierarchy` extraction the
+    options use (a positional literally named ``name`` is skipped by
+    ``get_hierarchy`` — the confluid instance-identity key — so it renders with
+    no type/doc). Shown before the options in BOTH layouts so ``--help`` and
+    ``--docs`` stay data-identical.
+    """
+    if not positionals:
+        return
+    from confluid import get_hierarchy
+
+    try:
+        hierarchy = get_hierarchy(target)
+    except Exception:
+        hierarchy = {}
+
+    console = Console()
+    if layout == "lines":
+        from rich.markup import escape
+
+        console.print("\n[bold cyan]Positional Arguments[/bold cyan]")
+        name_w = max(len(p) + 2 for p in positionals)
+        type_w = max((len(str(hierarchy[p][0])) for p in positionals if p in hierarchy), default=0)
+        for p in positionals:
+            type_str, _default, doc = hierarchy.get(p, ("", None, ""))
+            console.print(
+                f"  [bold white]{f'<{p}>'.ljust(name_w)}[/bold white]"
+                f"  [dim cyan]{escape(str(type_str)).ljust(type_w)}[/dim cyan]  [dim]{escape(doc or '')}[/dim]"
+            )
+        return
+
+    table = Table(title="Positional Arguments", box=None, show_header=True, header_style="bold cyan")
+    table.add_column("Argument", style="bold white")
+    table.add_column("Type", style="dim cyan")
+    table.add_column("Documentation", style="dim white")
+    for p in positionals:
+        type_str, _default, doc = hierarchy.get(p, ("", None, ""))
+        table.add_row(f"<{p}>", str(type_str), doc or "")
     console.print(table)
 
 

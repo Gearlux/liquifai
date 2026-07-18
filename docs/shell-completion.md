@@ -21,6 +21,29 @@ keeps just enough prefix to disambiguate (`--model.lr` vs `--optim.lr`). Both
 the short flat form and the fully-dotted form work as overrides at runtime;
 completion only *suggests* the short one.
 
+**Positionals are advertised as `<placeholders>`, never as flags.** A declared
+positional (`create <name> <source_version>`) is hinted with `<name>` /
+`<source_version>` (or real cached values — see below) at its slot; its
+`--flag` spelling is *excluded* from both the completion candidates and the
+`--help` options table, which instead renders a dedicated "Positional
+Arguments" block. The flag and `key=value` spellings still **parse** at
+runtime (positional, `key=value`, and `--flag` forms interoperate) — they just
+aren't advertised. A positional supplied via its flag spelling counts as
+filled: the `<placeholder>` hint moves past it.
+
+**Completion is type- and state-aware at flag positions.**
+
+- A **boolean** flag (`append: bool = False` → `--append`, store-true) does
+  not open a value slot: `… --append <TAB>` keeps offering the remaining
+  flags. Only a *value-taking* flag (`--target_version <TAB>`) stays silent so
+  the shell's default filename completion can fill the value. Global boolean
+  flags (`--debug`) and the self-contained `--key=value` / `--key+` /
+  `--key-` forms behave the same way.
+- Flags **already typed** on the line drop out of the suggestions — in any of
+  the override grammar's spellings (`--key value`, `--key=value`,
+  `--key+`/`--key-`, `+key`, bare `key=value`). A repeated flag still parses
+  (last write wins); it just isn't offered again.
+
 > **Note:** the option flags are baked into a per-app cache
 > (`~/.cache/liquifai/<app>.json`) that is refreshed automatically every time
 > the app runs (including on `--help` and `--install-completion`). After

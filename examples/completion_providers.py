@@ -36,14 +36,16 @@ def dataset_versions(inputs: Dict[str, str]) -> List[str]:
     positionals=["name", "version"],
     completions={"name": dataset_names, "version": dataset_versions},
 )
-def download(name: str = "", version: str = "latest") -> None:
+def download(name: str = "", version: str = "latest", path: str = ".", overwrite: bool = False) -> None:
     """Pretend-download a dataset version.
 
     Args:
         name: Dataset name — TAB-completes from dataset_names().
         version: Version — TAB-completes per the typed name via dataset_versions().
+        path: Destination directory.
+        overwrite: Replace an existing download.
     """
-    print(f"RESULT name={name!r} version={version!r}")
+    print(f"RESULT name={name!r} version={version!r} path={path!r} overwrite={overwrite}")
 
 
 def demo() -> None:
@@ -54,6 +56,25 @@ def demo() -> None:
     print("At refresh time (`completion-demo --refresh-completions`) liquifai calls the")
     print("static provider once and PRE-ENUMERATES the dependent one per prior value;")
     print("the TAB hot path only ever reads the JSON caches under ~/.cache/liquifai/.")
+    print()
+
+    # Candidate semantics (engine is pure — drive it directly):
+    # positionals are hinted, never offered as flags; a bool flag doesn't open
+    # a value slot; already-typed flags drop out of the suggestions.
+    from liquifai import completion as comp
+
+    line = ["completion-demo", "download", "rfuav", "v1", ""]
+    flags = [
+        c
+        for c in comp.complete(app, line, cword=4)
+        if not c.startswith("-") or c in ("--path", "--overwrite", "--name", "--version")
+    ]
+    print("after both positionals (download rfuav v1 <TAB>):", flags)
+    print("  -> --name/--version are POSITIONALS: hinted, never offered as flags")
+    line = ["completion-demo", "download", "rfuav", "v1", "--overwrite", ""]
+    out = comp.complete(app, line, cword=5)
+    print("after the bool flag (… --overwrite <TAB>):", [c for c in out if c in ("--path", "--overwrite")])
+    print("  -> --overwrite is bool (no value slot) and, once typed, not re-offered")
 
 
 if __name__ == "__main__":
