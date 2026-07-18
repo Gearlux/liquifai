@@ -1,7 +1,7 @@
 """Regression test: ``_deep_flow`` must rebuild NamedTuples positionally.
 
 Repro for the bug surfaced by the navigaitor end-to-end smoke run, where a
-``dataflux.sample.Sample`` (a NamedTuple of ``(input, target, metadata)``)
+``sampleflux.sample.Sample`` (a NamedTuple of ``(input, target, metadata)``)
 stored in a source's ``__dict__`` got rebuilt as
 ``Sample(input=[input, target, metadata], target=None, metadata={})`` —
 i.e. the entire triplet was wrapped into the ``input`` field. The cause
@@ -15,7 +15,7 @@ from liquifai.core import _deep_flow
 
 
 class _Sample(NamedTuple):
-    """Mirrors dataflux.sample.Sample's NamedTuple shape."""
+    """Mirrors sampleflux.sample.Sample's NamedTuple shape."""
 
     input: Any
     target: Any = None
