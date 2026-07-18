@@ -117,6 +117,47 @@ def test_show_configuration_static_path_untouched() -> None:
     assert "--count" in out or "--label" in out or "--title" in out
 
 
+def _version_create_cmd(
+    name: str = "",
+    source_version: str = "",
+    target_version: str = "",
+    append: bool = False,
+) -> None:
+    """Create a dataset version.
+
+    Args:
+        name: Dataset name.
+        source_version: Version to create the new version from.
+        target_version: Version string for the new version.
+        append: Append to the source version's files.
+    """
+    return None
+
+
+def test_show_configuration_positionals_block_and_exclusion() -> None:
+    """Declared positionals render as their own block and vanish from the
+    options table — mirroring completion, which never offers a positional as
+    its ``--flag`` spelling (the spelling still parses at runtime)."""
+    out = _capture(show_configuration, _version_create_cmd, positionals=["name", "source_version"])
+    assert "Positional Arguments" in out
+    assert "<name>" in out
+    assert "<source_version>" in out
+    assert "Version to create the new version from." in out  # doc carried into the block
+    assert "--source_version" not in out
+    # Real options are untouched.
+    assert "--target_version" in out
+    assert "--append" in out
+
+
+def test_show_configuration_positionals_lines_layout_matches() -> None:
+    """The ``--docs`` lines layout carries the SAME positional block/exclusion."""
+    out = _capture(show_configuration, _version_create_cmd, layout="lines", positionals=["name", "source_version"])
+    assert "Positional Arguments" in out
+    assert "<source_version>" in out
+    assert "--source_version" not in out
+    assert "--target_version" in out
+
+
 def test_liquify_and_show_end_to_end(tmp_path: Path) -> None:
     """LiquifyApp.liquify + show_configuration produce the expected options."""
     # Confluid can only `!class:` resolve a module-importable path. Alias

@@ -23,6 +23,13 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v6: declared positionals are EXCLUDED from ``signature_paths`` /
+# ``signature_flags`` (a required positional was also offered as its ``--flag``
+# spelling — the spelling still parses, it is just no longer advertised), and
+# the new ``signature_bool_flags`` map records every spelling (collapsed + full
+# path) of a command's bool-typed flags so the fast path can tell a store-true
+# flag (``--append``) from a value-taking one and keep offering flags after it
+# instead of falling silent (which made the shell complete filenames).
 # v5: ``positional_completions`` entries are now ``{positional: {key, kind,
 # depends_on}}`` (kind ``static``|``dependent``) so a positional's values can
 # depend on EARLIER positionals (e.g. ``download <name> <version>`` — version
@@ -34,7 +41,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 5
+CACHE_VERSION: int = 6
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -62,8 +69,35 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
       the app module (and therefore confluid) is already loaded — so the
       stdlib-only fast completion path just reads the result and never imports
       confluid.
+
+    Declared positionals (``__liquifai_positionals__``) are EXCLUDED from both
+    maps: a required positional would otherwise also be advertised as its
+    ``--flag`` spelling (which still parses — positional / ``key=value`` /
+    ``--flag`` forms interoperate — but must not be offered by TAB or listed
+    as an option by ``--help``). A third map, ``signature_bool_flags``, records
+    every spelling of the command's ``bool``-typed flags (the collapsed form
+    AND the full ``--<path>`` form) so the fast path knows they take no value.
     """
-    command_paths = {cmd: _introspect_function_keys(func) for cmd, func in app._commands.items()}
+    positionals_map = {cmd: list(getattr(func, "__liquifai_positionals__", [])) for cmd, func in app._commands.items()}
+    command_paths: Dict[str, List[str]] = {}
+    signature_flags: Dict[str, List[str]] = {}
+    signature_bool_flags: Dict[str, List[str]] = {}
+    for cmd, func in app._commands.items():
+        hierarchy = _introspect_function_hierarchy(func)
+        pos = set(positionals_map[cmd])
+        paths = sorted(p for p in hierarchy if p.split(".", 1)[0] not in pos)
+        command_paths[cmd] = paths
+        display = _flag_display_map(paths)
+        signature_flags[cmd] = list(dict.fromkeys(display[p] for p in paths))
+        bools: List[str] = []
+        for p in paths:
+            type_str = hierarchy[p][0] if isinstance(hierarchy[p], (tuple, list)) else None
+            if type_str != "bool":
+                continue
+            for spelling in (display[p], f"--{p}"):
+                if spelling not in bools:
+                    bools.append(spelling)
+        signature_bool_flags[cmd] = bools
     # Per-command completion info for positionals that registered a provider
     # (``@command(..., completions={...})``): ``{positional: {key, kind, depends_on}}``.
     # ``kind`` is ``dependent`` when the provider takes an argument (it receives the
@@ -97,13 +131,15 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         # abbreviation alongside it.
         "sub_app_aliases": sorted(app._sub_app_aliases.keys()),
         "signature_paths": command_paths,
-        "signature_flags": {cmd: _collapse_to_flags(paths) for cmd, paths in command_paths.items()},
+        "signature_flags": signature_flags,
+        # {cmd: [--flag, ...]} — every spelling of the command's bool-typed
+        # flags; the engine consults this before treating the previous token
+        # as a value slot.
+        "signature_bool_flags": signature_bool_flags,
         # Ordered positional-argument names per command; used by complete_from_tree
         # to emit ``<name>`` placeholder hints before flags when the cursor is at
         # an unfilled positional slot.
-        "positionals": {
-            cmd: list(getattr(func, "__liquifai_positionals__", [])) for cmd, func in app._commands.items()
-        },
+        "positionals": positionals_map,
         # {cmd: {positional: value-cache-key}} — only positionals with a provider.
         "positional_completions": positional_completions,
     }
@@ -297,8 +333,8 @@ def has_stale_value_caches(app: "LiquifyApp", ttl: float) -> bool:
     return False
 
 
-def _collapse_to_flags(paths: Iterable[str]) -> List[str]:
-    """Collapse dotted override paths to their shortest-unique ``--flag`` form.
+def _flag_display_map(paths: Iterable[str]) -> Dict[str, str]:
+    """Map each dotted override path to its shortest-unique ``--flag`` spelling.
 
     Reuses confluid's canonical :func:`confluid.shortest_unique_paths` — the
     SAME function ``--help`` / :func:`liquifai.report.show_configuration` uses —
@@ -309,24 +345,33 @@ def _collapse_to_flags(paths: Iterable[str]) -> List[str]:
     Confluid is imported lazily: this is called at cache-build time (confluid
     already loaded in the app process) and on the config-present completion path
     (which has already imported confluid to read the YAML), so the stdlib-only
-    fast path never reaches it. Returns sorted, de-duplicated flags.
+    fast path never reaches it.
     """
     from confluid import shortest_unique_paths
 
     unique = sorted({p for p in paths if p})
-    display = shortest_unique_paths(unique)
+    return {p: f"--{d}" for p, d in shortest_unique_paths(unique).items()}
+
+
+def _collapse_to_flags(paths: Iterable[str]) -> List[str]:
+    """Collapse dotted override paths to sorted, de-duplicated ``--flag`` form.
+
+    Thin wrapper over :func:`_flag_display_map` (one collapse pass shared with
+    the bool-flag spelling derivation in :func:`serialize_app`).
+    """
+    display = _flag_display_map(paths)
     out: List[str] = []
     seen: Set[str] = set()
-    for full in unique:
-        flag = f"--{display[full]}"
+    for full in sorted(display):
+        flag = display[full]
         if flag not in seen:
             out.append(flag)
             seen.add(flag)
     return out
 
 
-def _introspect_function_keys(func: Any) -> List[str]:
-    """Return the flat list of LEAF override paths a command exposes.
+def _introspect_function_hierarchy(func: Any) -> Dict[str, Any]:
+    """Return the ``{path: (type_str, default, doc)}`` hierarchy a command exposes.
 
     Delegates to confluid's :func:`confluid.get_hierarchy` — the SAME path
     enumerator ``--help`` / :func:`liquifai.report.show_configuration` use — so
@@ -334,24 +379,33 @@ def _introspect_function_keys(func: Any) -> List[str]:
     function's signature params, recurses into each ``@configurable`` param, and
     records only LEAF scalars (never the configurable container itself):
     ``convert-ops-export(converter: TaidalOpsToHeliosConverter)`` yields
-    ``["converter.class_name", "converter.dst", ...]`` — no bare ``converter``
-    root. A plain ``@command`` like ``run list`` yields its bare params
-    (``["experiment", "status", ...]``). It reads ``__init__``/signature
+    ``{"converter.class_name": ..., "converter.dst": ..., ...}`` — no bare
+    ``converter`` root. A plain ``@command`` like ``run list`` yields its bare
+    params (``experiment``, ``status``, ...). It reads ``__init__``/signature
     parameters only (NOT ``dir(cls)``), so inherited framework-base attributes
-    never pollute the output.
+    never pollute the output. The values keep the ``type_str`` so
+    :func:`serialize_app` can flag ``bool`` params (store-true flags).
 
-    These RAW paths are later collapsed to shortest-unique ``--flag`` form by
-    :func:`_collapse_to_flags`. Called only at cache-build time
-    (:func:`serialize_app`), where confluid is already loaded — never on the
-    stdlib-only fast path. Returns ``[]`` on any introspection failure so a
-    broken annotation never breaks completion.
+    Called only at cache-build time (:func:`serialize_app`), where confluid is
+    already loaded — never on the stdlib-only fast path. Returns ``{}`` on any
+    introspection failure so a broken annotation never breaks completion.
     """
     try:
         from confluid import get_hierarchy
 
-        return sorted(get_hierarchy(func).keys())
+        return dict(get_hierarchy(func))
     except Exception:
-        return []
+        return {}
+
+
+def _introspect_function_keys(func: Any) -> List[str]:
+    """Return the flat sorted list of LEAF override paths a command exposes.
+
+    Kept as the historical key-only view over
+    :func:`_introspect_function_hierarchy` (re-exported by
+    ``liquifai.completion``).
+    """
+    return sorted(_introspect_function_hierarchy(func).keys())
 
 
 def write_cache(app: "LiquifyApp") -> Path:

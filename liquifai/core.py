@@ -1000,9 +1000,12 @@ class LiquifyApp:
                     config_map=flowed_kwargs,
                     title=f"Command Configuration (flowed from {config_path.name})",
                     layout=layout,
+                    positionals=positionals,
                 )
             else:
-                show_configuration(target_func, title="Command Configuration Options", layout=layout)
+                show_configuration(
+                    target_func, title="Command Configuration Options", layout=layout, positionals=positionals
+                )
         else:
             table = Table(box=None, padding=(0, 2))
             table.add_column("Command/Group", style="cyan")
