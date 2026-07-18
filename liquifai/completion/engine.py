@@ -18,7 +18,14 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 
-from liquifai.grammar import GLOBAL_FLAGS, GLOBAL_VALUE_FLAGS, PATH_VALUE_FLAGS, SHELL_VALUE_FLAGS, stops_positional
+from liquifai.grammar import (
+    GLOBAL_FLAGS,
+    GLOBAL_VALUE_FLAGS,
+    PATH_VALUE_FLAGS,
+    SHELL_VALUE_FLAGS,
+    looks_like_key,
+    stops_positional,
+)
 
 from . import cache, tree
 from .shells import SHELLS
@@ -118,8 +125,46 @@ def complete_from_tree(
     # shortest-unique ``--flag`` form (baked at serialize time). ``signature_paths``:
     # the raw dotted paths, kept so the config-present branch can re-collapse
     # the UNION of these and the YAML's own keys in one pass.
+    # ``signature_bool_flags``: every spelling of the command's bool-typed
+    # flags — they take no value, so they never open a value slot.
     signature_flags = list((cur.get("signature_flags") or {}).get(cmd_name, []))
     signature_paths = list((cur.get("signature_paths") or {}).get(cmd_name, []))
+    bool_flags = set((cur.get("signature_bool_flags") or {}).get(cmd_name, []))
+
+    # Option keys already consumed on the line (after the command token), in
+    # any of the override grammar's spellings: ``--key value``, ``--key=value``,
+    # ``--key+``/``--key-``, ``+key[=v]``, bare ``key=value``. Used to (a) skip
+    # flag-provided positionals in the hint below and (b) drop already-typed
+    # flags from the candidates — offering ``--target_version`` again after it
+    # was consumed is noise (a repeat parses, but last-write-wins).
+    cmd_idx = next((j for j, t in enumerate(parsed) if t == cmd_name), None)
+    used_keys: Set[str] = set()
+    if cmd_idx is not None:
+        for tok in parsed[cmd_idx + 1 :]:
+            if tok.startswith("--"):
+                key = tok[2:].split("=", 1)[0]
+                if key.endswith(("+", "-")):
+                    key = key[:-1]
+                if key:
+                    used_keys.add(key)
+            elif tok.startswith("+"):
+                body = tok[1:]
+                if body.startswith("--"):
+                    body = body[2:]
+                key = body.split("=", 1)[0]
+                if key:
+                    used_keys.add(key)
+            elif "=" in tok and not tok.startswith("="):
+                head = tok.split("=", 1)[0]
+                if looks_like_key(head):
+                    used_keys.add(head)
+
+    def _not_used(flag: str) -> bool:
+        # A candidate is "used" when its key was typed exactly, or when a full
+        # dotted path ending in the candidate's collapsed leaf was typed
+        # (``--converter.dry`` consumed ⇒ drop the collapsed ``--dry``).
+        key = flag[2:]
+        return not any(k == key or k.endswith("." + key) for k in used_keys)
 
     # The previous token is a value-taking ``--flag`` (and not one of the
     # globals whose values we resolved at the top): its value comes next and
@@ -128,7 +173,17 @@ def complete_from_tree(
     # (``--converter.src <TAB>``) stays silent even for a script_command that
     # hasn't consumed a config yet — otherwise the config-file branch below
     # would hijack the flag's value position. Applies to both command kinds.
-    if prev.startswith("--") and prev not in GLOBAL_VALUE_FLAGS:
+    # NOT a value slot (fall through to hints/flags instead of silence):
+    # a global non-value flag (``--debug``), a self-contained ``--key=value``
+    # or polarity ``--key+``/``--key-`` token, and a known bool-typed command
+    # flag (``--append`` is store-true; its "value" is the next option).
+    if (
+        prev.startswith("--")
+        and "=" not in prev
+        and not prev.endswith(("+", "-"))
+        and prev not in GLOBAL_FLAGS
+        and prev not in bool_flags
+    ):
         return []
 
     # A script_command's first positional is its YAML config path, so before
@@ -144,7 +199,7 @@ def complete_from_tree(
     # and skips straight to its option flags below.
     if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
         files = _file_candidates(incomplete, exts=["yaml", "yml"])
-        flags = list(GLOBAL_FLAGS) + signature_flags
+        flags = list(GLOBAL_FLAGS) + [f for f in signature_flags if _not_used(f)]
         return files + _filter_prefix(flags, incomplete)
 
     # Positional hints: when the cursor is at an unfilled positional slot, emit
@@ -157,8 +212,6 @@ def complete_from_tree(
     positional_hint: List[str] = []
     cmd_positionals = list((cur.get("positionals") or {}).get(cmd_name, []))
     if cmd_positionals:
-        # Find where the command token sits in ``parsed`` (words[1:cword]).
-        cmd_idx = next((j for j, t in enumerate(parsed) if t == cmd_name), None)
         consumed_tokens: List[str] = []
         if cmd_idx is not None:
             for tok in parsed[cmd_idx + 1 :]:
@@ -169,8 +222,12 @@ def complete_from_tree(
                     break
                 consumed_tokens.append(tok)
         n_consumed = len(consumed_tokens)
-        if n_consumed < len(cmd_positionals):
-            pos_name = cmd_positionals[n_consumed]
+        # A positional supplied in its (still valid) ``--flag`` / ``key=value``
+        # spelling counts as filled — the hint moves past it. Positionally
+        # typed tokens keep binding to the declared order (unchanged).
+        unfilled = [p for p in cmd_positionals if p not in used_keys]
+        if n_consumed < len(unfilled):
+            pos_name = unfilled[n_consumed]
             # If this positional registered a value provider AND its cache is
             # populated, offer the real cached values; otherwise fall back to the
             # ``<name>`` placeholder. The cache is stdlib-JSON — the provider never
@@ -238,9 +295,9 @@ def complete_from_tree(
             yaml_paths = _resolve_override_keys(config_path)
         except Exception:
             yaml_paths = []
-        candidates.extend(_collapse_to_flags(signature_paths + yaml_paths))
+        candidates.extend(f for f in _collapse_to_flags(signature_paths + yaml_paths) if _not_used(f))
     else:
-        candidates.extend(signature_flags)
+        candidates.extend(f for f in signature_flags if _not_used(f))
     # Prepend positional hint (if any) before flag candidates; _filter_prefix
     # naturally drops it when the user has started typing a non-matching prefix.
     return _filter_prefix(positional_hint + candidates, incomplete)
