@@ -198,5 +198,67 @@ def test_liquify_and_show_end_to_end(tmp_path: Path) -> None:
     assert "from YAML" in out
 
 
+def _render_help(renderer: Any, *args: Any) -> str:
+    """Run a report help-renderer (which takes an explicit ``console``) and
+    capture its output."""
+    from io import StringIO
+
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=200)
+    renderer(*args, console)
+    return buf.getvalue()
+
+
+def test_show_command_index_lists_commands_and_groups() -> None:
+    from liquifai.report import show_command_index
+
+    root = LiquifyApp(name="myapp")
+
+    @root.command()
+    def greet(target: str = "world") -> None:
+        """Say hello to someone."""
+
+    sub = LiquifyApp(name="data", description="Data ops")
+
+    @sub.command()
+    def alpha() -> None:
+        pass
+
+    root.add_app(sub, "data")
+
+    out = _render_help(show_command_index, root)
+    assert "greet" in out
+    assert "Say hello to someone" in out  # first docstring line
+    assert "data" in out
+    assert "Data ops" in out  # group description
+
+
+def test_show_command_index_folds_aliases_into_canonical_row() -> None:
+    from liquifai.report import show_command_index
+
+    root = LiquifyApp(name="myapp")
+    sub = LiquifyApp(name="dataset", description="Dataset ops")
+    root.add_app(sub, "dataset", aliases=["ds"])
+
+    out = _render_help(show_command_index, root)
+    # Canonical group carries the alias in-line; no separate `ds` group row.
+    assert "dataset (ds)" in out
+    assert "\nds " not in out  # alias is not its own row
+
+
+def test_show_global_options_renders_every_visible_flag() -> None:
+    from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
+    from liquifai.report import show_global_options
+
+    out = _render_help(show_global_options)
+    assert "Global Options" in out
+    for spec in GLOBAL_FLAG_SPECS:
+        if spec.hidden:
+            continue
+        assert flag_display(spec) in out, f"visible flag {spec!r} missing from help"
+    # The implicit per-dimension flag note is present.
+    assert "--KEY VAL" in out
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
