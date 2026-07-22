@@ -1,5 +1,4 @@
 import inspect
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,12 +8,11 @@ import confluid
 import loggair
 from loggair import get_logger
 from rich.console import Console
-from rich.table import Table
 
-from liquifai import di, grammar, overrides
+from liquifai import completion_cli, di, grammar, overrides, report
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError
-from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
+from liquifai.grammar import GLOBAL_FLAG_SPECS
 from liquifai.overrides import expand_strings, parse_override_args
 
 FlowMode = Literal["manual", "auto"]
@@ -374,136 +372,32 @@ class LiquifyApp:
             setattr(fn, "__liquifai_op_metadata__", meta)
         meta.setdefault("completions", {}).update(completions)
 
+    # --- Shell-completion interception ------------------------------------
+    # These are thin delegations to :mod:`liquifai.completion_cli` (the
+    # Rich-using CLI glue that can't live in the stdlib-only ``completion/``
+    # package). Kept as same-named private methods so ``run()``/``_execute()``
+    # call sites and tests (``tests/test_completion.py`` calls
+    # ``_maybe_background_refresh_values``) stay unchanged.
+
     def _maybe_handle_completion_install(self, argv: List[str]) -> bool:
-        """Handle ``--show-completion`` / ``--install-completion`` early.
-
-        Both must run before Confluid bootstrap (no config required) and
-        before help rendering. ``--install-completion`` also primes the
-        on-disk command-tree cache so the very first TAB after installing
-        is fast (the user does not have to invoke the slow app once first).
-        Returns True if one was handled.
-        """
-        for special in ("--show-completion", "--install-completion"):
-            if special not in argv:
-                continue
-            from liquifai.completion import SHELLS, detect_shell, install_script, render_script, write_cache
-
-            idx = argv.index(special)
-            shell = argv[idx + 1] if idx + 1 < len(argv) and argv[idx + 1] in SHELLS else detect_shell()
-            if special == "--show-completion":
-                print(render_script(self.name, shell))
-                # Side effect: prime the cache while the app is loaded.
-                # liquifai-install-completions auto-discovers apps by
-                # probing them with `<app> --show-completion bash`; the
-                # cache is what makes the resulting `complete` calls
-                # actually return suggestions, so we MUST seed it here
-                # — otherwise tab-completion is registered but silent.
-                # Best-effort: never fail the script output on a cache
-                # write error.
-                try:
-                    write_cache(self)
-                except Exception:
-                    pass
-            else:
-                target = install_script(self.name, shell)
-                cache_target = write_cache(self)
-                console.print(f"[green]Installed[/green] {self.name} {shell} completion in [cyan]{target}[/cyan]")
-                console.print(f"[dim]Cached command tree: {cache_target}[/dim]")
-                console.print(f"[dim]Restart your shell or `source {target}` to activate.[/dim]")
-            return True
-        return False
+        """Handle ``--show-completion`` / ``--install-completion`` early."""
+        return completion_cli.handle_completion_install(self, argv)
 
     def _refresh_completion_cache(self) -> None:
         """Best-effort refresh of the on-disk command-tree cache."""
-        try:
-            from liquifai.completion import write_cache
-
-            write_cache(self)
-        except Exception:
-            pass
+        completion_cli.refresh_completion_cache(self)
 
     def _maybe_handle_refresh_completions(self, argv: List[str]) -> bool:
-        """Handle ``--refresh-completions`` early (before bootstrap).
-
-        Runs every registered positional value provider (``@command(...,
-        completions=...)``) in THIS process — providers may import the heavy SDK
-        and hit the network — and writes each result to its value cache so TAB
-        can offer real values for a ``<name>`` slot. Returns True if handled.
-        """
-        if "--refresh-completions" not in argv:
-            return False
-        from liquifai.completion import refresh_value_caches, write_cache
-
-        try:
-            write_cache(self)  # keep the command tree fresh too
-        except Exception:
-            pass
-        written = refresh_value_caches(self)
-        total = sum(written.values())
-        if written:
-            console.print(
-                f"[green]Refreshed[/green] {len(written)} completion value cache(s) "
-                f"([cyan]{total}[/cyan] values) for [cyan]{self.name}[/cyan]."
-            )
-        else:
-            console.print(f"[dim]No positional completion providers registered for {self.name}.[/dim]")
-        return True
+        """Handle ``--refresh-completions`` early (before bootstrap)."""
+        return completion_cli.handle_refresh_completions(self, argv)
 
     def _maybe_handle_refresh_completion_value(self, argv: List[str]) -> bool:
-        """Handle ``--refresh-completion-value '<json>'`` early (background self-heal).
-
-        The detached helper the fast path spawns to refresh ONE dependent positional's
-        cache for a single input combo (``{"key": ..., "inputs": {...}}``). Runs the
-        targeted provider and writes the cache, then exits — no command, no bootstrap.
-        Silent and best-effort (it runs in the background). Returns True if handled.
-        """
-        if "--refresh-completion-value" not in argv:
-            return False
-        import json
-
-        from liquifai.completion import refresh_one
-
-        idx = argv.index("--refresh-completion-value")
-        try:
-            spec = json.loads(argv[idx + 1]) if idx + 1 < len(argv) else {}
-            refresh_one(self, str(spec.get("key", "")), dict(spec.get("inputs", {}) or {}))
-        except Exception:
-            pass
-        return True
+        """Handle ``--refresh-completion-value '<json>'`` early (self-heal)."""
+        return completion_cli.handle_refresh_completion_value(self, argv)
 
     def _maybe_background_refresh_values(self, ttl: float = 600.0) -> None:
-        """Opportunistically refresh stale positional value caches in the background.
-
-        **Opt-in** — does nothing unless ``$LIQUIFAI_BG_REFRESH`` is set. When
-        enabled, after a successful command, if any registered provider's value
-        cache is missing or older than ``ttl`` seconds, the providers run in a
-        detached daemon thread so the next TAB sees fresh values without blocking
-        the command that just ran. Best-effort: any failure is swallowed.
-
-        It is OFF by default because a provider may hit the network (e.g. query a
-        platform), and a normal run should never trigger a surprise background
-        request — the deterministic path is ``--refresh-completions``. Set
-        ``LIQUIFAI_BG_REFRESH=1`` (e.g. in a project rc) to keep caches warm for free.
-        """
-        if not os.environ.get("LIQUIFAI_BG_REFRESH"):
-            return
-        try:
-            import threading
-
-            from liquifai.completion import has_stale_value_caches, refresh_value_caches
-
-            if not has_stale_value_caches(self, ttl):
-                return
-
-            def _bg() -> None:
-                try:
-                    refresh_value_caches(self)
-                except Exception:
-                    pass
-
-            threading.Thread(target=_bg, daemon=True, name=f"liquifai-refresh-{self.name}").start()
-        except Exception:
-            pass
+        """Opportunistically refresh stale positional value caches in background."""
+        completion_cli.maybe_background_refresh_values(self, ttl)
 
     def run(self) -> Any:
         """Main entry point for the CLI.
@@ -1007,35 +901,12 @@ class LiquifyApp:
                     target_func, title="Command Configuration Options", layout=layout, positionals=positionals
                 )
         else:
-            table = Table(box=None, padding=(0, 2))
-            table.add_column("Command/Group", style="cyan")
-            table.add_column("Description")
+            report.show_command_index(app, console)
 
-            for name, sub_app in sorted(app._sub_apps.items()):
-                if name in app._sub_app_aliases:
-                    continue  # alias rows fold into their canonical group below
-                aliases = sorted(a for a, canon in app._sub_app_aliases.items() if canon == name)
-                label = f"{name} ({', '.join(aliases)})" if aliases else name
-                desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
-                table.add_row(label, desc)
-
-            for name, func in sorted(app._commands.items()):
-                desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
-                table.add_row(name, desc)
-
-            console.print(table)
-
-        # Rendered from the ONE flag declaration (grammar.GLOBAL_FLAG_SPECS) —
-        # the same table the parser and completion derive from, so help can
-        # never drift from what the CLI actually accepts.
-        console.print("\n[bold]Global Options:[/bold]")
-        visible = [spec for spec in GLOBAL_FLAG_SPECS if not spec.hidden]
-        width = max(len(flag_display(spec)) for spec in visible)
-        for spec in visible:
-            console.print(f"  {flag_display(spec).ljust(width)}  {spec.help}")
-        console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
-        console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
-        console.print("")
+        # The Global Options block is rendered from the ONE flag declaration
+        # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion
+        # derive from, so help can never drift from what the CLI accepts.
+        report.show_global_options(console)
 
 
 # ---------------------------------------------------------------------------
