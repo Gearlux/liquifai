@@ -6,6 +6,20 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased] — 0.1.0, the first public release
 
+- **Double-TAB forces a completion value-cache refresh (bash)**: the lazy
+  self-heal only fires when a positional's value cache is missing or older than
+  5 min, so a cache that is fresh-by-age but wrong (an item deleted upstream)
+  would keep showing the stale value. Pressing TAB a second time now forces the
+  refresh regardless of age — bash forwards `$COMP_TYPE` (the readline
+  completion type) to `liquifai-complete`, which reads a repeated/list TAB as
+  "refresh now" and bypasses both the age gate and the throttle. Still detached:
+  the double-TAB shows the current cache, the next TAB shows the corrected list.
+  bash-only (zsh/fish have no equivalent signal); needs a `--install-completion`
+  re-run to pick up the updated wrapper.
+- **`core.py` slimmed**: all Rich help rendering now lives in `report.py`
+  (`show_command_index`/`show_global_options` join `show_configuration`), and
+  the shell-completion flag interception moved to a `completion_cli.py` module,
+  leaving `core._show_help` as pure orchestration.
 - **Completion/help treat positionals and boolean flags correctly**
   (2026-07-16): a declared positional is advertised only by its
   `<placeholder>`/cached-value hint — its `--flag` spelling no longer appears

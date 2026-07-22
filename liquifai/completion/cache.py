@@ -216,7 +216,7 @@ def _dependent_changed_recently(app_name: str, cache_key: str, inputs: Dict[str,
     return ca is not None and (time.time() - ca) < window
 
 
-def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], None]:
+def make_lazy_refresh_spawner(app_name: str) -> Callable[..., None]:
     """Return a callback that DETACHES a targeted refresh for one positional's cache.
 
     Passed to :func:`complete_from_tree` by the fast path so a positional with a
@@ -227,9 +227,14 @@ def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], 
     (``inputs`` = the earlier positionals → refreshes that combo). Opt out entirely with
     ``$LIQUIFAI_NO_LAZY_COMPLETE``. Best-effort — any error is swallowed (completion still
     returned whatever was cached / the placeholder).
+
+    ``force=True`` (a double-TAB, see :func:`liquifai.completion.wants_forced_refresh`)
+    BYPASSES the throttle so a deliberate "refresh now" always re-spawns even within the
+    throttle window — the user is explicitly saying they distrust the current cache. The
+    marker is still updated so a following NON-forced TAB stays throttled as usual.
     """
 
-    def spawn(cache_key: str, inputs: Dict[str, str]) -> None:
+    def spawn(cache_key: str, inputs: Dict[str, str], force: bool = False) -> None:
         if os.environ.get("LIQUIFAI_NO_LAZY_COMPLETE"):
             return
         base = (
@@ -237,7 +242,7 @@ def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], 
         )
         marker = base.with_suffix(".pending")
         try:
-            if marker.exists() and (time.time() - marker.stat().st_mtime) < LAZY_REFRESH_THROTTLE:
+            if not force and marker.exists() and (time.time() - marker.stat().st_mtime) < LAZY_REFRESH_THROTTLE:
                 return  # a refresh for this combo was attempted very recently
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.touch()

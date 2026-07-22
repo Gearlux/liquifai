@@ -47,7 +47,8 @@ def complete_from_tree(
     tree: Dict[str, Any],
     words: List[str],
     cword: int,
-    lazy_refresh: Optional[Callable[[str, Dict[str, str]], None]] = None,
+    lazy_refresh: Optional[Callable[..., None]] = None,
+    force_refresh: bool = False,
 ) -> List[str]:
     """Compute completion candidates from a serialized command tree.
 
@@ -55,12 +56,17 @@ def complete_from_tree(
         tree: A dict produced by :func:`serialize_app`.
         words: Tokenized command line including the program name at index 0.
         cword: Index of the word being completed (0-based).
-        lazy_refresh: Optional ``(cache_key, inputs)`` callback invoked when a
-            DEPENDENT positional's per-input cache is missing or stale, so the fast
-            path can self-heal it in the background (see
-            :func:`make_lazy_refresh_spawner`). Whatever is cached now (or the
-            placeholder) is still returned immediately; this never blocks. ``None``
-            (the default, used by tests / in-process completion) disables it.
+        lazy_refresh: Optional ``(cache_key, inputs, force=False)`` callback invoked
+            when a positional's value cache should be refreshed, so the fast path can
+            self-heal it in the background (see :func:`make_lazy_refresh_spawner`).
+            Whatever is cached now (or the placeholder) is still returned immediately;
+            this never blocks. ``None`` (the default, used by tests / in-process
+            completion) disables it.
+        force_refresh: When True (a repeated/second TAB — see
+            :func:`liquifai.completion.wants_forced_refresh`), the value cache for the
+            current positional is refreshed REGARDLESS of its age, so a cache that is
+            fresh-by-age but wrong (e.g. an item deleted upstream) still updates. The
+            refresh is still detached, so the corrected list appears on the NEXT TAB.
 
     Returns:
         Candidates, one per line. Empty list means "no suggestion".
@@ -255,20 +261,23 @@ def complete_from_tree(
                     # Self-heal: if this combo's cache is missing or stale, kick off a
                     # background refresh for it (non-blocking) so new datasets / new
                     # versions / beyond-the-cap names become current on the NEXT TAB.
+                    # ``force_refresh`` (a double-TAB) refreshes regardless of age.
                     if lazy_refresh is not None:
                         age = cache._dependent_value_cache_age(app_name, info["key"], inputs)
-                        if age is None or age > cache.DEPENDENT_REFRESH_TTL:
-                            lazy_refresh(info["key"], inputs)
+                        if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
+                            lazy_refresh(info["key"], inputs, force=force_refresh)
             elif info.get("key"):
                 cached_values = cache.read_value_cache(app_name, info["key"])
                 # Self-heal STATIC positionals too: a missing/stale name list (e.g. a
                 # brand-new positional that has never been refreshed) populates itself in
                 # the background on first TAB, so it appears on the next one — no manual
                 # `--refresh-completions` needed. Empty ``inputs`` marks a static refresh.
+                # ``force_refresh`` (a double-TAB) refreshes regardless of age — the fix
+                # for a fresh-by-age but wrong list (e.g. an item deleted upstream).
                 if lazy_refresh is not None:
                     age = cache._value_cache_age(app_name, info["key"])
-                    if age is None or age > cache.DEPENDENT_REFRESH_TTL:
-                        lazy_refresh(info["key"], {})
+                    if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
+                        lazy_refresh(info["key"], {}, force=force_refresh)
             positional_hint = list(cached_values) if cached_values else [f"<{pos_name}>"]
             # The notice is a ``<…>`` hint: shown at a bare TAB (alongside the values),
             # space-free so it stays one token, and dropped by _filter_prefix the moment

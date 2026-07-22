@@ -203,6 +203,25 @@ When a self-heal **actually changes** the values, the next TAB shows a transient
 window, so you know the background refresh took effect — change-only (an unchanged
 refresh shows nothing), and it disappears the moment you type a real value.
 
+### Force a refresh with a double-TAB (bash)
+
+Self-heal only fires when a cache is missing or **older than 5 min**. A cache that
+is fresh-by-age but **wrong** — you deleted an item upstream, but it was cached a
+minute ago — would otherwise keep showing the stale value until the TTL lapses.
+
+To force it: press **TAB a second time**. bash reports the repeated TAB via
+`$COMP_TYPE`, which the wrapper forwards to `liquifai-complete`; liquifai reads it
+as "refresh this now" and kicks off the background refresh **regardless of age**
+(and ignoring the throttle). As always the refresh is detached — the double-TAB
+itself still shows the current cache, and the **next** TAB shows the corrected
+list (a removed item gone, an added one present; a changed dependent value also
+gets the `<…-updated>` hint). So the flow is: `⇥⇥` to trigger, `⇥` again to see it.
+
+This uses bash's `COMP_TYPE`, so it is **bash-only** — zsh/fish have no equivalent
+double-TAB signal and keep the age-gated behaviour. It needs the up-to-date
+wrapper: **re-run `my-app --install-completion`** (or `liquifai-install-completions`)
+once and re-source, otherwise the double-TAB is treated as an ordinary TAB.
+
 ## Runnable example
 
 [`examples/completion_providers.py`](../examples/completion_providers.py) wires
