@@ -211,11 +211,18 @@ minute ago — would otherwise keep showing the stale value until the TTL lapses
 
 To force it: press **TAB a second time**. bash reports the repeated TAB via
 `$COMP_TYPE`, which the wrapper forwards to `liquifai-complete`; liquifai reads it
-as "refresh this now" and kicks off the background refresh **regardless of age**
-(and ignoring the throttle). As always the refresh is detached — the double-TAB
-itself still shows the current cache, and the **next** TAB shows the corrected
-list (a removed item gone, an added one present; a changed dependent value also
-gets the `<…-updated>` hint). So the flow is: `⇥⇥` to trigger, `⇥` again to see it.
+as "refresh this now" and kicks off the background refresh **regardless of age**.
+As always the refresh is detached — the double-TAB itself still shows the current
+cache, and the **next** TAB shows the corrected list (a removed item gone, an
+added one present; a changed dependent value also gets the `<…-updated>` hint). So
+the flow is: `⇥⇥` to trigger, `⇥` again to see it.
+
+Only the *age* check is bypassed — the normal spawn throttle still applies, so
+hammering TAB triggers **at most one refresh per completion session**, not one per
+keystroke. The throttle gates only the *refresh*, never the *display*: every TAB
+still reads the cache fresh, so once the background refresh lands, the third,
+fourth, fifth… TAB all show the corrected list without kicking off more refreshes.
+(Wait out the throttle window, or edit the line, for another forced refresh.)
 
 This uses bash's `COMP_TYPE`, so it is **bash-only** — zsh/fish have no equivalent
 double-TAB signal and keep the age-gated behaviour. It needs the up-to-date

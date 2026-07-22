@@ -1634,7 +1634,7 @@ def test_complete_lazy_refresh_called_on_missing_cache(iso_cache: Path) -> None:
         tree,
         ["sairen", "dataset", "download", "newds", ""],
         cword=4,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[0] == "<version>"
     assert calls == [("dataset__download__version", {"name": "newds"})]
@@ -1650,7 +1650,7 @@ def test_complete_lazy_refresh_skipped_when_fresh(iso_cache: Path) -> None:
         tree,
         ["sairen", "dataset", "download", "alpha", ""],
         cword=4,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["1.0", "1.1"]
     assert calls == []
@@ -1668,7 +1668,7 @@ def test_complete_lazy_refresh_called_when_stale(iso_cache: Path, monkeypatch: p
         tree,
         ["sairen", "dataset", "download", "alpha", ""],
         cword=4,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["1.0", "1.1"]  # stale values still served immediately
     assert calls == [("dataset__download__version", {"name": "alpha"})]  # ...and a refresh queued
@@ -1738,19 +1738,19 @@ def test_force_refresh_bypasses_ttl_on_fresh_cache(iso_cache: Path) -> None:
         tree,
         ["sairen", "dataset", "download", "alpha", ""],
         cword=4,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i, force)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert calls == []
-    # With force (double-TAB) the SAME fresh cache is refreshed anyway, force propagated.
+    # With force (double-TAB) the SAME fresh cache is refreshed anyway (age gate bypassed).
     out = comp.complete_from_tree(
         tree,
         ["sairen", "dataset", "download", "alpha", ""],
         cword=4,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i, force)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
         force_refresh=True,
     )
     assert out[:2] == ["1.0", "1.1"]  # cached values still served immediately (non-blocking)
-    assert calls == [("dataset__download__version", {"name": "alpha"}, True)]
+    assert calls == [("dataset__download__version", {"name": "alpha"})]
 
 
 def test_force_refresh_static_positional(iso_cache: Path) -> None:
@@ -1768,24 +1768,69 @@ def test_force_refresh_static_positional(iso_cache: Path) -> None:
         tree,
         ["sairen", "list", ""],
         cword=2,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i, force)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
         force_refresh=True,
     )
-    assert calls == [("list__experiment", {}, True)]  # static → empty inputs, forced
+    assert calls == [("list__experiment", {})]  # static → empty inputs, forced
 
 
-def test_lazy_spawner_force_bypasses_throttle(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_force_refresh_spawns_once_per_session(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A forced refresh bypasses the AGE gate but NOT the spawner throttle, so hammering
+    # the double-TAB spawns the refresh at most once per session (throttle window).
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # fresh caches
+    tree = comp.serialize_app(root)
     popen_calls = []
     monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
-    spawn = comp.make_lazy_refresh_spawner("sairen")
+    spawn = comp.make_lazy_refresh_spawner("sairen")  # the REAL spawner (throttle live)
 
-    # A normal spawn writes the throttle marker; an immediate NON-forced repeat is throttled.
-    spawn("dataset__download__version", {"name": "x"})
-    spawn("dataset__download__version", {"name": "x"})
-    assert len(popen_calls) == 1
-    # ...but a FORCED spawn (double-TAB) ignores the fresh marker and spawns anyway.
-    spawn("dataset__download__version", {"name": "x"}, force=True)
-    assert len(popen_calls) == 2
+    for _ in range(3):  # three double-TABs in quick succession
+        comp.complete_from_tree(
+            tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=spawn, force_refresh=True
+        )
+    assert len(popen_calls) == 1  # ...but only ONE background refresh spawned
+
+
+def test_later_tabs_show_updated_list_without_re_refreshing(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The throttle gates SPAWNING, not READING: once the detached refresh has updated the
+    # cache, every subsequent TAB displays the fresh list (a deleted item gone) even though
+    # it no longer re-refreshes. Models the user's flow: ⇥⇥ triggers one refresh, then ⇥⇥⇥…
+    # keep showing the corrected list.
+    experiments = ["exp-a", "exp-b", "exp-c"]
+    root = LiquifyApp(name="sairen")
+
+    @root.command("list", positionals=["experiment"], completions={"experiment": lambda: list(experiments)})
+    def list_cmd(experiment: str = "") -> None:
+        pass
+
+    comp.refresh_value_caches(root)  # cache = the OLD list [exp-a, exp-b, exp-c]
+    tree = comp.serialize_app(root)
+    experiments.remove("exp-b")  # upstream deletion — cache is now fresh-by-age but WRONG
+
+    popen_calls = []
+
+    def fake_popen(args: Any, *a: Any, **k: Any) -> None:
+        # Simulate the detached `--refresh-completion-value` process finishing: run the
+        # (now-updated) provider and rewrite the cache, exactly as the real helper would.
+        popen_calls.append(args)
+        spec = json.loads(args[2])
+        comp.refresh_one(root, spec["key"], spec["inputs"])
+        return None
+
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", fake_popen)
+    spawn = comp.make_lazy_refresh_spawner("sairen")
+    words = ["sairen", "list", ""]
+
+    # ⇥⇥ (first forced TAB): still shows the OLD list (read happens before the spawn),
+    # and fires the one refresh — which our fake completes synchronously.
+    out1 = comp.complete_from_tree(tree, words, cword=2, lazy_refresh=spawn, force_refresh=True)
+    assert "exp-b" in out1 and len(popen_calls) == 1
+
+    # ⇥ ⇥ ⇥ (later TABs): show the UPDATED list (exp-b gone) and DON'T refresh again.
+    for _ in range(3):
+        out = comp.complete_from_tree(tree, words, cword=2, lazy_refresh=spawn, force_refresh=True)
+        assert "exp-b" not in out and "exp-a" in out and "exp-c" in out
+    assert len(popen_calls) == 1  # one refresh total across every TAB
 
 
 def test_fast_complete_forwards_comp_type(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1811,6 +1856,10 @@ def test_fast_complete_forwards_comp_type(iso_cache: Path, monkeypatch: pytest.M
     fast.main()
     assert len(popen_calls) == 1
     assert popen_calls[0][0][1] == "--refresh-completion-value"
+
+    # A further double-TAB in the same session is throttled — one refresh per session.
+    fast.main()
+    assert len(popen_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1890,7 +1939,7 @@ def test_static_self_heal_triggered_when_missing(iso_cache: Path) -> None:
         tree,
         ["sairen", "dataset", "download", ""],
         cword=3,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[0] == "<name>"  # placeholder now (nothing cached)
     assert calls == [("dataset__download__name", {})]  # ...and a STATIC refresh (empty inputs) queued
@@ -1905,7 +1954,7 @@ def test_static_self_heal_skipped_when_fresh(iso_cache: Path) -> None:
         tree,
         ["sairen", "dataset", "download", ""],
         cword=3,
-        lazy_refresh=lambda k, i, force=False: calls.append((k, i)),
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["alpha", "beta"] and calls == []  # served from cache, no refresh queued
 

@@ -12,8 +12,10 @@ All notable changes to liquifai are documented here. The format follows
   would keep showing the stale value. Pressing TAB a second time now forces the
   refresh regardless of age — bash forwards `$COMP_TYPE` (the readline
   completion type) to `liquifai-complete`, which reads a repeated/list TAB as
-  "refresh now" and bypasses both the age gate and the throttle. Still detached:
-  the double-TAB shows the current cache, the next TAB shows the corrected list.
+  "refresh now" and bypasses the age gate. Only the age gate is bypassed — the
+  spawn throttle still applies, so a burst of double-TABs triggers at most one
+  refresh per completion session. Still detached: the double-TAB shows the
+  current cache, the next TAB shows the corrected list.
   bash-only (zsh/fish have no equivalent signal); needs a `--install-completion`
   re-run to pick up the updated wrapper.
 - **`core.py` slimmed**: all Rich help rendering now lives in `report.py`
