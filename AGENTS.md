@@ -1,5 +1,13 @@
 # Liquifai Mandates
 
+## Current state
+
+- **What it is:** the app framework every workspace CLI is built on — `LiquifyApp` bootstraps Loggair + Confluid and injects config-resolved dependencies into command signatures by type annotation, so an app declares commands/operations and nothing else. Feature-complete at v0.1.0; the first PyPI tag is still pending (publish AFTER confluid — see *Releasing to PyPI*).
+- **One registration, two front-ends:** a `@app.operation()` pure operation becomes an auto-generated CLI command (`build_commands()` + the presenter/context hooks) AND an MCP tool (`tools.make_mcp_tools`) off the same signature; `@app.command()` / `@app.script_command()` remain the hand-written CLI-handler paths.
+- **Positionals interoperate with `--flag` and `key=value`:** declared via `positionals=[...]` on `command` / `script_command` / `operation` (`build_commands` derives them from an operation's required params); `router` binds leading tokens IN ORDER as verbatim strings until `grammar.stops_positional` fires. They land in `config_data` BEFORE overrides, so an explicit `--name` wins over the positional slot.
+
+## Mandates
+
 - **Zero Boilerplate:** Application startup MUST automatically initialize **Loggair** logging and **Confluid** configuration. Users should never write bootstrap code.
 - **Type-Safe DI:** Command function signatures define the dependency contract. Liquify MUST resolve dependencies from Confluid config by inspecting type annotations.
 - **Bootstrap Lifecycle:** The 5-phase lifecycle (parse globals, init context, configure logging, load config, execute) MUST remain strict and sequential. Never skip or reorder phases.
