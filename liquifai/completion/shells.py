@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -369,12 +370,21 @@ _HELPERS_MARKER = "# >>> liquifai shared helpers >>>"
 _HELPERS_END_MARKER = "# <<< liquifai shared helpers <<<"
 
 
+def _bindir_env_prefix() -> str:
+    """Return PATH="$PATH:<bindir>" env prefix if bindir exists and contains liquifai-complete."""
+    bindir = Path(sys.executable).parent
+    if bindir.exists() and (bindir / "liquifai-complete").exists():
+        return f'PATH="$PATH:{bindir}" '
+    return ""
+
+
 def render_script(prog: str, shell: str) -> str:
     """Render the shell completion script for ``prog`` in ``shell``."""
     if shell not in SHELLS:
         raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
     template = {"bash": _BASH_TEMPLATE, "zsh": _ZSH_TEMPLATE, "fish": _FISH_TEMPLATE}[shell]
-    return template.replace("{prog}", prog)
+    path_prefix = _bindir_env_prefix()
+    return template.replace("{prog}", prog).replace("env ", f"env {path_prefix}")
 
 
 def render_helpers(shell: str) -> str:
@@ -383,4 +393,6 @@ def render_helpers(shell: str) -> str:
         return ""
     if shell not in ("bash", "zsh"):
         raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
-    return _BASH_HELPERS if shell == "bash" else _ZSH_HELPERS
+    template = _BASH_HELPERS if shell == "bash" else _ZSH_HELPERS
+    path_prefix = _bindir_env_prefix()
+    return template.replace("env ", f"env {path_prefix}")

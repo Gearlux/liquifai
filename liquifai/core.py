@@ -9,11 +9,15 @@ import loggair
 from loggair import get_logger
 from rich.console import Console
 
-from liquifai import completion_cli, di, grammar, overrides, report
+from liquifai import di, grammar, overrides, report
+from liquifai.completion_cli import CompletionController
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError
 from liquifai.grammar import GLOBAL_FLAG_SPECS
+from liquifai.introspection import graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args
+from liquifai.pipeline import ConfigPipeline
+from liquifai.router import CliRouter
 
 FlowMode = Literal["manual", "auto"]
 
@@ -156,12 +160,8 @@ class LiquifyApp:
             empty: str = meta.get("empty", "No results")
             completions: Dict[str, Callable[..., Any]] = meta.get("completions", {})
 
-            # Shared signature surgery with make_mcp_tools (liquifai.tools):
-            # strip the context param, then stamp the wrapper's advertised
-            # signature/annotations for the introspection consumers.
-            from liquifai.tools import graft_signature, split_context_param
-
             sig, params_no_ctx = split_context_param(op_func)
+
             positionals = [p.name for p in params_no_ctx if p.default is inspect.Parameter.empty]
 
             # Capture all loop variables — Python closures capture by reference.
@@ -381,23 +381,23 @@ class LiquifyApp:
 
     def _maybe_handle_completion_install(self, argv: List[str]) -> bool:
         """Handle ``--show-completion`` / ``--install-completion`` early."""
-        return completion_cli.handle_completion_install(self, argv)
+        return CompletionController(self).handle_completion_install(argv)
 
     def _refresh_completion_cache(self) -> None:
         """Best-effort refresh of the on-disk command-tree cache."""
-        completion_cli.refresh_completion_cache(self)
+        CompletionController(self).refresh_completion_cache()
 
     def _maybe_handle_refresh_completions(self, argv: List[str]) -> bool:
         """Handle ``--refresh-completions`` early (before bootstrap)."""
-        return completion_cli.handle_refresh_completions(self, argv)
+        return CompletionController(self).handle_refresh_completions(argv)
 
     def _maybe_handle_refresh_completion_value(self, argv: List[str]) -> bool:
         """Handle ``--refresh-completion-value '<json>'`` early (self-heal)."""
-        return completion_cli.handle_refresh_completion_value(self, argv)
+        return CompletionController(self).handle_refresh_completion_value(argv)
 
     def _maybe_background_refresh_values(self, ttl: float = 600.0) -> None:
         """Opportunistically refresh stale positional value caches in background."""
-        completion_cli.maybe_background_refresh_values(self, ttl)
+        CompletionController(self).background_refresh_values(ttl)
 
     def run(self) -> Any:
         """Main entry point for the CLI.
@@ -480,63 +480,7 @@ class LiquifyApp:
         positional tokens. Everything unconsumed lands in
         ``Invocation.remaining_argv`` for the global/override parsers.
         """
-        config_path: Optional[Path] = None
-        cmd_name: Optional[str] = None
-        remaining_argv: List[str] = []
-        target_app = self
-        target_func = None
-        # Positional args consumed for the matched command (bound after
-        # bootstrap, before overrides — see _prepare()).
-        positional_names: List[str] = []
-        positional_values: List[str] = []
-
-        i = 0
-        while i < len(argv):
-            arg = argv[i]
-            if not target_func and arg in target_app._sub_apps:
-                target_app = target_app._sub_apps[arg]
-                i += 1
-            elif not target_func and arg in target_app._commands:
-                cmd_name = arg
-                target_func = target_app._commands[cmd_name]
-                i += 1
-                if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
-                    cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
-                    # Resolve through confluid's search tiers (./ -> ./config/
-                    # -> XDG dirs) so `myapp train myexp` finds e.g.
-                    # ~/.config/myapp/myexp.yaml, not only a CWD file.
-                    cp = confluid.resolve_config_path(cp)
-                    if cp.exists():
-                        config_path, i = cp, i + 1
-                # Consume leading positional tokens declared via
-                # ``@command(positionals=[...])``. Stops at the first flag-like
-                # (``-``/``+``/``~``) or ``key=value`` token so the equals form
-                # (``info name=foo``) and trailing flags still route through the
-                # normal override path. Fewer tokens than declared is fine —
-                # the rest fall back to the command's parameter defaults.
-                positional_names = list(getattr(target_func, "__liquifai_positionals__", []))
-                for _ in positional_names:
-                    if i < len(argv) and not grammar.stops_positional(argv[i]):
-                        positional_values.append(argv[i])
-                        i += 1
-                    else:
-                        break
-            else:
-                remaining_argv.append(arg)
-                i += 1
-
-        if not target_func:
-            target_func = target_app._default_cmd
-
-        return Invocation(
-            target_app=target_app,
-            cmd_name=cmd_name,
-            target_func=target_func,
-            config_path=config_path,
-            positional_names=positional_names,
-            positional_values=positional_values,
-            remaining_argv=remaining_argv,
-        )
+        return CliRouter(self).route(argv)
 
     def _prepare(self, inv: "Invocation") -> None:
         """Phases 3–5: parse globals, initialize state, apply overrides."""
@@ -728,8 +672,8 @@ class LiquifyApp:
                 console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
                 sys.exit(1)
             data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
-            self.context.config_data = confluid.load(data, flow=False, scopes=self.context.scopes or None)
-            self.context.config_data = expand_strings(self.context.config_data)
+            pipeline = ConfigPipeline.load(data, scopes=self.context.scopes or None)
+            self.context.config_data = pipeline.data
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
 
@@ -751,35 +695,9 @@ class LiquifyApp:
         if not parsed_overrides and not deletions:
             return
 
-        from confluid import deep_merge, expand_dotted_keys
-
-        parsed_overrides = expand_strings(parsed_overrides)
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
-        self.context.config_data = deep_merge(self.context.config_data, parsed_overrides)
-        # ``deep_merge`` leaves dotted-key overrides as literal-string keys
-        # at the top level (``{"processor.lookback_days": 5}``). We need to
-        # collapse them INTO the existing config tree so a CLI
-        # ``--processor.lookback_days 5`` actually reaches the Fluid at
-        # ``config["processor"]``. ``expand_dotted_keys`` walks dicts AND
-        # Fluid.kwargs, so the override lands in the Fluid's kwargs dict
-        # before any later ``flow()`` reads from it. This step is critical
-        # for the ``flow_mode="auto"`` + ``Any``-typed param path, where
-        # the Fluid is consumed directly without going through
-        # ``materialize()`` (which internally does the same expansion on
-        # its context).
-        if isinstance(self.context.config_data, dict):
-            self.context.config_data = expand_dotted_keys(self.context.config_data)
-        for path in deletions:
-            overrides.delete_dotted_key(self.context.config_data, path)
-        # Second-pass: flat overrides still need to broadcast to nested
-        # Fluids by name (``--max_epochs 10`` reaching every Fluid whose
-        # accept-list includes ``max_epochs``) and dotted overrides need to
-        # match Fluids by their ``name:`` kwarg (``--overlay.visualize
-        # true`` reaching the Fluid with ``name: overlay`` even when it
-        # isn't at ``config["overlay"]``). New ``+key=val`` adds also
-        # need this pass because the new key isn't yet in any Fluid's
-        # kwargs.
-        overrides.merge_overrides_into_fluids(self.context.config_data, parsed_overrides)
+        pipeline = ConfigPipeline(self.context.config_data).apply_overrides(parsed_overrides, deletions)
+        self.context.config_data = pipeline.data
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
