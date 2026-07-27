@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# setuptools>=77 is the PEP 639 floor: `license` as a plain SPDX string below
+# requires it (the TOML-table form is deprecated, removal slated 2027-02).
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,23 +9,49 @@ name = "liquifai"
 version = "0.1.0"
 description = "A streamlined, type-safe application framework for Python ML/HPC."
 readme = "README.md"
-authors = [{name = "Taidal"}]
-license = {text = "MIT"}
+authors = [{name = "Gert Behiels"}]
+# PEP 639 SPDX expression; the license CLASSIFIER is deliberately absent
+# (deprecated in favour of this field — re-adding it reintroduces the
+# SetuptoolsDeprecationWarning at build time).
+license = "MIT"
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Typing :: Typed",
 ]
 dependencies = [
     "rich>=10.0.0",
     "loggair>=0.1.0",
-    "confluid>=0.1.0",
+    # 0.2.0 is the floor for `accepts_key` / `accepts_broadcast` — the settability
+    # predicates liquifai/overrides.py imports at module level. Against 0.1.0 the
+    # package does not import at all, so this floor is load-bearing, not advisory.
+    "confluid>=0.2.0",
 ]
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
+# `liquifai[bridge]` — opt-in marker for the PROVISIONAL `liquifai.bridge`
+# subpackage (declarative SDK-to-operations engine). It carries no extra
+# requirements today: the subpackage is pure stdlib + liquifai's own core, so
+# there is nothing for pip to install. What the extra DOES buy is a contract
+# boundary that survives the 0.x line:
+#   * a consumer writes `liquifai[bridge]`, declaring in its own metadata that
+#     it depends on a surface excluded from semantic versioning (see the
+#     stability note in liquifai/bridge/__init__.py and CHANGELOG "Unstable");
+#   * if the bridge ever grows a real dependency, it lands here without any
+#     consumer-visible change;
+#   * `import liquifai` never reaches it — the subpackage is deliberately
+#     absent from the top-level exports (pinned by tests/test_bridge_group.py).
+# Note a pip extra cannot make a dependency-free subpackage physically absent
+# from the wheel; this is a declared contract, not an import barrier.
+bridge = []
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",

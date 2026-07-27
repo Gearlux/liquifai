@@ -1,0 +1,37 @@
+# linefit — the installable training-style liquifai demo app (see README.md).
+#
+# Lives in a SUBDIRECTORY of examples/ because it is an installable project
+# (console script on PATH, entry-point discovery). Unlike pypeek it needs no
+# network, so it SHIPS a run.py self-test and CI executes it via the
+# examples/*/run.py glob.
+
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "linefit"
+version = "0.1.0"
+description = "Demo liquifai CLI: a training-style app (script commands, config promotion, DI, dotted overrides)."
+requires-python = ">=3.12"
+dependencies = ["liquifai"]
+
+[project.scripts]
+linefit = "linefit:main"
+
+# Liquifai app registration: lets `liquifai-install-completions` discover this
+# CLI via an instant entry-point metadata read instead of executing the binary
+# (subprocess probe, 15 s timeout each). Name = the app/binary name; value =
+# the LiquifyApp instance. Entry-point changes need an editable reinstall.
+[project.entry-points."liquifai.apps"]
+linefit = "linefit:app"
+
+[tool.setuptools]
+py-modules = ["linefit"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.black]
+line-length = 120

@@ -8,7 +8,7 @@ name: Liquifai CI
 
 on:
   push:
-    branches: [ main, dev/main ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -98,6 +98,15 @@ jobs:
     - name: Run Examples
       run: |
         for f in examples/*.py; do
+          if [ -f "$f" ]; then
+            echo "Verifying $f..."
+            python3 "$f"
+          fi
+        done
+        # Directory examples opt in by shipping a run.py entry point;
+        # network-dependent / install-only example apps ship no run.py
+        # and are skipped by construction.
+        for f in examples/*/run.py; do
           if [ -f "$f" ]; then
             echo "Verifying $f..."
             python3 "$f"

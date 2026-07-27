@@ -5,3 +5,7 @@ Trainer:
   test:
     !class:DataLoader()
     name: test
+  # Declared broadcast=False: a bare `--batch_size 64` must not reach it.
+  checkpointer:
+    !class:Checkpointer()
+    name: checkpointer

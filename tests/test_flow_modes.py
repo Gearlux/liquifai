@@ -102,7 +102,12 @@ def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> 
 
 
 def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -> None:
-    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Lazy."""
+    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Lazy.
+
+    The flow failure is a ConfluidError, so the CLI failure contract renders
+    it as a clean error + exit 1 (see ``test_failure_contract.py``); with
+    ``--debug`` on the line the underlying exception propagates instead.
+    """
     config = tmp_path / "auto_fail.yaml"
     config.write_text(
         "container: !class:_ContainerEager\n" "  name: c1\n" "  optimizer: !class:_NeedsRuntimeKwarg\n" "    lr: 0.5\n"
@@ -113,8 +118,13 @@ def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -
     def go(container: _ContainerEager) -> None:
         pass
 
-    with pytest.raises(Exception):
+    with pytest.raises(SystemExit) as exc:
         _run(app, ["auto-fail-app", "go", str(config)], monkeypatch)
+    assert exc.value.code == 1
+
+    with pytest.raises(Exception) as raw_exc:
+        _run(app, ["auto-fail-app", "go", str(config), "--debug"], monkeypatch)
+    assert not isinstance(raw_exc.value, SystemExit)
 
 
 def test_auto_mode_honors_lazy_annotation(tmp_path: Path, monkeypatch: Any) -> None:
