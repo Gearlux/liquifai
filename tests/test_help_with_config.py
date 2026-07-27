@@ -42,7 +42,7 @@ class _Parent:
 
 @configurable
 class _Wrapper:
-    """Wrapper that sets a post-construction toggle (Enable-style)."""
+    """Wrapper whose toggle is set by setattr after __init__ (a config layer injecting a key)."""
 
     def __init__(self, inner: _Leaf) -> None:
         self.inner = inner
@@ -95,7 +95,7 @@ def test_show_configuration_flowed_graph_lists_ctor_params() -> None:
 def test_show_configuration_flowed_graph_surfaces_post_construction_toggle() -> None:
     inner = _Leaf(count=3)
     wrapper = _Wrapper(inner=inner)
-    wrapper.visualize = True  # type: ignore[attr-defined]  # Enable pattern
+    wrapper.visualize = True  # type: ignore[attr-defined]  # post-construction, undeclared
     graph = {"wrapper": wrapper}
 
     def cmd(wrapper: _Wrapper) -> None:
