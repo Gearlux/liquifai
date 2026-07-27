@@ -112,6 +112,6 @@ linefit predict linefit.yaml abc
 ## Files
 
 - [`linefit.py`](linefit.py) — the whole app (~200 lines with docs)
-- [`linefit.yaml`](linefit.yaml) — the sample experiment config
+- [`linefit.yaml`](linefit.yaml) — the record experiment config
 - [`pyproject.toml`](pyproject.toml) — console script + `liquifai.apps` entry point
 - [`run.py`](run.py) — the CI self-test (drives every verb as a subprocess)
