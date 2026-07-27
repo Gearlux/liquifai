@@ -406,9 +406,9 @@ def test_install_script_zsh_idempotent(tmp_path: Path) -> None:
 
 def test_install_script_fish(tmp_path: Path) -> None:
     home = tmp_path
-    target = comp.install_script("fluxstudio", "fish", home=home)
-    assert target == home / ".config" / "fish" / "completions" / "fluxstudio.fish"
-    assert "liquifai-complete fluxstudio" in target.read_text()
+    target = comp.install_script("streamstudio", "fish", home=home)
+    assert target == home / ".config" / "fish" / "completions" / "streamstudio.fish"
+    assert "liquifai-complete streamstudio" in target.read_text()
 
 
 def test_install_script_unknown_shell_raises(tmp_path: Path) -> None:
