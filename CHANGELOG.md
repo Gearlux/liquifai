@@ -4,7 +4,11 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
-## [Unreleased] — 0.1.0, the first public release
+## [Unreleased]
+
+## [0.1.0] — 2026-07-27
+
+_First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
 
 ### Architecture review follow-ups (2026-07-26)
 
