@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, ca
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+from liquifai.introspection import graft_signature, split_context_param
+
 
 def make_mcp_tools(
     app_or_ops: "Union[LiquifyApp, Dict[str, Callable[..., Any]]]",
@@ -79,10 +81,7 @@ def make_mcp_tools(
     tools: List[Callable[..., Dict[str, Any]]] = []
 
     for _op_name, op_func in ops_items:
-        op_sig = inspect.signature(op_func)
-        op_params = [p for n, p in op_sig.parameters.items() if n != "conn"]
-        new_params = factory_params + op_params
-        new_sig = op_sig.replace(parameters=new_params, return_annotation=Dict[str, Any])
+        op_sig, op_params = split_context_param(op_func)
 
         # Capture loop variables — Python closures capture by reference.
         def _make_tool(
@@ -109,14 +108,7 @@ def make_mcp_tools(
             return tool
 
         tool = _make_tool()
-        tool.__signature__ = new_sig  # type: ignore[attr-defined]
-        tool.__annotations__ = {
-            # Include every factory param; fall back to Any when the factory
-            # (e.g. a lambda) carries no annotation.
-            **{p.name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any) for p in factory_params},
-            **{p.name: p.annotation for p in op_params if p.annotation is not inspect.Parameter.empty},
-            "return": Dict[str, Any],
-        }
+        graft_signature(tool, op_sig, op_params, return_annotation=Dict[str, Any], extra_params=factory_params)
         tools.append(tool)
 
     return tools

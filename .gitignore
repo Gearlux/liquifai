@@ -30,6 +30,7 @@ coverage-*
 # Project-Specific (Data & Logs)
 data/
 logs/
+*.log
 models/*.pt
 models/*.onnx
 *.h5
@@ -48,3 +49,4 @@ coverage/
 logs/
 checkpoints/
 runs/
+/pyrightconfig.json

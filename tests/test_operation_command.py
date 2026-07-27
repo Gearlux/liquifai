@@ -1,31 +1,32 @@
-"""Tests for the unified @command(presentation=...) / @operation enrichment path
-and the generic make_mcp_tools() builder."""
+"""Tests for the @operation registration path (the ONE ops-registration path —
+the former @command(presentation=...) dual-mode was removed) and the generic
+make_mcp_tools() builder."""
 
 from typing import Any, Dict
 
 from liquifai import LiquifyApp, make_mcp_tools
 
 # ---------------------------------------------------------------------------
-# @command(presentation=...) decorator
+# @operation decorator — registration + metadata
 # ---------------------------------------------------------------------------
 
 
-def test_command_with_presentation_goes_into_operations() -> None:
+def test_operation_goes_into_operations_not_commands() -> None:
     app = LiquifyApp(name="dataset")
 
-    @app.command("list", presentation="list", columns=("name",))
+    @app.operation(presentation="list", columns=("name",))
     def dataset_list(conn: Any) -> Dict[str, Any]:
         return {"items": []}
 
-    # Must be in _operations, NOT in _commands (configure_app wires the CLI later).
+    # Must be in _operations, NOT in _commands (build_commands wires the CLI later).
     assert "dataset_list" in app._operations
     assert "list" not in app._commands
 
 
-def test_command_with_presentation_metadata_stored() -> None:
+def test_operation_metadata_stored() -> None:
     app = LiquifyApp(name="dataset")
 
-    @app.command("info", presentation="fields", title="Dataset: {name}", columns=("name",))
+    @app.operation(presentation="fields", title="Dataset: {name}", columns=("name",))
     def dataset_info(conn: Any, *, name: str) -> Dict[str, Any]:
         return {}
 
@@ -35,7 +36,7 @@ def test_command_with_presentation_metadata_stored() -> None:
     assert meta["title"] == "Dataset: {name}"
 
 
-def test_command_without_presentation_still_goes_into_commands() -> None:
+def test_command_goes_into_commands_not_operations() -> None:
     app = LiquifyApp(name="auth")
 
     @app.command("token-info")
@@ -46,10 +47,10 @@ def test_command_without_presentation_still_goes_into_commands() -> None:
     assert "auth_token_info_cmd" not in app._operations
 
 
-def test_command_presentation_derives_op_name_from_function_name() -> None:
+def test_operation_derives_op_name_from_function_name() -> None:
     app = LiquifyApp(name="model")
 
-    @app.command("list", presentation="list")
+    @app.operation(presentation="list")
     def model_list(conn: Any) -> Dict[str, Any]:
         return {}
 
@@ -336,25 +337,58 @@ def test_make_mcp_tools_dict_form_no_factory() -> None:
 
 
 # ---------------------------------------------------------------------------
-# command(presentation=...) — Literal validation (Concern 6)
+# set_completions — attach providers to an already-registered operation
 # ---------------------------------------------------------------------------
 
 
-def test_command_invalid_presentation_raises() -> None:
+def test_set_completions_updates_operation_metadata() -> None:
+    app = LiquifyApp(name="dataset")
+
+    @app.operation(presentation="fields")
+    def dataset_info(conn: Any, *, name: str) -> Dict[str, Any]:
+        return {}
+
+    provider = lambda: ["a", "b"]  # noqa: E731
+    app.set_completions("dataset_info", {"name": provider})
+    meta = getattr(dataset_info, "__liquifai_op_metadata__", {})
+    assert meta["completions"] == {"name": provider}
+
+
+def test_set_completions_merges_with_decorator_completions() -> None:
+    app = LiquifyApp(name="dataset")
+    dec_provider = lambda: ["x"]  # noqa: E731
+
+    @app.operation(presentation="fields", completions={"name": dec_provider})
+    def dataset_download(conn: Any, *, name: str, version: str) -> Dict[str, Any]:
+        return {}
+
+    ver_provider = lambda inputs: ["1.0"]  # noqa: E731
+    app.set_completions("dataset_download", {"version": ver_provider})
+    meta = getattr(dataset_download, "__liquifai_op_metadata__", {})
+    assert meta["completions"] == {"name": dec_provider, "version": ver_provider}
+
+
+def test_set_completions_reaches_generated_cli_handler() -> None:
+    app = LiquifyApp(name="dataset")
+    app.set_context_factory(lambda: {})
+    app.set_presenter(lambda *a, **k: None)
+
+    @app.operation(presentation="fields")
+    def dataset_info(conn: Any, *, name: str) -> Dict[str, Any]:
+        return {}
+
+    provider = lambda: ["a"]  # noqa: E731
+    app.set_completions("dataset_info", {"name": provider})
+    app.build_commands()
+    handler = app._commands["info"]
+    assert getattr(handler, "__liquifai_completions__", {}) == {"name": provider}
+
+
+def test_set_completions_unknown_operation_raises() -> None:
     import pytest
 
-    app = LiquifyApp("test")
-    with pytest.raises(ValueError, match="presentation must be one of"):
+    from liquifai.exceptions import UnknownOperationError
 
-        @app.command("foo", presentation="invalid")  # type: ignore[arg-type]
-        def fn(conn: Any) -> Dict[str, Any]:
-            return {}
-
-
-def test_command_valid_presentations_all_accepted() -> None:
-    app = LiquifyApp("test")
-    for p in ("list", "fields", "status"):
-
-        @app.command(f"cmd-{p}", presentation=p)
-        def fn(conn: Any) -> Dict[str, Any]:
-            return {}
+    app = LiquifyApp(name="dataset")
+    with pytest.raises(UnknownOperationError):
+        app.set_completions("nope", {"name": lambda: []})

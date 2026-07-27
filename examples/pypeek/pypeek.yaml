@@ -1,0 +1,10 @@
+# Record pypeek config: every key broadcasts into the @configurable PyPI
+# client (see pypeek.py). Try: pypeek -c examples/pypeek/pypeek.yaml info rich
+# CLI overrides win over these values (e.g. `--timeout 3`).
+
+# Per-request timeout in seconds.
+timeout: 10.0
+# Root of the JSON API — point at a mirror or devpi instance if you have one.
+base_url: https://pypi.org/pypi
+# Print the would-be request instead of performing it (same as --dry_run+).
+dry_run: false

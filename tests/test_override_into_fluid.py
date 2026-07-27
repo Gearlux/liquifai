@@ -28,7 +28,8 @@ from confluid.merger import deep_merge, expand_dotted_keys
 
 from liquifai import LiquifyApp
 from liquifai.context import set_context
-from liquifai.core import _confluid_active_context, _deep_flow, _merge_overrides_into_fluids
+from liquifai.di import confluid_active_context, deep_flow
+from liquifai.overrides import merge_overrides_into_fluids
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +72,7 @@ def test_dotted_override_reaches_fluid_kwargs_via_expand() -> None:
 
     config_data = deep_merge(config_data, overrides)
     config_data = expand_dotted_keys(config_data)
-    _merge_overrides_into_fluids(config_data, overrides)
+    merge_overrides_into_fluids(config_data, overrides)
 
     # Top level is clean — no literal dotted keys polluting it.
     assert list(config_data.keys()) == ["processor"]
@@ -210,7 +211,7 @@ def test_dotted_override_does_not_disturb_other_fluid_kwargs() -> None:
 
     config = deep_merge(config, overrides)
     config = expand_dotted_keys(config)
-    _merge_overrides_into_fluids(config, overrides)
+    merge_overrides_into_fluids(config, overrides)
 
     assert fluid.kwargs["lookback_days"] == 5
     # Untouched kwargs preserved.
@@ -227,11 +228,11 @@ def test_flow_mode_auto_path_via_deep_flow_directly() -> None:
 
     config = deep_merge(config, overrides)
     config = expand_dotted_keys(config)
-    _merge_overrides_into_fluids(config, overrides)
+    merge_overrides_into_fluids(config, overrides)
 
     proc_fluid = config["processor"]
-    with _confluid_active_context(config):
-        proc = _deep_flow(proc_fluid)
+    with confluid_active_context(config):
+        proc = deep_flow(proc_fluid)
 
     assert isinstance(proc, _DownloadFearGreed)
     assert proc.lookback_days == 5

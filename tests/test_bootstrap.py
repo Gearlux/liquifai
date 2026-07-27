@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from liquifai import LiquifyApp, LiquifyContext
+from liquifai import ConfigNotFoundError, LiquifyApp, LiquifyContext
 from liquifai.context import set_context
 
 
@@ -35,14 +35,22 @@ def test_bootstrap_with_scopes_direct(tmp_path: Path) -> None:
 
 
 def test_bootstrap_invalid_config_direct() -> None:
+    """Library code RAISES; only ``run()`` turns the failure into exit 1.
+
+    ``_bootstrap`` used to ``console.print`` + ``sys.exit(1)`` itself, which
+    hard-exited any process that embedded a LiquifyApp (an MCP server calling
+    ``run()`` in-process). The typed error keeps the CLI contract — ``run()``
+    catches ``LiquifaiError`` and renders one clean line + exit 1, pinned by
+    ``test_core_extended.py::test_missing_config`` — while staying catchable.
+    """
     app = LiquifyApp(name="fail-direct")
     app.context = LiquifyContext(name="fail-direct", config_path=Path("non_existent.yaml"))
 
-    # Should raise SystemExit
-    with pytest.raises(SystemExit) as excinfo:
+    with pytest.raises(ConfigNotFoundError, match="Configuration file not found"):
         app._bootstrap()
 
-    assert excinfo.value.code == 1
+    # Dual inheritance keeps pre-existing `except FileNotFoundError:` callers working.
+    assert issubclass(ConfigNotFoundError, FileNotFoundError)
 
 
 def test_bootstrap_no_context() -> None:
