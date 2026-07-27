@@ -25,10 +25,16 @@ SDK-dialect surface (e.g. a paginated ``list`` with platform-specific
 search/sort/page vocabulary) in a consumer-registered :class:`OpPolicy`.
 Consumer-dialect code never lands in liquifai itself.
 
-.. warning:: **Provisional API.** This subpackage has a single production
-   consumer so far; its names and spec vocabulary may change in 0.x minor
-   releases WITHOUT a deprecation cycle. It is deliberately not re-exported
-   from the top-level ``liquifai`` package.
+.. warning:: **Provisional API — excluded from liquifai's version contract.**
+   This subpackage has a single production consumer so far; its names and spec
+   vocabulary may change in 0.x minor releases WITHOUT a deprecation cycle,
+   and it may move to its own distribution. It is deliberately not re-exported
+   from the top-level ``liquifai`` package, so ``import liquifai`` never
+   reaches it.
+
+   Depend on it explicitly — ``liquifai[bridge]`` — so that dependency is
+   visible in YOUR metadata rather than implied by the core requirement.
+   :data:`__provisional__` is the machine-readable form of this notice.
 
 NOTE: no ``from __future__ import annotations`` anywhere in this subpackage —
 liquifai/confluid/FastMCP introspect live annotation objects on the
@@ -67,7 +73,17 @@ from liquifai.bridge.shaping import (
 )
 from liquifai.bridge.spec import CustomSpec, ExposeSpec, P, custom, expose
 
+#: Machine-readable stability marker: this subpackage sits OUTSIDE liquifai's
+#: version contract (see the module warning). Tooling that audits a codebase
+#: for provisional dependencies can assert on it.
+__provisional__ = True
+
+#: The optional-dependency name a consumer should declare — ``liquifai[bridge]``.
+__extra__ = "bridge"
+
 __all__ = [
+    "__provisional__",
+    "__extra__",
     # group / registration
     "SdkBridge",
     "Group",

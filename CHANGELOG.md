@@ -6,6 +6,113 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased] — 0.1.0, the first public release
 
+### Architecture review follow-ups (2026-07-26)
+
+- **`core.py` no longer parses global flags.** `_parse_globals` and
+  `_bind_dimension_flags` moved to a new `liquifai/flags.py` as
+  `parse_globals(tokens) -> GlobalFlags` and `bind_dimension_flags(...)`; the
+  historical 5-tuple return became the named `GlobalFlags` record, so `_prepare`
+  no longer positionally unpacks five values. Both now take and return
+  `Token`s and skip post-`--` literals, so a protected value can never be read
+  as a flag (`app run -- --debug` keeps `--debug` as a value).
+- **Config promotion records its provenance** *(new)*. Promotion is eager — a
+  bare token becomes the config the moment a matching YAML exists in any search
+  tier, so a stale `~/.config/<app>/report.yaml` silently swallows
+  `app run report` that meant `report` as a positional. Every promotion is now
+  logged at TRACE, and one resolved from OUTSIDE the working directory
+  additionally at DEBUG, naming the token and the file. The log fires from
+  `_prepare`, not from the router: routing is phase 1 and loggair is only
+  configured in phase 4, so a `debug`/`trace` call at the decision site is
+  dropped. `Invocation` gained `config_token` to carry the raw token that far.
+  New `examples/promotion_app.py` exercises all four outcomes (CWD,
+  `./config/`, an XDG file that swallows a positional, and no match) against
+  a sandboxed temp workspace.
+- **The nine `liquifai.core` re-export aliases are DEPRECATED** (removal in
+  v1.0). They are now served by a PEP-562 `core.__getattr__` that emits a
+  `DeprecationWarning` naming the exact replacement import, instead of plain
+  assignments — a plain alias is invisible, which is why the previous "keep
+  these" comment never converged on a cleanup. liquifai's own source and tests
+  were migrated onto the owning modules (`di` / `overrides` / `grammar`) and a
+  test now fails if anything internal regresses onto the deprecated surface, so
+  the v1.0 deletion is a pure external-consumer migration.
+- **Removed**: the `CliRouter` class (routing is the stateless
+  `router.route(app, argv)`; `router.py` keeps the real content — the `_AppNav`
+  adapter and the promoted-config resolver) and `liquifai/pipeline.py` entirely
+  (`ConfigPipeline` was a chainable class with three methods and two call
+  sites; the override step is the pure `overrides.apply_overrides`, the load
+  step is two lines inline in `_bootstrap`). Generalised into a rule in
+  `AGENTS.md`: **no stateless wrapper classes** — a type with one field and one
+  method is a function.
+- **Breaking (internal)**: `core.LiquifyApp._parse_globals` /
+  `._bind_dimension_flags` are gone (use `liquifai.flags`);
+  `_apply_overrides` takes `Token`s; `Invocation` gained a required
+  `config_token` field.
+- **New**: `docs/architecture.md` record 7 — why a deprecation must be served
+  by `__getattr__` rather than announced in a comment.
+
+- **Broadcast opt-outs are no longer bypassed by CLI overrides** *(bug fix)*.
+  liquifai computed its own accept-list to decide which config nodes an
+  override reached, and it diverged from confluid's on four counts: a
+  `**kwargs` constructor (confluid accepts everything, liquifai accepted only
+  the literal parameter name), `__init__`-body slots (reachable in YAML,
+  invisible to the CLI), and — the actual bug — BOTH broadcast opt-outs. A
+  class marked `@configurable(broadcast=False)` or a parameter typed
+  `NoBroadcast[T]` correctly refused a bare YAML key while `--lr 0.9` went
+  straight through. The local accept-list is deleted; `merge_overrides_into_fluids`
+  now asks confluid, mapping the two CLI forms onto the two predicates it
+  exports: dotted `--<name>.<key>` (addressed) → `accepts_key`, flat
+  `--<key>` (bare broadcast) → `accepts_broadcast`. Requires
+  `confluid>=0.1.0` with those predicates. The Fluid walker is also cycle-safe
+  now, matching its `expand_strings`/`deep_flow` siblings.
+- **`--` ends option parsing** *(new)*. Everything after a bare `--` is a
+  literal value — never an option, never an override, and it never stops
+  positional consumption. A positional whose value starts with a dash
+  (`seek -- -5 /tmp/x`) was previously unrepresentable: both tokens fell
+  through to the override parser as "unrecognized" and the command ran on
+  defaults. An unclaimed literal gets its own warning, so nothing after `--`
+  vanishes silently either.
+- **Completion resolves a promoted config through confluid's search tiers**
+  *(bug fix)*. TAB tested the typed path as-is, so with a `./config/foo.yaml`
+  layout — which dispatch resolves and loads for real — the entire
+  config-present branch was dead: TAB offered the command's signature flags
+  and never the YAML's own override keys. It now resolves the same four tiers
+  dispatch does (`./`, `./config/`, XDG), lazily, so the hot path stays
+  stdlib-only until a config is actually on the line.
+- **One argv walk instead of two** *(internal)*. The dispatcher and the
+  completion engine each implemented the descent to
+  (sub-app, command, promoted config, positionals); the copies drifted into
+  the bug above. Both now run `walk.walk_invocation` over a `Nav` protocol
+  (`router._AppNav` for live app objects, `engine._TreeNav` for the serialized
+  tree). Side effect: a value-taking global flag now owns the next token in
+  dispatch too, so `app --level run` is a flag/value pair rather than the
+  `run` command.
+- **Library code raises; only `run()` exits** *(behaviour change)*. The
+  missing-config and unknown-command paths used to `console.print` +
+  `sys.exit(1)` from inside a `LiquifyApp` method, hard-exiting any process
+  that embedded an app. They now raise the new `ConfigNotFoundError` (a
+  `FileNotFoundError`) and `UnknownCommandError` (a `ValueError`), which
+  `run()`'s existing failure handler renders identically — same message, same
+  exit code, same `--debug` propagation.
+- **`liquifai[bridge]` extra** *(new)*. The provisional `liquifai.bridge`
+  subpackage is now explicitly outside the version contract: an opt-in extra
+  to declare in consumer metadata, plus `__provisional__` / `__extra__`
+  markers and a rationale record. It carries no requirements today.
+- **`HelpLayout` is a closed `Literal`**. `layout: str` in `_show_help` /
+  `report.show_configuration` became `Literal["table", "lines"]` — a typo
+  used to fall through silently to the table branch.
+- **Removed**: `liquifai/discovery.py` (`get_configurable_paths` duplicated
+  `confluid.get_hierarchy_from_instance`, which `report.py` actually uses),
+  `CompletionController` (a five-method pass-through to five module
+  functions), `Invocation.cmd_name` (write-only), and
+  `overrides.accepted_override_keys` with its `core._accepted_override_keys`
+  alias.
+- **Breaking (internal)**: `Invocation.remaining_argv` (`List[str]`) is now
+  `Invocation.remaining_tokens` (`List[Token]`), so later phases can tell an
+  option from a post-`--` literal.
+- **New**: `docs/architecture.md` — six decision records covering the
+  hand-rolled parser, out-of-process completion, the shared walk, who owns
+  settability, how positionals bind, and the bridge's stability boundary.
+
 - **Double-TAB forces a completion value-cache refresh (bash)**: the lazy
   self-heal only fires when a positional's value cache is missing or older than
   5 min, so a cache that is fresh-by-age but wrong (an item deleted upstream)

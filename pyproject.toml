@@ -34,6 +34,21 @@ dependencies = [
 requires-python = ">=3.12"
 
 [project.optional-dependencies]
+# `liquifai[bridge]` — opt-in marker for the PROVISIONAL `liquifai.bridge`
+# subpackage (declarative SDK-to-operations engine). It carries no extra
+# requirements today: the subpackage is pure stdlib + liquifai's own core, so
+# there is nothing for pip to install. What the extra DOES buy is a contract
+# boundary that survives the 0.x line:
+#   * a consumer writes `liquifai[bridge]`, declaring in its own metadata that
+#     it depends on a surface excluded from semantic versioning (see the
+#     stability note in liquifai/bridge/__init__.py and CHANGELOG "Unstable");
+#   * if the bridge ever grows a real dependency, it lands here without any
+#     consumer-visible change;
+#   * `import liquifai` never reaches it — the subpackage is deliberately
+#     absent from the top-level exports (pinned by tests/test_bridge_group.py).
+# Note a pip extra cannot make a dependency-free subpackage physically absent
+# from the wheel; this is a declared contract, not an import barrier.
+bridge = []
 dev = [
     "black>=24.0.0,<25.0.0",
     "isort>=5.13.0,<6.0.0",

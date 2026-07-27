@@ -33,13 +33,16 @@ def demo() -> None:
         ["download", "cifar10", "2.0"],  # pure positional
         ["download", "--name", "cifar10"],  # pure flag form
         ["download", "cifar10", "--path", "/tmp/data"],  # mixed: binding stops at the first flag
+        # `--` ends option parsing: everything after it is a literal value, so a
+        # positional starting with a dash binds instead of reading as an option.
+        ["download", "--", "-latest", "-2.0"],
     ]
     for argv in invocations:
         proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True)
         result = [line for line in proc.stdout.splitlines() if line.startswith("RESULT")][0]
         print(f"$ positionals-demo {' '.join(argv)}\n  {result}")
 
-    print("positional, flag, and mixed forms all bound correctly")
+    print("positional, flag, mixed, and `--` literal forms all bound correctly")
 
 
 if __name__ == "__main__":

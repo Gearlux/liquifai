@@ -114,9 +114,9 @@ def test_looks_like_key() -> None:
 
 
 def test_parse_globals_consumes_every_bootstrap_flag() -> None:
-    from liquifai import LiquifyApp
+    from liquifai.flags import parse_globals
+    from liquifai.walk import tokenize
 
-    app = LiquifyApp(name="grammar-app")
     argv = [
         "--config",
         "cfg.yaml",
@@ -133,28 +133,39 @@ def test_parse_globals_consumes_every_bootstrap_flag() -> None:
         "/tmp/logs",
         "leftover",
     ]
-    config_path, scopes, debug, log_overrides, remaining = app._parse_globals(argv)
-    assert config_path == Path("cfg.yaml")
-    assert scopes == ["a", "b"]
-    assert debug is True
-    assert log_overrides == {
+    parsed = parse_globals(tokenize(argv))
+    assert parsed.config_path == Path("cfg.yaml")
+    assert parsed.scopes == ["a", "b"]
+    assert parsed.debug is True
+    assert parsed.log_overrides == {
         "log_level": "TRACE",
         "console_level": "INFO",
         "file_level": "DEBUG",
         "log_dir": Path("/tmp/logs"),
     }
-    assert remaining == ["leftover"]
+    assert [t.text for t in parsed.remaining] == ["leftover"]
 
 
 def test_parse_globals_short_forms() -> None:
-    from liquifai import LiquifyApp
+    from liquifai.flags import parse_globals
+    from liquifai.walk import tokenize
 
-    app = LiquifyApp(name="grammar-app")
-    config_path, scopes, debug, _, remaining = app._parse_globals(["-c", "x.yaml", "-s", "fast", "-d"])
-    assert config_path == Path("x.yaml")
-    assert scopes == ["fast"]
-    assert debug is True
-    assert remaining == []
+    parsed = parse_globals(tokenize(["-c", "x.yaml", "-s", "fast", "-d"]))
+    assert parsed.config_path == Path("x.yaml")
+    assert parsed.scopes == ["fast"]
+    assert parsed.debug is True
+    assert parsed.remaining == []
+
+
+def test_parse_globals_never_consumes_a_protected_literal() -> None:
+    """After ``--`` nothing is a flag — a literal `--debug` stays a value."""
+    from liquifai.flags import parse_globals
+    from liquifai.walk import tokenize
+
+    parsed = parse_globals(tokenize(["--debug", "--", "--debug", "-c", "x.yaml"]))
+    assert parsed.debug is True  # the real flag, before the separator
+    assert parsed.config_path is None  # `-c` after `--` is a literal, not a flag
+    assert [t.text for t in parsed.remaining] == ["--debug", "-c", "x.yaml"]
 
 
 def test_help_lists_every_visible_global_flag(capsys: Any) -> None:

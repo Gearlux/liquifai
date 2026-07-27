@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import List
 
 from liquifai import LiquifyApp
+from liquifai.flags import bind_dimension_flags, parse_globals
+from liquifai.walk import tokenize
 
 
 def _make_app() -> LiquifyApp:
@@ -23,18 +25,19 @@ def _make_app() -> LiquifyApp:
 
 
 def _run(app: LiquifyApp, argv: List[str]) -> List[str]:
-    """Drive ``_parse_globals`` + ``_bind_dimension_flags`` and return active scopes."""
+    """Drive ``parse_globals`` + ``bind_dimension_flags`` and return active scopes."""
     import confluid
 
     config_path = Path(argv[0]) if argv and not argv[0].startswith("-") else None
     remaining = argv[1:] if config_path is not None else argv
 
-    final_config_path, scopes, _, _, final_argv = app._parse_globals(remaining)
-    if final_config_path is not None:
-        config_path = final_config_path
+    parsed = parse_globals(tokenize(remaining))
+    scopes, final_tokens = parsed.scopes, parsed.remaining
+    if parsed.config_path is not None:
+        config_path = parsed.config_path
     if config_path is not None and config_path.exists():
         raw = confluid.load_config(config_path)
-        scopes, final_argv = app._bind_dimension_flags(scopes, raw, final_argv)
+        scopes, final_tokens = bind_dimension_flags(scopes, raw, final_tokens)
     return scopes
 
 
@@ -105,15 +108,14 @@ if_cls: !scope:task=classification
 def test_undeclared_dim_passes_through(tmp_path: Path) -> None:
     """`--task` is treated as a config override when no scope declares `task`."""
     cfg = _write_cfg(tmp_path / "c.yaml", "x: 1\n")
-    app = _make_app()
-    # No scopes activated; --task X stays in remaining argv (visible via
-    # _bind_dimension_flags returning the value untouched).
+    # No scopes activated; --task X stays in the remaining tokens (visible via
+    # bind_dimension_flags returning the value untouched).
     import confluid
 
     raw = confluid.load_config(cfg)
-    scopes, remaining = app._bind_dimension_flags([], raw, ["--task", "classification"])
+    scopes, remaining = bind_dimension_flags([], raw, tokenize(["--task", "classification"]))
     assert scopes == []
-    assert remaining == ["--task", "classification"]
+    assert [t.text for t in remaining] == ["--task", "classification"]
 
 
 def test_mixed_scope_and_implicit(tmp_path: Path) -> None:
@@ -142,10 +144,20 @@ if_cls: !scope:task=classification
   m: classifier
 """,
     )
-    app = _make_app()
     import confluid
 
     raw = confluid.load_config(cfg)
-    scopes, remaining = app._bind_dimension_flags([], raw, ["--task", "--other"])
+    scopes, remaining = bind_dimension_flags([], raw, tokenize(["--task", "--other"]))
     assert scopes == []
-    assert remaining == ["--task", "--other"]
+    assert [t.text for t in remaining] == ["--task", "--other"]
+
+
+def test_implicit_dim_ignores_a_protected_literal(tmp_path: Path) -> None:
+    """After ``--`` a `--task` token is a value, never a dimension activation."""
+    cfg = _write_cfg(tmp_path / "c.yaml", "if_cls: !scope:task=classification\n  m: classifier\n")
+    import confluid
+
+    raw = confluid.load_config(cfg)
+    scopes, remaining = bind_dimension_flags([], raw, tokenize(["--", "--task", "classification"]))
+    assert scopes == []
+    assert [t.text for t in remaining] == ["--task", "classification"]

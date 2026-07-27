@@ -4,7 +4,7 @@ Extracted from ``core.py`` in the consolidation split: this module owns the
 annotation-driven resolution (:func:`resolve_kwargs`), the recursive Fluid
 flowing walker (:func:`deep_flow`), and the confluid active-context shim
 (:func:`confluid_active_context`). ``core.py`` re-exports the historical
-underscore-prefixed names for existing callers (fluxstudio, tests).
+underscore-prefixed names for existing callers (streamstudio, tests).
 """
 
 from __future__ import annotations
@@ -110,8 +110,9 @@ def confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
 
     Thin wrapper over the public :func:`confluid.active_context` (which this
     helper predates — it used to reach into confluid's engine state directly).
-    Kept under its historical name (``core._confluid_active_context``) for
-    existing callers/tests.
+    Also reachable under a deprecated underscore-prefixed alias on
+    :mod:`liquifai.core`, which warns and is removed in v1.0 — import it from
+    here.
     """
     with active_context(context_data):
         yield
@@ -149,10 +150,10 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
         if isinstance(value, tuple):
             # NamedTuple subclasses take their fields as POSITIONAL args, not
             # as a single iterable. Without the splat, e.g.
-            # ``Sample([input, target, metadata])`` wraps the entire triplet
+            # ``Record([input, target, metadata])`` wraps the entire triplet
             # into the ``input`` field with target/metadata at their defaults
             # — silently breaking any dataset whose elements are NamedTuples
-            # (most notably ``sampleflux.sample.Sample``).
+            # (most notably ``recordstream.record.Record``).
             if hasattr(type(value), "_fields"):
                 return type(value)(*out)
             return type(value)(out)

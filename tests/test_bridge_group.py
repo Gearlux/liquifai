@@ -280,3 +280,37 @@ def test_integration_cli_handler_and_mcp_tools() -> None:
     assert tool(name="x") == {"name": "x", "size": 3}
     dry = tool(dry_run=True, name="x")
     assert dry["dry_run"] is True
+
+
+# ---------------------------------------------------------------------------
+# Provisional-surface contract (`liquifai[bridge]`)
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_is_not_reachable_from_the_top_level_package() -> None:
+    """`import liquifai` must never pull in the provisional bridge surface."""
+    import liquifai
+
+    assert "bridge" not in liquifai.__all__
+    for name in ("SdkBridge", "expose", "custom", "P"):
+        assert name not in liquifai.__all__
+        with pytest.raises(AttributeError):
+            getattr(liquifai, name)
+
+
+def test_bridge_declares_its_provisional_stability_marker() -> None:
+    """The stability contract is machine-readable, not only prose."""
+    import liquifai.bridge as bridge
+
+    assert bridge.__provisional__ is True
+    assert bridge.__extra__ == "bridge"
+
+
+def test_pyproject_declares_the_bridge_extra() -> None:
+    """A consumer must be able to write `liquifai[bridge]` and have it resolve."""
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+    assert "bridge" in data["project"]["optional-dependencies"]
