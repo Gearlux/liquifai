@@ -1,14 +1,12 @@
 """Override-matcher tests: `_merge_overrides_into_fluids` and friends.
 
-Pins the rule: a CLI override `--key value` applies to every Fluid in the
-tree whose target class
-
-* already has `key` in its kwargs (covers the post-construction pattern
-  like ``Enable.visualize``), OR
-* has `key` in its ``__init__`` signature (covers defaults-only kwargs
-  like ``RFUAVSource.max_packs``), OR
-* is ``@configurable`` and has `key` as a public class-level attribute
-  (covers @property setters and public class attrs Confluid setattr's).
+Pins the rule: a flat CLI override `--key value` is a BARE broadcast, so it
+lands on every Fluid whose target class accepts it per
+:func:`confluid.accepts_broadcast` — constructor params, settable properties,
+``__init__``-body slots, ``**kwargs`` targets — MINUS the classes/params that
+declared a broadcast opt-out (``@configurable(broadcast=False)`` /
+``NoBroadcast[T]``). A dotted `--name.key` is an ADDRESSED write and uses the
+looser :func:`confluid.accepts_key`, bypassing those opt-outs.
 
 Other Fluids are left alone — no typo broadcasting.
 """
@@ -16,10 +14,10 @@ Other Fluids are left alone — no typo broadcasting.
 from typing import Optional
 
 import pytest
-from confluid import configurable
+from confluid import NoBroadcast, accepts_broadcast, accepts_key, configurable
 from confluid.fluid import Class
 
-from liquifai.core import _accepted_override_keys, _merge_overrides_into_fluids
+from liquifai.overrides import merge_overrides_into_fluids
 
 
 @configurable
@@ -64,45 +62,43 @@ class _NotConfigurable:
 
 
 def test_accepted_keys_for_configurable_includes_ctor_and_public_attrs() -> None:
-    keys = _accepted_override_keys(_WithProperty)
-    assert "x" in keys  # ctor param
-    assert "threshold" in keys  # settable @property
+    assert accepts_key(_WithProperty, "x")  # ctor param
+    assert accepts_key(_WithProperty, "threshold")  # settable @property
 
 
 def test_accepted_keys_skips_readonly_property() -> None:
-    keys = _accepted_override_keys(_WithReadOnlyProperty)
-    assert "x" in keys
-    assert "computed" not in keys  # read-only @property is skipped
+    assert accepts_key(_WithReadOnlyProperty, "x")
+    assert not accepts_key(_WithReadOnlyProperty, "computed")  # read-only @property is skipped
 
 
 def test_accepted_keys_for_non_configurable_is_ctor_only() -> None:
-    keys = _accepted_override_keys(_NotConfigurable)
-    assert keys == {"a"}
+    assert accepts_key(_NotConfigurable, "a")
+    assert not accepts_key(_NotConfigurable, "anything_else")
 
 
 def test_merge_applies_ctor_kwarg_even_when_missing_from_yaml() -> None:
     """Override for `max_packs` must land even though YAML doesn't set it."""
     fluid = Class(_WithDefaultKwarg, root="/data")
-    _merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
+    merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs.get("max_packs") == 1
 
 
 def test_merge_applies_property_kwarg_for_configurable() -> None:
     fluid = Class(_WithProperty, x=0)
-    _merge_overrides_into_fluids({"obj": fluid}, {"threshold": 42})
+    merge_overrides_into_fluids({"obj": fluid}, {"threshold": 42})
     assert fluid.kwargs.get("threshold") == 42
 
 
 def test_merge_skips_unknown_kwarg_on_non_configurable() -> None:
     fluid = Class(_NotConfigurable, a=1)
-    _merge_overrides_into_fluids({"obj": fluid}, {"typo": 99})
+    merge_overrides_into_fluids({"obj": fluid}, {"typo": 99})
     assert "typo" not in fluid.kwargs
 
 
 def test_merge_preserves_existing_kwarg_override_path() -> None:
     """The legacy "already in kwargs" path still wins — post-construction toggles stay overridable."""
     fluid = Class(_WithDefaultKwarg, root="/data", max_packs=7)
-    _merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
+    merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs["max_packs"] == 1
 
 
@@ -110,7 +106,7 @@ def test_dotted_override_targets_instance_by_name() -> None:
     """`--overlay.visualize true` lands only on the Fluid whose `name: overlay`."""
     overlay = Class(_WithDefaultKwarg, root="/a", name="overlay")
     ls = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
-    _merge_overrides_into_fluids(
+    merge_overrides_into_fluids(
         {"o": overlay, "l": ls},
         {"overlay.max_packs": 1},
     )
@@ -123,7 +119,7 @@ def test_flat_override_still_broadcasts_to_named_instances() -> None:
     """Plain `--max_packs 1` continues to broadcast (legacy behaviour preserved)."""
     a = Class(_WithDefaultKwarg, root="/a", name="overlay")
     b = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
-    _merge_overrides_into_fluids(
+    merge_overrides_into_fluids(
         {"a": a, "b": b},
         {"max_packs": 5},
     )
@@ -134,7 +130,7 @@ def test_flat_override_still_broadcasts_to_named_instances() -> None:
 def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
     """Unknown names don't fall back to broadcast — avoid surprise matches."""
     fluid = Class(_WithDefaultKwarg, root="/a", name="overlay")
-    _merge_overrides_into_fluids(
+    merge_overrides_into_fluids(
         {"o": fluid},
         {"wrong_name.max_packs": 99},
     )
@@ -146,7 +142,7 @@ def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
 def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
     """Without a YAML `name`, dotted keys can't target the instance."""
     fluid = Class(_WithDefaultKwarg, root="/a")  # no name
-    _merge_overrides_into_fluids(
+    merge_overrides_into_fluids(
         {"o": fluid},
         {"overlay.max_packs": 1},
     )
@@ -156,10 +152,89 @@ def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
 def test_merge_broadcasts_to_nested_fluids() -> None:
     inner = Class(_WithDefaultKwarg, root="/inner")
     outer = Class(_WithDefaultKwarg, root="/outer", sub=inner)
-    _merge_overrides_into_fluids({"s": outer}, {"max_packs": 5})
+    merge_overrides_into_fluids({"s": outer}, {"max_packs": 5})
     # Both Fluids had `max_packs` in their ctor → both get the override.
     assert outer.kwargs["max_packs"] == 5
     assert inner.kwargs["max_packs"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Broadcast opt-outs: a flat `--key` is a BARE broadcast and must obey the same
+# opt-outs a bare top-level YAML key does. Before the accept-list was unified on
+# confluid's, liquifai re-derived its own and these declarations were bypassed.
+# ---------------------------------------------------------------------------
+
+
+@configurable(broadcast=False)
+class _OptedOutOfBroadcast:
+    def __init__(self, lr: float = 0.1, name: str = "") -> None:
+        self.lr = lr
+        self.name = name
+
+
+@configurable
+class _WithNoBroadcastParam:
+    def __init__(self, lr: float = 0.1, tag: NoBroadcast[str] = "x") -> None:
+        self.lr = lr
+        self.tag = tag
+
+
+@configurable
+class _KwargsTarget:
+    def __init__(self, **kw: object) -> None:
+        self.kw = kw
+
+
+def test_flat_override_skips_class_that_opted_out_of_broadcast() -> None:
+    fluid = Class(_OptedOutOfBroadcast, lr=0.001)
+    merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9})
+    assert fluid.kwargs["lr"] == 0.001  # bare key must not land
+
+
+def test_dotted_override_still_reaches_broadcast_opted_out_class() -> None:
+    """The opt-out gates BARE keys only — an addressed write is still allowed."""
+    fluid = Class(_OptedOutOfBroadcast, lr=0.001, name="model")
+    merge_overrides_into_fluids({"m": fluid}, {"model.lr": 0.9})
+    assert fluid.kwargs["lr"] == 0.9
+
+
+def test_flat_override_skips_no_broadcast_param_but_not_its_siblings() -> None:
+    fluid = Class(_WithNoBroadcastParam, lr=0.1, tag="x")
+    merge_overrides_into_fluids({"m": fluid}, {"tag": "y", "lr": 0.5})
+    assert fluid.kwargs["tag"] == "x"  # NoBroadcast[str] slot untouched
+    assert fluid.kwargs["lr"] == 0.5  # ordinary slot still broadcasts
+
+
+def test_flat_override_reaches_kwargs_constructor() -> None:
+    """A `**kwargs` target accepts everything in confluid — so must the CLI."""
+    fluid = Class(_KwargsTarget)
+    merge_overrides_into_fluids({"m": fluid}, {"anything": 7})
+    assert fluid.kwargs["anything"] == 7
+
+
+def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
+    """A `!class:` naming an unimportable module has no accept-list to consult."""
+    fluid = Class("not.importable.Anywhere", lr=0.001)
+    merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9, "unknown": 1})
+    assert fluid.kwargs["lr"] == 0.9  # present in YAML -> overridable
+    assert "unknown" not in fluid.kwargs  # absent -> not invented
+
+
+def test_merge_is_cycle_safe() -> None:
+    """A marker graph with a back-edge is visited once, not until stack exhaustion."""
+    a = Class(_WithDefaultKwarg, root="/a")
+    b = Class(_WithDefaultKwarg, root="/b", sub=a)
+    a.kwargs["sub"] = b  # cycle
+    merge_overrides_into_fluids({"a": a}, {"max_packs": 3})
+    assert a.kwargs["max_packs"] == 3
+    assert b.kwargs["max_packs"] == 3
+
+
+def test_broadcast_predicates_agree_with_the_merge() -> None:
+    """The merge asks confluid; these are the answers it gets (drift pin)."""
+    assert accepts_key(_OptedOutOfBroadcast, "lr")
+    assert not accepts_broadcast(_OptedOutOfBroadcast, "lr")
+    assert accepts_broadcast(_WithDefaultKwarg, "max_packs")
 
 
 if __name__ == "__main__":

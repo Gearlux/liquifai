@@ -15,7 +15,10 @@ Rich-using CLI glue cannot live inside it. The real work is still delegated to
 Each takes the ``LiquifyApp`` as ``app`` (typed ``Any`` to avoid a circular
 import — ``core`` imports this module) and is called by a thin same-named
 private method on :class:`liquifai.core.LiquifyApp` so existing call sites and
-tests keep working unchanged.
+tests keep working unchanged. Those methods call these functions DIRECTLY —
+there is deliberately no controller object in between (the former
+``CompletionController`` forwarded five methods to these five functions and
+added no behaviour of its own).
 """
 
 import os
@@ -160,25 +163,3 @@ def maybe_background_refresh_values(app: Any, ttl: float = 600.0) -> None:
         threading.Thread(target=_bg, daemon=True, name=f"liquifai-refresh-{app.name}").start()
     except Exception:
         pass
-
-
-class CompletionController:
-    """Manages completion installation, cache updates, and background refreshing for a LiquifyApp."""
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    def handle_completion_install(self, argv: List[str]) -> bool:
-        return handle_completion_install(self.app, argv)
-
-    def refresh_completion_cache(self) -> None:
-        refresh_completion_cache(self.app)
-
-    def handle_refresh_completions(self, argv: List[str]) -> bool:
-        return handle_refresh_completions(self.app, argv)
-
-    def handle_refresh_completion_value(self, argv: List[str]) -> bool:
-        return handle_refresh_completion_value(self.app, argv)
-
-    def background_refresh_values(self, ttl: float = 600.0) -> None:
-        maybe_background_refresh_values(self.app, ttl)

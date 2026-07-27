@@ -1,16 +1,21 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from rich.console import Console
 from rich.table import Table
 
 from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
 
+#: How a command's options are rendered: the Rich grid (``--help``) or one
+#: greppable line per option (``--docs``). Closed so a typo can't silently
+#: fall through to the table branch. Mirrored as ``core.HelpLayout``.
+HelpLayout = Literal["table", "lines"]
+
 
 def show_configuration(
     target: Any,
     config_map: Optional[Dict[str, Any]] = None,
     title: str = "Available Configuration Options",
-    layout: str = "table",
+    layout: HelpLayout = "table",
     positionals: Optional[List[str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
@@ -95,7 +100,7 @@ def _drop_positional_paths(hierarchy: Dict[str, Any], positionals: List[str]) ->
     return {p: v for p, v in hierarchy.items() if p.split(".", 1)[0] not in roots}
 
 
-def _render_positionals(target: Any, positionals: List[str], layout: str) -> None:
+def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout) -> None:
     """Render the command's positional arguments as their own block.
 
     Type/doc come from the SAME :func:`confluid.get_hierarchy` extraction the

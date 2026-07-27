@@ -17,11 +17,20 @@ import pytest
 import liquifai
 from liquifai import LiquifyApp
 from liquifai.completion import install_script, render_helpers, render_script
-from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError, UnsupportedShellError
+from liquifai.exceptions import (
+    CommandDefinitionError,
+    ConfigNotFoundError,
+    LiquifaiError,
+    UnknownCommandError,
+    UnknownOperationError,
+    UnsupportedShellError,
+)
 
 HIERARCHY = [
     (CommandDefinitionError, ValueError),
     (UnknownOperationError, KeyError),
+    (UnknownCommandError, ValueError),
+    (ConfigNotFoundError, FileNotFoundError),
     (UnsupportedShellError, ValueError),
 ]
 
@@ -33,7 +42,15 @@ def test_dual_inheritance(exc_cls: Type[Exception], builtin: Type[Exception]) ->
 
 
 @pytest.mark.parametrize(
-    "name", ["LiquifaiError", "CommandDefinitionError", "UnknownOperationError", "UnsupportedShellError"]
+    "name",
+    [
+        "LiquifaiError",
+        "CommandDefinitionError",
+        "ConfigNotFoundError",
+        "UnknownCommandError",
+        "UnknownOperationError",
+        "UnsupportedShellError",
+    ],
 )
 def test_exceptions_exported_from_package(name: str) -> None:
     assert getattr(liquifai, name) is not None
@@ -75,3 +92,22 @@ def test_render_helpers_unsupported_shell_raises() -> None:
 def test_install_script_unsupported_shell_raises(tmp_path: Path) -> None:
     with pytest.raises(UnsupportedShellError):
         install_script("myprog", "tcsh", home=tmp_path)
+
+
+def test_unknown_command_raises_typed_error_not_bare_sys_exit() -> None:
+    """``_execute`` raises; ``run()`` alone owns the exit code (embedding-safe)."""
+    from liquifai.core import Invocation
+
+    app = LiquifyApp(name="test-app")
+    inv = Invocation(
+        target_app=app,
+        target_func=None,
+        config_path=None,
+        config_token=None,
+        positional_names=[],
+        positional_values=[],
+        remaining_tokens=[],
+    )
+    with pytest.raises(UnknownCommandError) as ei:
+        app._execute(inv)
+    assert isinstance(ei.value, ValueError)

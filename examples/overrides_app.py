@@ -49,6 +49,9 @@ def demo() -> None:
         (["show", "--verbose+"], "polarity: explicit True"),
         (["show", "--verbose"], "implicit True"),
         (["show", "oops", "0.1"], "unrecognized tokens -> warning, run proceeds on defaults"),
+        # After `--` nothing is an option: `--max_epochs` is a literal value here,
+        # so the override is NOT applied and max_epochs keeps its default.
+        (["show", "--", "--max_epochs", "3"], "`--` ends option parsing"),
     ]
     for argv, label in cases:
         proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True)
