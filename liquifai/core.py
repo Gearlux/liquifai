@@ -9,6 +9,7 @@ import confluid
 import loggair
 from loggair import get_logger
 from rich.console import Console
+from rich.markup import escape
 
 from liquifai import completion_cli, di, flags, grammar, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
@@ -486,7 +487,11 @@ class LiquifyApp:
 
             log = self.context.logger if self.context is not None and self.context.logger is not None else logger
             log.debug(f"CLI failure traceback:\n{traceback.format_exc()}")
-            console.print(f"[red]Error:[/red] {exc}")
+            # `escape`: the message is untrusted text interpolated into a Rich MARKUP
+            # string, so any bracketed run that parses as a style is silently eaten —
+            # a hint like `pip install 'myapp[extra]'` would render as `pip install
+            # 'myapp'`, i.e. a WRONG instruction handed to the user.
+            console.print(f"[red]Error:[/red] {escape(str(exc))}")
             sys.exit(1)
 
     def _route(self, argv: List[str]) -> "Invocation":
