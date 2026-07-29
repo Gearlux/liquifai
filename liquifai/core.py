@@ -703,8 +703,12 @@ class LiquifyApp:
         kwargs = self._resolve_kwargs(func)
         flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
         if flow_mode == "auto":
+            # `context=` is what makes the flat-config contract work: a Fluid that came
+            # from the document is built AGAINST it, so top-level keys broadcast into
+            # same-named constructor params. Without it every one of them is dropped
+            # silently — see `di.deep_flow`.
             with di.confluid_active_context(self.context.config_data):
-                kwargs = {k: di.deep_flow(v) for k, v in kwargs.items()}
+                kwargs = {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
         return func(**kwargs)
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
@@ -758,7 +762,7 @@ class LiquifyApp:
         # kwargs deferred (they flow lazily in production), but the liquify
         # contract is "fully flowed graph" — introspection tools need every
         # attribute resolved.
-        return {k: di.deep_flow(v) for k, v in kwargs.items()}
+        return {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
 
     def _show_help(
         self,

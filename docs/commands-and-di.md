@@ -79,6 +79,32 @@ are flowed before the command runs:
 
 An invalid mode raises `CommandDefinitionError` at decoration time.
 
+### Flat configs and `Any`-annotated parameters
+
+Under `flow_mode="auto"`, an injected object is built **against the loaded
+document**, so the config can be *flat*: a top-level key injects into the
+constructor parameter of the same name, with no nesting and no `!ref:`.
+
+```yaml
+runnable: !class:mypkg.Trainer
+  model: !lazy:mypkg.Backbone { name: resnet18 }
+
+dataset: !class:mypkg.Dataset { path: ./data }
+max_epochs: 3          # -> Trainer(max_epochs=3)
+```
+
+This works whether the parameter is annotated with a configurable class
+(`def train(trainer: MyTrainer)`) or with `Any` (`def run(runnable: Any)`). The
+`Any` form matters for a **generic runner** — one command that executes a
+trainer, an evaluator or a converter, whichever the YAML names — where no single
+class can be named in the signature.
+
+> **Fixed in 0.1.1.** Before that release the `Any` form built the object in
+> isolation, so every top-level key was dropped *silently*: `dataset:` became
+> `None`, `max_epochs: 3` reverted to the parameter default, and the run looked
+> configured. If you call `liquifai.di.deep_flow` yourself, pass the document as
+> `context=` — without it you get the old, silent behaviour.
+
 ## Positional arguments (`positionals=[...]`)
 
 Any command may declare ordered positional-argument names. Leading non-flag
