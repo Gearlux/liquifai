@@ -118,12 +118,26 @@ def confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
         yield
 
 
-def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
+def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optional[Dict[str, Any]] = None) -> Any:
     """Recursively flow any ``Fluid`` stubs embedded in ``value``.
 
     Walks lists, tuples, dicts, and live instances' ``vars()``; any attribute
     that is still a ``Fluid`` is replaced in-place with the flowed instance.
     Cycle-safe via ``id(obj)`` tracking. Primitives pass through unchanged.
+
+    ``context`` is the loaded configuration document. Pass it whenever the value
+    came from that document: a Fluid is then built with
+    :func:`confluid.materialize`, which BROADCASTS the document's top-level keys
+    into same-named constructor parameters — the flat-config contract. Omit it
+    and each Fluid is built in isolation with a bare ``flow()``, so every
+    top-level key is dropped **silently** (a ``dataset:`` becomes ``None``, a
+    ``max_epochs: 3`` quietly reverts to the parameter default, and the run looks
+    configured when it is not).
+
+    This is why the parameter is explicit rather than read from confluid's
+    ambient state: ``confluid.active_context`` covers ``!ref:`` resolution for a
+    bare ``flow()``, NOT broadcasting, so relying on it would look correct and
+    silently do nothing.
 
     Skips dunder attrs (``__*__``) on instances — those are framework
     bookkeeping (e.g. confluid's ``__confluid_kwargs__`` round-trip mirror,
@@ -143,10 +157,11 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
         return value
 
     if isinstance(value, Fluid):
-        return deep_flow(flow(value), _visited)
+        built = materialize(value, context=context) if context is not None else flow(value)
+        return deep_flow(built, _visited, context=context)
 
     if isinstance(value, (list, tuple)):
-        out = [deep_flow(v, _visited) for v in value]
+        out = [deep_flow(v, _visited, context=context) for v in value]
         if isinstance(value, tuple):
             # NamedTuple subclasses take their fields as POSITIONAL args, not
             # as a single iterable. Without the splat, e.g.
@@ -160,7 +175,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
         return out
 
     if type(value) is dict:
-        return {k: deep_flow(v, _visited) for k, v in value.items()}
+        return {k: deep_flow(v, _visited, context=context) for k, v in value.items()}
 
     # Live instance: walk its __dict__ and replace any Fluid attrs in place.
     if hasattr(value, "__dict__") and not isinstance(value, type):
@@ -177,6 +192,11 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None) -> Any:
                 continue  # honor Lazy[T]: leave runtime-injection attrs deferred
             if isinstance(attr_value, LazyFluid):
                 continue  # YAML !lazy: stays deferred even without the Lazy[T] mirror
+            # Deliberately NOT threading `context` here: this attribute belongs to an
+            # already-built object, not to the config document, so broadcasting the
+            # document's top-level keys into it is not what the flat-config contract
+            # promises. Document-shaped values (the kwarg itself, and the lists/dicts
+            # inside it) do get the context, above.
             resolved = deep_flow(attr_value, _visited)
             if resolved is not attr_value:
                 try:
