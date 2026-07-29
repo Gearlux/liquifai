@@ -6,6 +6,33 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] — unreleased
+
+_Patch release: two bug fixes, no API changes. Stamp the date when tagging._
+
+### Fixed
+
+- **A flat config's top-level keys now reach a command parameter annotated `Any`.**
+  DI has always built a parameter annotated with a *configurable class* against the
+  loaded document, which is what makes broadcasting work (a top-level YAML key
+  injecting into the same-named constructor parameter). A parameter annotated `Any`
+  took a different route — the raw `Fluid` was deep-flowed in isolation — so every
+  top-level key was dropped, and dropped **silently**: a `dataset:` became `None`, a
+  `max_epochs: 3` quietly reverted to the parameter default and the run looked
+  configured. This is not an edge case: a generic runner (one command that executes
+  a trainer, an evaluator or a converter, whichever the YAML names) cannot annotate a
+  single class, so `Any` is the only honest annotation. `di.deep_flow` now takes an
+  explicit `context=` — the loaded document — and builds document-shaped `Fluid`s with
+  `confluid.materialize` against it. An already-built instance's `Fluid` attributes are
+  deliberately *not* broadcast into; `!lazy:` still stays deferred.
+
+- **Error messages no longer lose bracketed text to Rich markup.** The failure
+  renderer interpolated untrusted exception text into a markup string, so any
+  bracketed run Rich read as a style vanished — an install hint reading
+  `pip install 'myapp[extra]'` printed as `pip install 'myapp'`, a wrong command
+  handed to the user with no sign anything was lost. The message is now escaped;
+  the `Error:` prefix keeps its styling.
+
 ## [0.1.0] — 2026-07-27
 
 _First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
