@@ -2,7 +2,7 @@
 
 Registered as the ``liquifai-complete`` console script. Imports only
 stdlib + :mod:`liquifai.completion` (which itself avoids touching
-``liquifai.core`` so logflow / confluid / rich never load on the hot path).
+``liquifai.core`` so loggair / confluid / rich never load on the hot path).
 
 Wire protocol: the shell wrapper sets either ``COMP_LINE`` + ``COMP_POINT`` (the
 raw command line + cursor offset — bash, quote-aware) OR ``COMP_WORDS`` +
@@ -29,6 +29,7 @@ from liquifai.completion import (
     make_lazy_refresh_spawner,
     read_cache,
     split_comp_words,
+    wants_forced_refresh,
     words_from_comp_line,
 )
 
@@ -46,7 +47,10 @@ def main() -> None:
     # (zsh/fish, already quote-aware, and old bash installs not yet re-sourced).
     # escape_candidate emits each candidate so the shell inserts it as a single
     # argument. The lazy-refresh spawner self-heals stale/missing DEPENDENT caches
-    # (e.g. a new dataset version) in a detached background process.
+    # (e.g. a new dataset version) in a detached background process. A repeated/second
+    # TAB (bash $COMP_TYPE) forces that refresh even for a fresh-by-age cache — the
+    # user's "this list looks wrong, refresh it" signal.
+    force_refresh = wants_forced_refresh(os.environ.get("COMP_TYPE"))
     comp_line = os.environ.get("COMP_LINE")
     comp_point = os.environ.get("COMP_POINT")
     if comp_line:  # non-empty ⇒ present (an empty/unset COMP_LINE falls back below)
@@ -61,7 +65,9 @@ def main() -> None:
             cword = int(os.environ.get("COMP_CWORD", "0"))
         except ValueError:
             cword = 0
-    for cand in complete_from_tree(tree, words, cword, lazy_refresh=make_lazy_refresh_spawner(app_name)):
+    for cand in complete_from_tree(
+        tree, words, cword, lazy_refresh=make_lazy_refresh_spawner(app_name), force_refresh=force_refresh
+    ):
         print(escape_candidate(cand))
 
 

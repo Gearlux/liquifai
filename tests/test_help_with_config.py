@@ -42,7 +42,7 @@ class _Parent:
 
 @configurable
 class _Wrapper:
-    """Wrapper that sets a post-construction toggle (Enable-style)."""
+    """Wrapper whose toggle is set by setattr after __init__ (a config layer injecting a key)."""
 
     def __init__(self, inner: _Leaf) -> None:
         self.inner = inner
@@ -95,7 +95,7 @@ def test_show_configuration_flowed_graph_lists_ctor_params() -> None:
 def test_show_configuration_flowed_graph_surfaces_post_construction_toggle() -> None:
     inner = _Leaf(count=3)
     wrapper = _Wrapper(inner=inner)
-    wrapper.visualize = True  # type: ignore[attr-defined]  # Enable pattern
+    wrapper.visualize = True  # type: ignore[attr-defined]  # post-construction, undeclared
     graph = {"wrapper": wrapper}
 
     def cmd(wrapper: _Wrapper) -> None:
@@ -115,6 +115,47 @@ def test_show_configuration_static_path_untouched() -> None:
     out = _capture(show_configuration, cmd, title="Static")
     # Static walker still finds ctor leaves via the type annotation
     assert "--count" in out or "--label" in out or "--title" in out
+
+
+def _version_create_cmd(
+    name: str = "",
+    source_version: str = "",
+    target_version: str = "",
+    append: bool = False,
+) -> None:
+    """Create a dataset version.
+
+    Args:
+        name: Dataset name.
+        source_version: Version to create the new version from.
+        target_version: Version string for the new version.
+        append: Append to the source version's files.
+    """
+    return None
+
+
+def test_show_configuration_positionals_block_and_exclusion() -> None:
+    """Declared positionals render as their own block and vanish from the
+    options table — mirroring completion, which never offers a positional as
+    its ``--flag`` spelling (the spelling still parses at runtime)."""
+    out = _capture(show_configuration, _version_create_cmd, positionals=["name", "source_version"])
+    assert "Positional Arguments" in out
+    assert "<name>" in out
+    assert "<source_version>" in out
+    assert "Version to create the new version from." in out  # doc carried into the block
+    assert "--source_version" not in out
+    # Real options are untouched.
+    assert "--target_version" in out
+    assert "--append" in out
+
+
+def test_show_configuration_positionals_lines_layout_matches() -> None:
+    """The ``--docs`` lines layout carries the SAME positional block/exclusion."""
+    out = _capture(show_configuration, _version_create_cmd, layout="lines", positionals=["name", "source_version"])
+    assert "Positional Arguments" in out
+    assert "<source_version>" in out
+    assert "--source_version" not in out
+    assert "--target_version" in out
 
 
 def test_liquify_and_show_end_to_end(tmp_path: Path) -> None:
@@ -155,6 +196,68 @@ def test_liquify_and_show_end_to_end(tmp_path: Path) -> None:
     assert "99" in out
     assert "gadget" in out
     assert "from YAML" in out
+
+
+def _render_help(renderer: Any, *args: Any) -> str:
+    """Run a report help-renderer (which takes an explicit ``console``) and
+    capture its output."""
+    from io import StringIO
+
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=200)
+    renderer(*args, console)
+    return buf.getvalue()
+
+
+def test_show_command_index_lists_commands_and_groups() -> None:
+    from liquifai.report import show_command_index
+
+    root = LiquifyApp(name="myapp")
+
+    @root.command()
+    def greet(target: str = "world") -> None:
+        """Say hello to someone."""
+
+    sub = LiquifyApp(name="data", description="Data ops")
+
+    @sub.command()
+    def alpha() -> None:
+        pass
+
+    root.add_app(sub, "data")
+
+    out = _render_help(show_command_index, root)
+    assert "greet" in out
+    assert "Say hello to someone" in out  # first docstring line
+    assert "data" in out
+    assert "Data ops" in out  # group description
+
+
+def test_show_command_index_folds_aliases_into_canonical_row() -> None:
+    from liquifai.report import show_command_index
+
+    root = LiquifyApp(name="myapp")
+    sub = LiquifyApp(name="dataset", description="Dataset ops")
+    root.add_app(sub, "dataset", aliases=["ds"])
+
+    out = _render_help(show_command_index, root)
+    # Canonical group carries the alias in-line; no separate `ds` group row.
+    assert "dataset (ds)" in out
+    assert "\nds " not in out  # alias is not its own row
+
+
+def test_show_global_options_renders_every_visible_flag() -> None:
+    from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
+    from liquifai.report import show_global_options
+
+    out = _render_help(show_global_options)
+    assert "Global Options" in out
+    for spec in GLOBAL_FLAG_SPECS:
+        if spec.hidden:
+            continue
+        assert flag_display(spec) in out, f"visible flag {spec!r} missing from help"
+    # The implicit per-dimension flag note is present.
+    assert "--KEY VAL" in out
 
 
 if __name__ == "__main__":

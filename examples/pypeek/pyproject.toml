@@ -1,0 +1,37 @@
+# pypeek — the installable liquifai demo app (see README.md).
+#
+# Lives in a SUBDIRECTORY of examples/ deliberately: CI executes every flat
+# examples/*.py script, and pypeek needs the network; being an installable
+# project (console script on PATH) is also exactly what the completion-cache
+# machinery keys off (the self-heal spawner runs `pypeek ...` by name).
+
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pypeek"
+version = "0.1.0"
+description = "Demo liquifai CLI: query the PyPI JSON API (operations, DI, completion caching)."
+requires-python = ">=3.12"
+dependencies = ["liquifai"]
+
+[project.scripts]
+pypeek = "pypeek:main"
+
+# Liquifai app registration: lets `liquifai-install-completions` discover this
+# CLI via an instant entry-point metadata read instead of executing the binary
+# (subprocess probe, 15 s timeout each). Name = the app/binary name; value =
+# the LiquifyApp instance. Entry-point changes need an editable reinstall.
+[project.entry-points."liquifai.apps"]
+pypeek = "pypeek:app"
+
+[tool.setuptools]
+py-modules = ["pypeek"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
+[tool.black]
+line-length = 120

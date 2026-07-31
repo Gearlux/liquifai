@@ -1,5 +1,5 @@
 from confluid import configurable
-from logflow import get_logger
+from loggair import get_logger
 
 from liquifai import LiquifyApp
 
