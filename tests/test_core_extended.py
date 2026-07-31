@@ -48,7 +48,7 @@ def test_script_command_with_root_class_yaml(tmp_path: Path, monkeypatch: Any) -
     Confluid's path-loader and text-loader are symmetric (both wrap a
     root `!class:` as a Fluid), so liquifai's bootstrap and DI must be
     able to handle ``context.config_data`` being a Fluid rather than a
-    dict — used by FluxStudio's ``fluxstudio run <pipeline>.yaml``.
+    dict — used by StreamStudio's ``streamstudio run <pipeline>.yaml``.
     """
     app = LiquifyApp(name="test-app")
 
@@ -72,7 +72,7 @@ def test_script_command_with_root_class_yaml(tmp_path: Path, monkeypatch: Any) -
     assert captured["config_path"] is not None
     assert captured["config_path"].name == "pipeline.yaml"
     # Root-level !class: stays as a Fluid; the command body opts into how
-    # to materialize it (matches FluxStudio's run-then-flow workflow).
+    # to materialize it (matches StreamStudio's run-then-flow workflow).
     assert isinstance(captured["config_data"], Fluid)
     assert captured["config_data"].kwargs["name"] == "tiny"
 

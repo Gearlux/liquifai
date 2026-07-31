@@ -1,3 +1,4 @@
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -26,16 +27,19 @@ class LiquifyContext:
     logger: Any = None
 
 
-# Global Singleton for the active context
-_active_context: Optional[LiquifyContext] = None
+# The active context, held in a ContextVar (not a bare module global) so
+# concurrent in-process embeddings — threads, asyncio tasks (e.g. an MCP
+# server running commands) — each see their own context. Mirrors confluid's
+# own ContextVar migration. For the ordinary single-threaded CLI process the
+# behavior is identical to the old global.
+_active_context: ContextVar[Optional[LiquifyContext]] = ContextVar("liquifai_active_context", default=None)
 
 
 def get_context() -> Optional[LiquifyContext]:
     """Get the currently active Liquify context."""
-    return _active_context
+    return _active_context.get()
 
 
-def set_context(ctx: LiquifyContext) -> None:
-    """Set the active Liquify context."""
-    global _active_context
-    _active_context = ctx
+def set_context(ctx: Optional[LiquifyContext]) -> None:
+    """Set the active Liquify context (``None`` clears it, e.g. between tests)."""
+    _active_context.set(ctx)

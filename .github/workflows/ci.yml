@@ -8,7 +8,7 @@ name: Liquifai CI
 
 on:
   push:
-    branches: [ main, dev/main ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -27,10 +27,6 @@ jobs:
     - name: Install dependencies
       run: |
         
-        # Internal Gearlux dependencies — installed FIRST with --no-deps so
-        # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
-        uv pip install --system --no-deps git+https://github.com/Gearlux/log-flow.git@main
-        uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system -e ".[dev]"
     - name: Run Isort
       run: isort --check-only .
@@ -56,10 +52,6 @@ jobs:
     - name: Install dependencies
       run: |
         
-        # Internal Gearlux dependencies — installed FIRST with --no-deps so
-        # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
-        uv pip install --system --no-deps git+https://github.com/Gearlux/log-flow.git@main
-        uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system -e ".[dev]"
     - name: Run Tests
       run: |
@@ -90,14 +82,19 @@ jobs:
     - name: Install dependencies
       run: |
         
-        # Internal Gearlux dependencies — installed FIRST with --no-deps so
-        # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
-        uv pip install --system --no-deps git+https://github.com/Gearlux/log-flow.git@main
-        uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system -e ".[dev]"
     - name: Run Examples
       run: |
         for f in examples/*.py; do
+          if [ -f "$f" ]; then
+            echo "Verifying $f..."
+            python3 "$f"
+          fi
+        done
+        # Directory examples opt in by shipping a run.py entry point;
+        # network-dependent / install-only example apps ship no run.py
+        # and are skipped by construction.
+        for f in examples/*/run.py; do
           if [ -f "$f" ]; then
             echo "Verifying $f..."
             python3 "$f"
@@ -119,10 +116,6 @@ jobs:
     - name: Install dependencies
       run: |
         
-        # Internal Gearlux dependencies — installed FIRST with --no-deps so
-        # `-e .[dev]` below finds them pre-satisfied instead of hitting PyPI.
-        uv pip install --system --no-deps git+https://github.com/Gearlux/log-flow.git@main
-        uv pip install --system --no-deps git+https://github.com/Gearlux/confluid.git@main
         uv pip install --system -e ".[dev]"
         # Notebook-only dependencies live in the optional `[notebook]` extra
         # when a project ships notebooks; absence is not an error.

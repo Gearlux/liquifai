@@ -30,6 +30,7 @@ coverage-*
 # Project-Specific (Data & Logs)
 data/
 logs/
+*.log
 models/*.pt
 models/*.onnx
 *.h5

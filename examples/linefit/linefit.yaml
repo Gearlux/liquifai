@@ -1,0 +1,27 @@
+# linefit.yaml — the experiment definition.
+#
+#   linefit fit linefit.yaml
+#   linefit fit linefit.yaml --Trainer.max_epochs 50 --LinearModel.w 1.5
+#   linefit print-config linefit.yaml
+#
+# `seed:` is a bare top-level key: confluid broadcasts it into every component
+# that accepts it (here: SyntheticData) with zero plumbing.
+seed: 42
+
+# The Trainer block is selected for the `trainer: Trainer` parameter by class
+# name. `!class:Name()` builds eagerly at load; `!lazy:` stays deferred until
+# fit() flows it with the model's params.
+Trainer:
+  max_epochs: 400
+  log_every: 100
+  model: !class:LinearModel()
+  data: !class:SyntheticData()
+  optimizer: !lazy:GradientDescent
+    lr: 0.3
+
+# Class-name block: applies to every SyntheticData instance (the one nested in
+# the trainer included).
+SyntheticData:
+  n: 128
+  slope: 2.0
+  intercept: -1.0

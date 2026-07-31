@@ -406,9 +406,9 @@ def test_install_script_zsh_idempotent(tmp_path: Path) -> None:
 
 def test_install_script_fish(tmp_path: Path) -> None:
     home = tmp_path
-    target = comp.install_script("fluxstudio", "fish", home=home)
-    assert target == home / ".config" / "fish" / "completions" / "fluxstudio.fish"
-    assert "liquifai-complete fluxstudio" in target.read_text()
+    target = comp.install_script("streamstudio", "fish", home=home)
+    assert target == home / ".config" / "fish" / "completions" / "streamstudio.fish"
+    assert "liquifai-complete streamstudio" in target.read_text()
 
 
 def test_install_script_unknown_shell_raises(tmp_path: Path) -> None:
@@ -676,27 +676,9 @@ def test_complete_signature_union_with_config(tmp_path: Path) -> None:
 # ------------------------ end-to-end via LiquifyApp ----------------------
 
 
-def test_app_emits_completion_via_env(app: LiquifyApp, capsys: Any, monkeypatch: Any) -> None:
-    monkeypatch.setenv("_MYAPP_COMPLETE", "complete_bash")
-    monkeypatch.setenv("COMP_WORDS", "myapp gr")
-    monkeypatch.setenv("COMP_CWORD", "1")
-    monkeypatch.setattr(sys, "argv", ["myapp"])
-    set_context(None)  # type: ignore[arg-type]
-
-    with pytest.raises(SystemExit) as exc:
-        app.run()
-    assert exc.value.code == 0
-    captured = capsys.readouterr()
-    lines = [ln for ln in captured.out.splitlines() if ln]
-    assert "greet" in lines
-    assert "group" in lines
-    assert "train" not in lines
-
-
 def test_app_show_completion_prints_script(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     app.run()
@@ -716,7 +698,6 @@ def test_app_show_completion_tolerates_cache_write_failure(app: LiquifyApp, caps
     must still be printed — script output is the primary contract,
     cache-priming is a best-effort side effect."""
     monkeypatch.setattr(sys, "argv", ["myapp", "--show-completion", "bash"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     def boom(_self: Any) -> Path:
@@ -734,7 +715,6 @@ def test_app_install_completion_writes_rc_and_cache(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.setattr(sys, "argv", ["myapp", "--install-completion", "zsh"])
-    monkeypatch.delenv("_MYAPP_COMPLETE", raising=False)
     set_context(None)  # type: ignore[arg-type]
 
     app.run()
@@ -743,11 +723,6 @@ def test_app_install_completion_writes_rc_and_cache(
     assert "liquifai-complete myapp" in rc.read_text()
     cache = tmp_path / "cache" / "liquifai" / "myapp.json"
     assert cache.exists()
-
-
-def test_completion_env_var_normalizes_dashes() -> None:
-    a = LiquifyApp(name="my-app")
-    assert a._completion_env_var() == "_MY_APP_COMPLETE"
 
 
 # ------------- install_script with target_rc (workspace-local rc) -------------
@@ -823,7 +798,8 @@ def _make_stub_script(path: Path, exit_code: int, stdout: str) -> None:
     path.chmod(0o755)
 
 
-def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -855,7 +831,8 @@ def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path) -> Non
     assert found == ["marainer"]
 
 
-def test_install_for_apps_auto_discover(tmp_path: Path) -> None:
+def test_install_for_apps_auto_discover(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -880,13 +857,15 @@ def test_install_for_apps_auto_discover(tmp_path: Path) -> None:
     assert "_ls-fake_completion" not in body
 
 
-def test_discover_liquifai_apps_missing_bindir(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_missing_bindir(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == []
 
 
-def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path) -> None:
+def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path, monkeypatch: Any) -> None:
     """Concurrent probing must still yield names in deterministic (sorted) bin
     order, regardless of which probe thread finishes first."""
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: [])
     prefix = tmp_path / "venv"
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
@@ -898,6 +877,60 @@ def test_discover_liquifai_apps_returns_sorted_order(tmp_path: Path) -> None:
             stdout=f"_{app}_completion() {{ :; }}; liquifai-complete {app}",
         )
     assert comp.discover_liquifai_apps(prefix=prefix) == ["alpha", "mid", "zebra"]
+
+
+# ----------------- entry-point-group discovery (liquifai.apps) -----------------
+
+
+class _FakeEp:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def test_declared_liquifai_apps_reads_entry_point_group(monkeypatch: Any) -> None:
+    import importlib.metadata as md
+
+    monkeypatch.setattr(
+        md,
+        "entry_points",
+        lambda group: [_FakeEp("zeta"), _FakeEp("alpha"), _FakeEp("alpha")] if group == "liquifai.apps" else [],
+    )
+    assert comp.declared_liquifai_apps() == ["alpha", "zeta"]
+
+
+def test_declared_liquifai_apps_metadata_failure_is_empty(monkeypatch: Any) -> None:
+    import importlib.metadata as md
+
+    def boom(group: str) -> Any:
+        raise RuntimeError("corrupt metadata")
+
+    monkeypatch.setattr(md, "entry_points", boom)
+    assert comp.declared_liquifai_apps() == []
+
+
+def test_discover_returns_declared_without_probing(tmp_path: Path, monkeypatch: Any) -> None:
+    """A declared app is NEVER probed — even when its binary is present —
+    and discovery still probes the undeclared remainder."""
+    prefix = tmp_path / "venv"
+    bindir = prefix / "bin"
+    bindir.mkdir(parents=True)
+    # Declared app: a binary that would FAIL the probe (exit 2). If discovery
+    # probed it anyway, it would drop out — its presence in the result proves
+    # the declared tier bypasses probing.
+    _make_stub_script(bindir / "declared-app", exit_code=2, stdout="")
+    # Undeclared genuine liquifai app: must still be found via the probe.
+    _make_stub_script(
+        bindir / "legacy-app",
+        exit_code=0,
+        stdout="_legacy-app_completion() { :; }; liquifai-complete legacy-app",
+    )
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: ["declared-app"])
+    assert comp.discover_liquifai_apps(prefix=prefix) == ["declared-app", "legacy-app"]
+
+
+def test_discover_missing_bindir_still_returns_declared(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr("liquifai.completion.discover.declared_liquifai_apps", lambda: ["only-declared"])
+    assert comp.discover_liquifai_apps(prefix=tmp_path / "does-not-exist") == ["only-declared"]
 
 
 # --------------------------- CLI: --target-rc entry ---------------------------
@@ -1100,6 +1133,169 @@ def test_positional_hint_filtered_by_partial_input() -> None:
     # User is typing "my" — "<name>" doesn't start with "my", so it's filtered out
     out = comp.complete(root, ["sairen", "dataset", "download", "my"], cword=3)
     assert "<name>" not in out
+
+
+# ---------------------------------------------------------------------------
+# sairen `dataset version-create` regressions — positionals offered as flags,
+# boolean flags triggering the value-slot silence (file fallback), and
+# already-consumed flags being re-offered.
+# ---------------------------------------------------------------------------
+
+
+def _version_create_app() -> LiquifyApp:
+    """Mirror sairen's `dataset version-create` command shape end-to-end.
+
+    Registered through the REAL derivation path (`@operation` +
+    `build_commands()`), so required keyword-only params become positionals
+    exactly like the liquifai.bridge-synthesized sairen ops (`conn` first,
+    every real param KEYWORD_ONLY, required ones without a default).
+    """
+    root = LiquifyApp(name="sairen")
+    sub = LiquifyApp(name="dataset")
+
+    @sub.operation(presentation="status")
+    def version_create(
+        conn: object,
+        *,
+        name: str,
+        source_version: str,
+        path: str = ".",
+        append: bool = False,
+        diff_only_upload: bool = False,
+        target_version: str = "",
+        description: str = "",
+    ) -> dict:
+        """Create a dataset version."""
+        return {}
+
+    sub.build_commands()
+    root.add_app(sub, "dataset")
+    return root
+
+
+#: The exact command line from the bug report, cursor at the trailing word.
+_VC_LINE = [
+    "sairen",
+    "dataset",
+    "version-create",
+    "helios_train_embeddings",
+    "1.0",
+    "--target_version",
+    "2.0",
+    "--append",
+    "",
+]
+
+
+def test_positional_not_offered_as_flag() -> None:
+    """A declared positional must never be advertised as a `--flag` — the flag
+    spelling still PARSES at runtime (positional/`key=value`/`--flag` interop),
+    it just isn't offered by TAB."""
+    out = comp.complete(_version_create_app(), ["sairen", "dataset", "version-create", "helios", ""], cword=4)
+    assert out[0] == "<source_version>"  # the positional hint is the advertisement
+    assert "--source_version" not in out
+    assert "--name" not in out
+    # The real options are still there.
+    assert "--target_version" in out
+    assert "--append" in out
+
+
+def test_positional_excluded_from_serialized_flags() -> None:
+    tree = comp.serialize_app(_version_create_app())
+    sub_tree = tree["sub_apps"]["dataset"]
+    assert sub_tree["positionals"]["version-create"] == ["name", "source_version"]
+    assert "source_version" not in sub_tree["signature_paths"]["version-create"]
+    assert "--source_version" not in sub_tree["signature_flags"]["version-create"]
+    assert "--target_version" in sub_tree["signature_flags"]["version-create"]
+
+
+def test_bool_flags_in_serialized_tree() -> None:
+    """The tree records which command flags are boolean (take no value), so the
+    stdlib-only fast path can tell `--append` from `--target_version`."""
+    tree = comp.serialize_app(_version_create_app())
+    bool_flags = tree["sub_apps"]["dataset"]["signature_bool_flags"]["version-create"]
+    assert "--append" in bool_flags
+    assert "--diff_only_upload" in bool_flags
+    assert "--target_version" not in bool_flags
+    assert "--path" not in bool_flags
+
+
+def test_bool_flag_then_tab_offers_remaining_flags() -> None:
+    """`… --target_version 2.0 --append <TAB>`: `--append` is boolean, so this
+    is NOT a value slot — offer the remaining flags instead of returning []
+    (which makes the shell fall back to filename completion)."""
+    out = comp.complete(_version_create_app(), _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--path" in out
+
+
+def test_consumed_flag_not_reoffered() -> None:
+    """Flags already typed on the line drop out of the candidate list."""
+    # `… --target_version 2.0 <TAB>` — flags are offered here even pre-fix,
+    # so this reproduces the re-offer on its own (not vacuously).
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", "2.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=7)
+    assert "--append" in out  # anchor: the flag branch is active
+    assert "--target_version" not in out
+    # And on the full bug-report line both consumed flags stay gone.
+    out = comp.complete(_version_create_app(), _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--target_version" not in out
+    assert "--append" not in out
+
+
+def test_value_flag_then_tab_still_silent() -> None:
+    """`… --target_version <TAB>` expects a value — the silence (shell file
+    completion) is still correct for value-taking flags."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert out == []
+
+
+def test_global_bool_flag_then_tab_not_silent() -> None:
+    """A global NON-value flag (`--debug`) before the cursor is not a value
+    slot either — completion keeps offering hints/flags."""
+    words = ["sairen", "dataset", "version-create", "--debug", ""]
+    out = comp.complete(_version_create_app(), words, cword=4)
+    assert "<name>" in out
+    assert "--target_version" in out
+
+
+def test_key_equals_value_prev_not_silent() -> None:
+    """`--key=value` is self-contained — the next word is not its value."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version=2.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert "--append" in out
+    assert "--target_version" not in out  # consumed via the equals form
+
+
+def test_polarity_prev_not_silent() -> None:
+    """`--key+` / `--key-` polarity forms are self-contained too."""
+    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--append+", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert "--target_version" in out
+    assert "--append" not in out  # consumed via the polarity form
+
+
+def test_flag_provided_positional_skips_hint() -> None:
+    """A positional supplied in its (still valid) `--flag` spelling counts as
+    filled — the hint moves past it."""
+    words = ["sairen", "dataset", "version-create", "helios", "--source_version", "1.0", ""]
+    out = comp.complete(_version_create_app(), words, cword=6)
+    assert not any(c.startswith("<") for c in out)
+
+
+def test_bool_flag_tab_after_cache_roundtrip(tmp_path: Path, monkeypatch: Any) -> None:
+    """The bool-flag info must survive the JSON cache round-trip (the fast path
+    reads the cached tree, never the live app)."""
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    root = _version_create_app()
+    comp.write_cache(root)
+    tree = comp.read_cache("sairen")
+    assert tree is not None
+    out = comp.complete_from_tree(tree, _VC_LINE, cword=8)
+    assert "--diff_only_upload" in out
+    assert "--target_version" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -1435,7 +1631,10 @@ def test_complete_lazy_refresh_called_on_missing_cache(iso_cache: Path) -> None:
     # A brand-new dataset the bulk refresh never saw → no cache → lazy refresh queued,
     # placeholder returned now (non-blocking).
     out = comp.complete_from_tree(
-        tree, ["sairen", "dataset", "download", "newds", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+        tree,
+        ["sairen", "dataset", "download", "newds", ""],
+        cword=4,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[0] == "<version>"
     assert calls == [("dataset__download__version", {"name": "newds"})]
@@ -1448,7 +1647,10 @@ def test_complete_lazy_refresh_skipped_when_fresh(iso_cache: Path) -> None:
     calls = []
     # alpha's version cache is fresh (just refreshed) → no lazy refresh, values served.
     out = comp.complete_from_tree(
-        tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+        tree,
+        ["sairen", "dataset", "download", "alpha", ""],
+        cword=4,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["1.0", "1.1"]
     assert calls == []
@@ -1458,10 +1660,15 @@ def test_complete_lazy_refresh_called_when_stale(iso_cache: Path, monkeypatch: p
     root = _app_with_dependent()
     comp.refresh_value_caches(root)
     tree = comp.serialize_app(root)
-    monkeypatch.setattr(comp, "DEPENDENT_REFRESH_TTL", -1.0)  # treat any cache as stale
+    # The engine reads refresh policy late through the cache MODULE, so the
+    # patch targets the owning submodule (comp.cache), not the package re-export.
+    monkeypatch.setattr(comp.cache, "DEPENDENT_REFRESH_TTL", -1.0)  # treat any cache as stale
     calls = []
     out = comp.complete_from_tree(
-        tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=lambda k, i: calls.append((k, i))
+        tree,
+        ["sairen", "dataset", "download", "alpha", ""],
+        cword=4,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["1.0", "1.1"]  # stale values still served immediately
     assert calls == [("dataset__download__version", {"name": "alpha"})]  # ...and a refresh queued
@@ -1489,7 +1696,7 @@ def test_run_refresh_completion_value_flag(iso_cache: Path, monkeypatch: pytest.
 
 def test_lazy_spawner_opt_out_and_throttle(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     popen_calls = []
-    monkeypatch.setattr(comp.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
     spawn = comp.make_lazy_refresh_spawner("sairen")
 
     # Opt-out env → no spawn.
@@ -1503,6 +1710,156 @@ def test_lazy_spawner_opt_out_and_throttle(iso_cache: Path, monkeypatch: pytest.
     spawn("dataset__download__version", {"name": "x"})
     assert len(popen_calls) == 1
     assert popen_calls[0][0][0] == "sairen" and popen_calls[0][0][1] == "--refresh-completion-value"
+
+
+# ---------------------------------------------------------------------------
+# Double-TAB forces a refresh even for a fresh-by-age (but wrong) value cache
+# ---------------------------------------------------------------------------
+
+
+def test_wants_forced_refresh() -> None:
+    # bash COMP_TYPE: 9 = normal first TAB; 63/33/64 = repeated/list TAB; 37 = menu.
+    assert comp.wants_forced_refresh("63") is True
+    assert comp.wants_forced_refresh("33") is True
+    assert comp.wants_forced_refresh("64") is True
+    assert comp.wants_forced_refresh("9") is False  # normal single TAB
+    assert comp.wants_forced_refresh("37") is False  # menu-complete, not a list request
+    assert comp.wants_forced_refresh("") is False
+    assert comp.wants_forced_refresh(None) is False  # zsh/fish/old-bash: unset
+
+
+def test_force_refresh_bypasses_ttl_on_fresh_cache(iso_cache: Path) -> None:
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # alpha's version cache is FRESH (age << TTL)
+    tree = comp.serialize_app(root)
+    calls = []
+    # Without force, a fresh cache is NOT refreshed (the skipped-when-fresh path).
+    comp.complete_from_tree(
+        tree,
+        ["sairen", "dataset", "download", "alpha", ""],
+        cword=4,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
+    )
+    assert calls == []
+    # With force (double-TAB) the SAME fresh cache is refreshed anyway (age gate bypassed).
+    out = comp.complete_from_tree(
+        tree,
+        ["sairen", "dataset", "download", "alpha", ""],
+        cword=4,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
+        force_refresh=True,
+    )
+    assert out[:2] == ["1.0", "1.1"]  # cached values still served immediately (non-blocking)
+    assert calls == [("dataset__download__version", {"name": "alpha"})]
+
+
+def test_force_refresh_static_positional(iso_cache: Path) -> None:
+    # A STATIC positional (empty inputs) is force-refreshed too.
+    root = LiquifyApp(name="sairen")
+
+    @root.command("list", positionals=["experiment"], completions={"experiment": lambda: ["exp-a", "exp-b"]})
+    def list_cmd(experiment: str = "") -> None:
+        pass
+
+    comp.refresh_value_caches(root)  # fresh static cache
+    tree = comp.serialize_app(root)
+    calls = []
+    comp.complete_from_tree(
+        tree,
+        ["sairen", "list", ""],
+        cword=2,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
+        force_refresh=True,
+    )
+    assert calls == [("list__experiment", {})]  # static → empty inputs, forced
+
+
+def test_force_refresh_spawns_once_per_session(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A forced refresh bypasses the AGE gate but NOT the spawner throttle, so hammering
+    # the double-TAB spawns the refresh at most once per session (throttle window).
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # fresh caches
+    tree = comp.serialize_app(root)
+    popen_calls = []
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
+    spawn = comp.make_lazy_refresh_spawner("sairen")  # the REAL spawner (throttle live)
+
+    for _ in range(3):  # three double-TABs in quick succession
+        comp.complete_from_tree(
+            tree, ["sairen", "dataset", "download", "alpha", ""], cword=4, lazy_refresh=spawn, force_refresh=True
+        )
+    assert len(popen_calls) == 1  # ...but only ONE background refresh spawned
+
+
+def test_later_tabs_show_updated_list_without_re_refreshing(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The throttle gates SPAWNING, not READING: once the detached refresh has updated the
+    # cache, every subsequent TAB displays the fresh list (a deleted item gone) even though
+    # it no longer re-refreshes. Models the user's flow: ⇥⇥ triggers one refresh, then ⇥⇥⇥…
+    # keep showing the corrected list.
+    experiments = ["exp-a", "exp-b", "exp-c"]
+    root = LiquifyApp(name="sairen")
+
+    @root.command("list", positionals=["experiment"], completions={"experiment": lambda: list(experiments)})
+    def list_cmd(experiment: str = "") -> None:
+        pass
+
+    comp.refresh_value_caches(root)  # cache = the OLD list [exp-a, exp-b, exp-c]
+    tree = comp.serialize_app(root)
+    experiments.remove("exp-b")  # upstream deletion — cache is now fresh-by-age but WRONG
+
+    popen_calls = []
+
+    def fake_popen(args: Any, *a: Any, **k: Any) -> None:
+        # Simulate the detached `--refresh-completion-value` process finishing: run the
+        # (now-updated) provider and rewrite the cache, exactly as the real helper would.
+        popen_calls.append(args)
+        spec = json.loads(args[2])
+        comp.refresh_one(root, spec["key"], spec["inputs"])
+        return None
+
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", fake_popen)
+    spawn = comp.make_lazy_refresh_spawner("sairen")
+    words = ["sairen", "list", ""]
+
+    # ⇥⇥ (first forced TAB): still shows the OLD list (read happens before the spawn),
+    # and fires the one refresh — which our fake completes synchronously.
+    out1 = comp.complete_from_tree(tree, words, cword=2, lazy_refresh=spawn, force_refresh=True)
+    assert "exp-b" in out1 and len(popen_calls) == 1
+
+    # ⇥ ⇥ ⇥ (later TABs): show the UPDATED list (exp-b gone) and DON'T refresh again.
+    for _ in range(3):
+        out = comp.complete_from_tree(tree, words, cword=2, lazy_refresh=spawn, force_refresh=True)
+        assert "exp-b" not in out and "exp-a" in out and "exp-c" in out
+    assert len(popen_calls) == 1  # one refresh total across every TAB
+
+
+def test_fast_complete_forwards_comp_type(iso_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import liquifai._fast_complete as fast
+
+    root = _app_with_dependent()
+    comp.refresh_value_caches(root)  # fresh caches
+    comp.write_cache(root)  # command-tree cache the fast path reads
+    popen_calls = []
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: popen_calls.append(a))
+    monkeypatch.setattr(sys, "argv", ["liquifai-complete", "sairen"])
+    monkeypatch.delenv("COMP_LINE", raising=False)
+    monkeypatch.setenv("COMP_WORDS", "\n".join(["sairen", "dataset", "download", "alpha", ""]))
+    monkeypatch.setenv("COMP_CWORD", "4")
+
+    # Normal first TAB (COMP_TYPE=9) → fresh cache, no forced refresh spawned.
+    monkeypatch.setenv("COMP_TYPE", "9")
+    fast.main()
+    assert popen_calls == []
+
+    # Repeated TAB (COMP_TYPE=63) → forced refresh spawned despite the fresh cache.
+    monkeypatch.setenv("COMP_TYPE", "63")
+    fast.main()
+    assert len(popen_calls) == 1
+    assert popen_calls[0][0][1] == "--refresh-completion-value"
+
+    # A further double-TAB in the same session is throttled — one refresh per session.
+    fast.main()
+    assert len(popen_calls) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1545,7 +1902,7 @@ def test_notice_shown_when_self_heal_changes_values(iso_cache: Path, monkeypatch
     # Typing a real prefix drops the notice (it's a `<…>` hint).
     assert comp.complete_from_tree(tree, ["sairen", "dataset", "download", "alpha", "1"], cword=4) == ["1.0"]
     # The notice ages out after the window.
-    monkeypatch.setattr(comp, "DEPENDENT_NOTICE_WINDOW", 0.0)
+    monkeypatch.setattr(comp.cache, "DEPENDENT_NOTICE_WINDOW", 0.0)
     assert "<version-updated>" not in comp.complete_from_tree(
         tree, ["sairen", "dataset", "download", "alpha", ""], cword=4
     )
@@ -1579,7 +1936,10 @@ def test_static_self_heal_triggered_when_missing(iso_cache: Path) -> None:
     tree = comp.serialize_app(root)  # no refresh → cache missing
     calls = []
     out = comp.complete_from_tree(
-        tree, ["sairen", "dataset", "download", ""], cword=3, lazy_refresh=lambda k, i: calls.append((k, i))
+        tree,
+        ["sairen", "dataset", "download", ""],
+        cword=3,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[0] == "<name>"  # placeholder now (nothing cached)
     assert calls == [("dataset__download__name", {})]  # ...and a STATIC refresh (empty inputs) queued
@@ -1591,7 +1951,10 @@ def test_static_self_heal_skipped_when_fresh(iso_cache: Path) -> None:
     tree = comp.serialize_app(root)
     calls = []
     out = comp.complete_from_tree(
-        tree, ["sairen", "dataset", "download", ""], cword=3, lazy_refresh=lambda k, i: calls.append((k, i))
+        tree,
+        ["sairen", "dataset", "download", ""],
+        cword=3,
+        lazy_refresh=lambda k, i: calls.append((k, i)),
     )
     assert out[:2] == ["alpha", "beta"] and calls == []  # served from cache, no refresh queued
 
