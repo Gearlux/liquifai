@@ -84,6 +84,7 @@ from .shells import (  # noqa: F401
     render_helpers,
     render_script,
     split_comp_words,
+    wants_forced_refresh,
     words_from_comp_line,
 )
 from .tree import (  # noqa: F401

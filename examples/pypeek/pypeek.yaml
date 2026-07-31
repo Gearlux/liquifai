@@ -1,4 +1,4 @@
-# Sample pypeek config: every key broadcasts into the @configurable PyPI
+# Record pypeek config: every key broadcasts into the @configurable PyPI
 # client (see pypeek.py). Try: pypeek -c examples/pypeek/pypeek.yaml info rich
 # CLI overrides win over these values (e.g. `--timeout 3`).
 

@@ -96,3 +96,76 @@ def test_local_config_still_wins_over_xdg(tmp_path: Path, _isolated: Path, monke
 
     assert seen["config"] == {"val": 5}
     assert seen["path"] == tmp_path / "myexp.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Promotion provenance — WHICH tier supplied the file
+# ---------------------------------------------------------------------------
+# Promotion is eager: a bare positional token is consumed as a config the moment
+# a matching YAML exists in ANY tier. A stale `~/.config/<app>/report.yaml` will
+# silently swallow `app process report` that meant `report` as a positional, so
+# every promotion is recorded at TRACE and a non-CWD one additionally at DEBUG.
+# The log fires from `_prepare`, NOT from the router: routing is phase 1 and
+# loggair is only configured in phase 4, so a debug/trace call there is dropped.
+
+
+class _LevelRecorder:
+    """Logger double recording per-level messages (loggair bypasses caplog)."""
+
+    def __init__(self) -> None:
+        self.debug_msgs: list[str] = []
+        self.trace_msgs: list[str] = []
+
+    def debug(self, msg: str) -> None:
+        self.debug_msgs.append(msg)
+
+    def trace(self, msg: str) -> None:
+        self.trace_msgs.append(msg)
+
+    def info(self, msg: str) -> None:  # pragma: no cover - noise sink
+        pass
+
+    def warning(self, msg: str) -> None:  # pragma: no cover - noise sink
+        pass
+
+
+def _promotion_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config_dir: Path) -> _LevelRecorder:
+    """Run `test-app process demo` with demo.yaml in ``config_dir``; return the log."""
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "demo.yaml").write_text("value: 1\n")
+
+    app, _seen = _capture_app()
+    recorder = _LevelRecorder()
+    monkeypatch.setattr(sys, "argv", ["test-app", "process", "demo"])
+    original_bootstrap = app._bootstrap
+
+    def _bootstrap_then_swap(**kwargs: Any) -> None:
+        original_bootstrap(**kwargs)
+        assert app.context is not None
+        app.context.logger = recorder  # after loggair wiring, before the promotion log
+
+    monkeypatch.setattr(app, "_bootstrap", _bootstrap_then_swap)
+    app.run()
+    return recorder
+
+
+def test_cwd_promotion_is_recorded_at_trace_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _promotion_log(tmp_path, monkeypatch, tmp_path)
+    assert any("Promoted token 'demo'" in m for m in log.trace_msgs)
+    # The ordinary case is not surprising — no DEBUG escalation.
+    assert not any("OUTSIDE the working directory" in m for m in log.debug_msgs)
+
+
+def test_config_tier_promotion_is_escalated_to_debug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = _promotion_log(tmp_path, monkeypatch, tmp_path / "config")
+    assert any("Promoted token 'demo'" in m for m in log.trace_msgs)
+    escalated = [m for m in log.debug_msgs if "OUTSIDE the working directory" in m]
+    assert escalated, "a non-CWD tier must be escalated to DEBUG"
+    assert "config/demo.yaml" in escalated[0]
+
+
+def test_xdg_promotion_is_escalated_to_debug(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolated: Path) -> None:
+    log = _promotion_log(tmp_path, monkeypatch, _isolated / "test-app")
+    escalated = [m for m in log.debug_msgs if "OUTSIDE the working directory" in m]
+    assert escalated, "an XDG-tier promotion must be escalated to DEBUG"
+    assert "meant as a positional argument" in escalated[0]

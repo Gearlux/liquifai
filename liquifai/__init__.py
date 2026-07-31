@@ -15,16 +15,26 @@ __all__ = [
     "set_context",
     "make_mcp_tools",
     "Presentation",
+    "HelpLayout",
     "LiquifaiError",
     "CommandDefinitionError",
+    "ConfigNotFoundError",
+    "UnknownCommandError",
     "UnknownOperationError",
     "UnsupportedShellError",
 ]
 
 if TYPE_CHECKING:
     from liquifai.context import LiquifyContext, get_context, set_context
-    from liquifai.core import LiquifyApp, Presentation
-    from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError, UnsupportedShellError
+    from liquifai.core import HelpLayout, LiquifyApp, Presentation
+    from liquifai.exceptions import (
+        CommandDefinitionError,
+        ConfigNotFoundError,
+        LiquifaiError,
+        UnknownCommandError,
+        UnknownOperationError,
+        UnsupportedShellError,
+    )
     from liquifai.tools import make_mcp_tools
 
 
@@ -41,11 +51,18 @@ def __getattr__(name: str) -> Any:
         from liquifai.tools import make_mcp_tools
 
         return make_mcp_tools
-    if name == "Presentation":
-        from liquifai.core import Presentation
+    if name in ("Presentation", "HelpLayout"):
+        from liquifai import core
 
-        return Presentation
-    if name in ("LiquifaiError", "CommandDefinitionError", "UnknownOperationError", "UnsupportedShellError"):
+        return getattr(core, name)
+    if name in (
+        "LiquifaiError",
+        "CommandDefinitionError",
+        "ConfigNotFoundError",
+        "UnknownCommandError",
+        "UnknownOperationError",
+        "UnsupportedShellError",
+    ):
         from liquifai import exceptions
 
         return getattr(exceptions, name)

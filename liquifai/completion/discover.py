@@ -97,7 +97,7 @@ def declared_liquifai_apps() -> List[str]:
     .. code-block:: toml
 
         [project.entry-points."liquifai.apps"]
-        marainer = "marainer.cli:app"
+        sonair = "sonair.cli:app"
 
     where the NAME is the app's CLI/binary name (== ``LiquifyApp.name``) and
     the value points at the ``LiquifyApp`` instance. Entry points come from

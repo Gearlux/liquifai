@@ -18,11 +18,12 @@ Each topic has its own guide, and every guide has a runnable companion script in
 
 | Guide | What it covers | Example |
 |---|---|---|
-| [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion (with `./config/` + XDG search paths), DI block lookup, positional arguments, flow modes | `positionals_app.py` et al. |
+| [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion (with `./config/` + XDG search paths and its DEBUG provenance notice), DI block lookup, positional arguments, flow modes | `positionals_app.py`, `promotion_app.py` et al. |
 | [CLI Overrides](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md) | The override grammar (`--key value`, dotted keys, polarity, add/delete) and the dropped-token warning | `overrides_app.py` |
 | [Global Flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md) | Log control (`--level`, `--log-dir`, …), `--scope` / dimension flags, `--debug`, `--docs` | `global_flags_app.py` |
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
 | [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md) | Install, aliases, workspace-local setup, dynamic & dependent positional values | `completion_providers.py` |
+| [Architecture Decisions](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md) | Why liquifai is shaped this way: the hand-rolled parser, out-of-process completion, the shared argv walk, who owns settability | — (records carry inline examples) |
 
 For everything at once, [`examples/pypeek/`](https://github.com/Gearlux/liquifai/tree/main/examples/pypeek)
 is a complete, installable showcase app — a small PyPI query CLI whose
@@ -201,9 +202,13 @@ Every generated op honors `conn.dry_run` **before** touching the SDK client,
 returning a `{"dry_run": True, "command", "action", "call"}` descriptor — so
 `--help`, MCP schemas, and tests run without credentials.
 
-> **Provisional:** `liquifai.bridge` has a single production consumer so far;
-> its API may change in 0.x minor releases without deprecation. It is not
-> re-exported from the top-level `liquifai` package.
+> **Provisional — outside the version contract.** `liquifai.bridge` has a
+> single production consumer so far; its API may change in 0.x minor releases
+> without a deprecation cycle, and it may move to its own distribution. It is
+> not re-exported from the top-level `liquifai` package, so `import liquifai`
+> never reaches it. Depend on it as **`liquifai[bridge]`** so the dependency on
+> an unstable surface is recorded in your own metadata. Rationale:
+> [Architecture Decisions §6](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md).
 
 ## Installation
 ```bash
@@ -215,6 +220,12 @@ Or straight from GitHub:
 ```bash
 pip install git+https://github.com/Gearlux/liquifai.git@main
 ```
+
+### Optional extras
+
+| Extra | What it opts into |
+|---|---|
+| `liquifai[bridge]` | The **provisional** `liquifai.bridge` subpackage (see above). It adds no requirements today — it is a contract marker that records, in your metadata, a dependency on a surface excluded from the version contract. |
 
 ## License
 MIT

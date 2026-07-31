@@ -9,7 +9,7 @@ from typing import Any
 
 from confluid import LazyClass, configurable, flow, register
 
-from liquifai.core import _deep_flow
+from liquifai.di import deep_flow
 
 
 @configurable
@@ -25,15 +25,15 @@ class _Adam:
         self.lr = lr
 
 
-def test_top_level_lazy_survives_deep_flow() -> None:
+def test_top_level_lazy_survivesdeep_flow() -> None:
     register(_Adam)
     lazy = LazyClass(_Adam, lr=0.005)
-    out = _deep_flow(lazy)
+    out = deep_flow(lazy)
     assert isinstance(out, LazyClass)
     assert out.kwargs == {"lr": 0.005}
 
 
-def test_lazy_attribute_on_instance_survives_deep_flow() -> None:
+def test_lazy_attribute_on_instance_survivesdeep_flow() -> None:
     """A live ``_Trainer`` whose ``optimizer`` slot holds a ``LazyClass``
     must come out the other side with the Lazy intact — domain code will
     flow it later with ``params=model.parameters()``.
@@ -41,24 +41,24 @@ def test_lazy_attribute_on_instance_survives_deep_flow() -> None:
     register(_Adam)
     register(_Trainer)
     trainer = _Trainer(optimizer=LazyClass(_Adam, lr=0.001), max_epochs=5)
-    out = _deep_flow(trainer)
+    out = deep_flow(trainer)
     assert out is trainer  # mutated in place
     assert isinstance(trainer.optimizer, LazyClass)
     assert trainer.optimizer.kwargs == {"lr": 0.001}
 
 
-def test_lazy_inside_list_survives_deep_flow() -> None:
+def test_lazy_inside_list_survivesdeep_flow() -> None:
     register(_Adam)
     callbacks = [LazyClass(_Adam, lr=0.001), "scalar"]
-    out = _deep_flow(callbacks)
+    out = deep_flow(callbacks)
     assert isinstance(out[0], LazyClass)
     assert out[1] == "scalar"
 
 
-def test_lazy_inside_dict_survives_deep_flow() -> None:
+def test_lazy_inside_dict_survivesdeep_flow() -> None:
     register(_Adam)
     mapping = {"opt": LazyClass(_Adam, lr=0.01), "x": 1}
-    out = _deep_flow(mapping)
+    out = deep_flow(mapping)
     assert isinstance(out["opt"], LazyClass)
     assert out["x"] == 1
 

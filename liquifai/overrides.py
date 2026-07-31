@@ -6,7 +6,7 @@ the overrides merged in" — parsing (:func:`parse_override_args`), Fluid
 broadcast (:func:`merge_overrides_into_fluids`), deletions
 (:func:`delete_dotted_key`), and env/``~`` expansion
 (:func:`expand_strings`). ``core.py`` re-exports the historical
-underscore-prefixed names for existing callers (fluxstudio, tests).
+underscore-prefixed names for existing callers (streamstudio, tests).
 
 Token *classification* lives in :mod:`liquifai.grammar` (stdlib-only, shared
 with the completion fast path); this module may import confluid freely.
@@ -14,11 +14,10 @@ with the completion fast path); this module may import confluid freely.
 
 from __future__ import annotations
 
-import inspect
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from confluid import parse_value
+from confluid import accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
 
@@ -119,10 +118,77 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
     return overrides, deletions, dropped
 
 
-def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
-    """Merge CLI overrides into Fluid kwargs throughout the config tree."""
+def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) -> Any:
+    """Apply parsed CLI overrides and deletions to a loaded config tree.
+
+    The whole "leftover tokens are parsed, now change the config" step, in
+    document order:
+
+    1. expand ``$VAR`` / ``~`` in the override VALUES (the tree was expanded at
+       load time; overrides arrive later and must get the same treatment),
+    2. ``deep_merge`` them into the tree and expand dotted keys into nesting,
+    3. remove each deleted dotted path,
+    4. push the overrides down into any ``Fluid`` kwargs via
+       :func:`merge_overrides_into_fluids` — the step that reaches values
+       already committed to a marker rather than sitting in a plain dict.
+
+    Returns the new tree (the input may be replaced outright when it was
+    ``None``); a no-op call returns ``data`` unchanged.
+    """
+    if not overrides and not deletions:
+        return data
+
+    parsed = expand_strings(overrides)
+    if data is None:
+        data = {}
+
+    data = deep_merge(data, parsed)
+    if isinstance(data, dict):
+        data = expand_dotted_keys(data)
+
+    for path in deletions:
+        delete_dotted_key(data, path)
+
+    merge_overrides_into_fluids(data, parsed)
+    return data
+
+
+def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:
+    """Merge CLI overrides into Fluid kwargs throughout the config tree.
+
+    Two override forms, matching Confluid's own addressing rules exactly (the
+    settability question is answered by :func:`confluid.accepts_key` /
+    :func:`confluid.accepts_broadcast` — liquifai does NOT re-derive an
+    accept-list, see ``docs/architecture.md``):
+
+    * ``--<name>.<key>`` where ``<name>`` matches a Fluid's YAML-set
+      ``name:`` — an ADDRESSED write, targeting that instance only. Gated by
+      :func:`confluid.accepts_key` (constructor params, settable properties,
+      ``__init__``-body slots, ``**kwargs`` targets).
+    * ``--<key>`` — a BARE broadcast reaching every Fluid in the tree that can
+      take it. Gated by the stricter :func:`confluid.accepts_broadcast`, so a
+      class marked ``@configurable(broadcast=False)`` or a parameter typed
+      ``NoBroadcast[T]`` is skipped — the same opt-outs a bare top-level YAML
+      key obeys. Addressed writes deliberately bypass them.
+
+    A Fluid whose target class cannot be resolved (a ``!class:`` naming a
+    module that is not importable yet) has no accept-list to consult, so it
+    falls back to "the key is already in the YAML kwargs" — a deferred marker
+    stays overridable rather than silently ignoring every override.
+
+    Cycle-safe via ``id()`` tracking: a ``!ref:``-shared marker graph with a
+    back-edge is visited once.
+    """
+    if _visited is None:
+        _visited = set()
+
     if isinstance(data, Fluid):
-        accepted = accepted_override_keys(data.target)
+        vid = id(data)
+        if vid in _visited:
+            return
+        _visited.add(vid)
+
+        cls = _resolve_target_class(data.target)
         # If this Fluid has a YAML-set `name: "<id>"`, dotted keys like
         # `"overlay.visualize"` land here by suffix — targeting this
         # instance only. Flat keys still broadcast as before.
@@ -130,76 +196,35 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any]) -> None:
         for k, v in overrides.items():
             if fluid_name and "." in k:
                 head, _, tail = k.partition(".")
-                if head == str(fluid_name) and (tail in data.kwargs or tail in accepted):
+                if head == str(fluid_name) and (tail in data.kwargs or accepts_key(cls, tail)):
                     data.kwargs[tail] = v
                     continue  # dotted form handled — don't also broadcast-match.
-            # Flat form: apply when the kwarg is already in YAML (catches the
-            # post-construction setattr pattern like `Enable.visualize`) OR
-            # when the target class accepts it (ctor params always; for
-            # ``@configurable`` classes, also public class-level attributes
-            # that Confluid would setattr at flow time — e.g. @property
-            # setters, plain class attrs).
-            if k in data.kwargs or k in accepted:
+            if cls is None:
+                if k in data.kwargs:
+                    data.kwargs[k] = v
+            elif accepts_broadcast(cls, k):
                 data.kwargs[k] = v
-        for v in data.kwargs.values():
-            merge_overrides_into_fluids(v, overrides)
+        for v in list(data.kwargs.values()):
+            merge_overrides_into_fluids(v, overrides, _visited)
     elif isinstance(data, dict):
         for v in data.values():
-            merge_overrides_into_fluids(v, overrides)
+            merge_overrides_into_fluids(v, overrides, _visited)
     elif isinstance(data, list):
         for item in data:
-            merge_overrides_into_fluids(item, overrides)
+            merge_overrides_into_fluids(item, overrides, _visited)
 
 
-def accepted_override_keys(target: Any) -> Set[str]:
-    """Return every attribute name ``target`` accepts as an override.
+def _resolve_target_class(target: Any) -> Any:
+    """Normalize a Fluid ``target`` into the class to ask about, or ``None``.
 
-    For any class: the set of ``__init__`` parameter names.
-
-    For ``@configurable`` classes additionally: every public class-level
-    attribute — that is, any non-dunder, non-underscore name on the class
-    that is not a method, is not a read-only ``@property``, and is not
-    ``__confluid_ignore__``'d. This mirrors Confluid's post-construction
-    setattr pattern — ``flow()`` accepts any extra kwarg that targets a
-    public attribute, so overrides must too.
-
-    ``target`` can be a class, an instance, or the dotted string Confluid
-    uses for deferred class resolution (``!class:module.Cls``). Returns an
-    empty set if the target can't be resolved or introspected.
+    ``target`` may be a class, an instance, or the dotted string Confluid uses
+    for deferred resolution (``!class:module.Cls``). ``None`` means "not
+    introspectable" — the caller falls back to the already-in-YAML rule.
     """
-    cls: Any = target
-    if isinstance(cls, str):
-        cls = resolve_class(cls)
+    cls: Any = resolve_class(target) if isinstance(target, str) else target
     if cls is None:
-        return set()
-    if not isinstance(cls, type):
-        cls = cls.__class__
-    init = getattr(cls, "__init__", None)
-    if init is None:
-        return set()
-    try:
-        sig = inspect.signature(init)
-    except (ValueError, TypeError):
-        return set()
-    accepted: Set[str] = {p for p in sig.parameters if p not in ("self", "cls", "args", "kwargs")}
-
-    if not getattr(cls, "__confluid_configurable__", False):
-        return accepted
-
-    # @configurable: Confluid setattr-applies any extra kwarg whose target is
-    # a public class attribute. Include those in the accepted set.
-    for name in dir(cls):
-        if name.startswith("_"):
-            continue
-        member = getattr(cls, name, None)
-        if getattr(member, "__confluid_ignore__", False):
-            continue
-        if callable(member) and not isinstance(member, property):
-            continue  # skip bound methods / functions
-        if isinstance(member, property) and member.fset is None:
-            continue  # read-only properties can't accept overrides
-        accepted.add(name)
-    return accepted
+        return None
+    return cls if isinstance(cls, type) else type(cls)
 
 
 def delete_dotted_key(config: Any, path: str) -> None:

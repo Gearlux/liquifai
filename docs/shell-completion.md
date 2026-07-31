@@ -44,6 +44,21 @@ filled: the `<placeholder>` hint moves past it.
   `--key+`/`--key-`, `+key`, bare `key=value`). A repeated flag still parses
   (last write wins); it just isn't offered again.
 
+**A `@script_command`'s config contributes its own override keys.** Once a
+config file is on the line, TAB offers that YAML's keys alongside the command's
+signature flags:
+
+```console
+$ my-app train experiment <TAB>
+--learning_rate  --hidden_units  --threshold  --config  --level  …
+```
+
+The config token resolves through the same search tiers dispatch uses (`./`,
+`./config/`, then the XDG dirs), so a `config/experiment.yaml` layout completes
+exactly like one in the working directory. (Completion used to test the typed
+path as-is, which silently limited this to the CWD — see
+[Architecture Decisions §3](architecture.md).)
+
 > **Note:** the option flags are baked into a per-app cache
 > (`~/.cache/liquifai/<app>.json`) that is refreshed automatically every time
 > the app runs (including on `--help` and `--install-completion`). After
@@ -202,6 +217,32 @@ When a self-heal **actually changes** the values, the next TAB shows a transient
 `<<positional>-updated>` hint (e.g. `<version-updated>`) alongside them for a short
 window, so you know the background refresh took effect — change-only (an unchanged
 refresh shows nothing), and it disappears the moment you type a real value.
+
+### Force a refresh with a double-TAB (bash)
+
+Self-heal only fires when a cache is missing or **older than 5 min**. A cache that
+is fresh-by-age but **wrong** — you deleted an item upstream, but it was cached a
+minute ago — would otherwise keep showing the stale value until the TTL lapses.
+
+To force it: press **TAB a second time**. bash reports the repeated TAB via
+`$COMP_TYPE`, which the wrapper forwards to `liquifai-complete`; liquifai reads it
+as "refresh this now" and kicks off the background refresh **regardless of age**.
+As always the refresh is detached — the double-TAB itself still shows the current
+cache, and the **next** TAB shows the corrected list (a removed item gone, an
+added one present; a changed dependent value also gets the `<…-updated>` hint). So
+the flow is: `⇥⇥` to trigger, `⇥` again to see it.
+
+Only the *age* check is bypassed — the normal spawn throttle still applies, so
+hammering TAB triggers **at most one refresh per completion session**, not one per
+keystroke. The throttle gates only the *refresh*, never the *display*: every TAB
+still reads the cache fresh, so once the background refresh lands, the third,
+fourth, fifth… TAB all show the corrected list without kicking off more refreshes.
+(Wait out the throttle window, or edit the line, for another forced refresh.)
+
+This uses bash's `COMP_TYPE`, so it is **bash-only** — zsh/fish have no equivalent
+double-TAB signal and keep the age-gated behaviour. It needs the up-to-date
+wrapper: **re-run `my-app --install-completion`** (or `liquifai-install-completions`)
+once and re-source, otherwise the double-TAB is treated as an ordinary TAB.
 
 ## Runnable example
 

@@ -57,7 +57,7 @@ class LinefitError(LiquifaiError):
 
 @confluid.configurable
 class SyntheticData:
-    """Noisy samples of the line y = slope*x + intercept.
+    """Noisy records of the line y = slope*x + intercept.
 
     Args:
         n: Total number of points (split 80/10/10 into train/val/test).
