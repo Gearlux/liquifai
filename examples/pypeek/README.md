@@ -93,7 +93,7 @@ pypeek info rich --dry_run+           # print the would-be request, don't send i
 pypeek -c pypeek.yaml info rich       # same knobs from a config file
 ```
 
-See [pypeek.yaml](pypeek.yaml) for the sample config. Failure contract in
+See [pypeek.yaml](pypeek.yaml) for the record config. Failure contract in
 action: `pypeek info no-such-pkg` prints one clean `Error: …` line and exits 1;
 add `--debug` for the full traceback.
 

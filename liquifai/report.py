@@ -1,14 +1,21 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from rich.console import Console
 from rich.table import Table
+
+from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
+
+#: How a command's options are rendered: the Rich grid (``--help``) or one
+#: greppable line per option (``--docs``). Closed so a typo can't silently
+#: fall through to the table branch. Mirrored as ``core.HelpLayout``.
+HelpLayout = Literal["table", "lines"]
 
 
 def show_configuration(
     target: Any,
     config_map: Optional[Dict[str, Any]] = None,
     title: str = "Available Configuration Options",
-    layout: str = "table",
+    layout: HelpLayout = "table",
     positionals: Optional[List[str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
@@ -93,7 +100,7 @@ def _drop_positional_paths(hierarchy: Dict[str, Any], positionals: List[str]) ->
     return {p: v for p, v in hierarchy.items() if p.split(".", 1)[0] not in roots}
 
 
-def _render_positionals(target: Any, positionals: List[str], layout: str) -> None:
+def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout) -> None:
     """Render the command's positional arguments as their own block.
 
     Type/doc come from the SAME :func:`confluid.get_hierarchy` extraction the
@@ -244,3 +251,50 @@ def _get_from_config(config: Dict[str, Any], path: str) -> Any:
         else:
             return None
     return current
+
+
+def show_command_index(app: Any, console: Console) -> None:
+    """Render the top-level command/group index table (the no-target help view).
+
+    Alias rows fold into their canonical group. This is the counterpart to
+    :func:`show_configuration` (which renders a *selected* command's options):
+    together they keep ALL Rich help rendering in this module, so
+    :meth:`liquifai.core.LiquifyApp._show_help` stays pure orchestration.
+
+    ``app`` is a ``LiquifyApp`` (typed ``Any`` to avoid a circular import — core
+    imports this module).
+    """
+    table = Table(box=None, padding=(0, 2))
+    table.add_column("Command/Group", style="cyan")
+    table.add_column("Description")
+
+    for name, sub_app in sorted(app._sub_apps.items()):
+        if name in app._sub_app_aliases:
+            continue  # alias rows fold into their canonical group below
+        aliases = sorted(a for a, canon in app._sub_app_aliases.items() if canon == name)
+        label = f"{name} ({', '.join(aliases)})" if aliases else name
+        desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
+        table.add_row(label, desc)
+
+    for name, func in sorted(app._commands.items()):
+        desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
+        table.add_row(name, desc)
+
+    console.print(table)
+
+
+def show_global_options(console: Console) -> None:
+    """Render the Global Options block from the ONE grammar source of truth.
+
+    Rendered from ``grammar.GLOBAL_FLAG_SPECS`` — the same table the parser and
+    completion derive from — so ``--help`` can never drift from what the CLI
+    actually accepts. Hidden specs (internal plumbing) are excluded.
+    """
+    console.print("\n[bold]Global Options:[/bold]")
+    visible = [spec for spec in GLOBAL_FLAG_SPECS if not spec.hidden]
+    width = max(len(flag_display(spec)) for spec in visible)
+    for spec in visible:
+        console.print(f"  {flag_display(spec).ljust(width)}  {spec.help}")
+    console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
+    console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
+    console.print("")

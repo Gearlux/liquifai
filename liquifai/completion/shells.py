@@ -13,12 +13,36 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from liquifai.exceptions import UnsupportedShellError
 
 SHELLS: List[str] = ["bash", "zsh", "fish"]
+
+#: bash sets ``$COMP_TYPE`` inside a completion function to the ASCII code of the
+#: readline completion type: ``9`` (TAB) is a normal first completion, while
+#: ``63`` (``?`` — list after successive TABs), ``33`` (``!``) and ``64`` (``@``)
+#: are "list the candidates" requests — i.e. a repeated/second TAB. ``37`` (``%``
+#: menu-complete) is a continuous single-key cycle, NOT a repeat request. We treat
+#: the listing family as the user's signal to FORCE a value-cache refresh (see
+#: :func:`wants_forced_refresh`). Only bash exposes this; zsh/fish leave it unset.
+_LISTING_COMP_TYPES = frozenset({"33", "63", "64"})
+
+
+def wants_forced_refresh(comp_type: Optional[str]) -> bool:
+    """True when ``$COMP_TYPE`` marks a repeated/list TAB (bash only).
+
+    A second consecutive TAB (or a readline show-all variant) asks to LIST
+    candidates; liquifai reads that as "the user suspects the cache is stale and
+    wants it refreshed now", so the fast path force-refreshes the positional's
+    value cache (bypassing the age gate). Absent/unset (zsh, fish, or a bash install
+    whose wrapper predates COMP_TYPE forwarding) or a normal first TAB → ``False``,
+    keeping the age-gated self-heal behaviour unchanged.
+    """
+    return comp_type in _LISTING_COMP_TYPES
+
 
 # ---------------------------------------------------------------------------
 # Shell detection + script templates
@@ -148,9 +172,12 @@ _{prog}_completion() {
     local raw
     # Pass COMP_LINE/COMP_POINT (the raw line + cursor) so liquifai-complete can
     # re-tokenize quote-aware — bash's own COMP_WORDS splits "Helios Base Model"
-    # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback.
+    # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback. COMP_TYPE
+    # (readline completion type) lets liquifai-complete detect a repeated/second
+    # TAB and force-refresh a possibly-stale value cache.
     raw=$(env COMP_LINE="$COMP_LINE" COMP_POINT="$COMP_POINT" \\
         COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD \\
+        COMP_TYPE="$COMP_TYPE" \\
         liquifai-complete {prog} 2>/dev/null)
     COMPREPLY=()
     for item in $raw; do
@@ -254,7 +281,8 @@ _liquifai_alias_complete() {
     fi
     local raw
     raw=$(env COMP_LINE="$line_env" COMP_POINT="$point_env" \
-        COMP_WORDS="$words" COMP_CWORD="$cword" liquifai-complete "$app" 2>/dev/null)
+        COMP_WORDS="$words" COMP_CWORD="$cword" COMP_TYPE="$COMP_TYPE" \
+        liquifai-complete "$app" 2>/dev/null)
     COMPREPLY=()
     local line
     while IFS= read -r line; do
@@ -342,12 +370,21 @@ _HELPERS_MARKER = "# >>> liquifai shared helpers >>>"
 _HELPERS_END_MARKER = "# <<< liquifai shared helpers <<<"
 
 
+def _bindir_env_prefix() -> str:
+    """Return PATH="$PATH:<bindir>" env prefix if bindir exists and contains liquifai-complete."""
+    bindir = Path(sys.executable).parent
+    if bindir.exists() and (bindir / "liquifai-complete").exists():
+        return f'PATH="$PATH:{bindir}" '
+    return ""
+
+
 def render_script(prog: str, shell: str) -> str:
     """Render the shell completion script for ``prog`` in ``shell``."""
     if shell not in SHELLS:
         raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
     template = {"bash": _BASH_TEMPLATE, "zsh": _ZSH_TEMPLATE, "fish": _FISH_TEMPLATE}[shell]
-    return template.replace("{prog}", prog)
+    path_prefix = _bindir_env_prefix()
+    return template.replace("{prog}", prog).replace("env ", f"env {path_prefix}")
 
 
 def render_helpers(shell: str) -> str:
@@ -356,4 +393,6 @@ def render_helpers(shell: str) -> str:
         return ""
     if shell not in ("bash", "zsh"):
         raise UnsupportedShellError(f"Unsupported shell {shell!r}; expected one of {SHELLS}")
-    return _BASH_HELPERS if shell == "bash" else _ZSH_HELPERS
+    template = _BASH_HELPERS if shell == "bash" else _ZSH_HELPERS
+    path_prefix = _bindir_env_prefix()
+    return template.replace("env ", f"env {path_prefix}")

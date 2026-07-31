@@ -227,6 +227,12 @@ def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], 
     (``inputs`` = the earlier positionals → refreshes that combo). Opt out entirely with
     ``$LIQUIFAI_NO_LAZY_COMPLETE``. Best-effort — any error is swallowed (completion still
     returned whatever was cached / the placeholder).
+
+    The throttle marker applies to EVERY caller, including a forced double-TAB refresh
+    (:func:`liquifai.completion.wants_forced_refresh`): forcing bypasses the *age gate*
+    in :func:`complete_from_tree` (so a fresh-but-wrong cache still refreshes) but NOT
+    this throttle, so hammering TAB spawns the refresh at most once per throttle window
+    — one refresh per completion session, not one per keystroke.
     """
 
     def spawn(cache_key: str, inputs: Dict[str, str]) -> None:

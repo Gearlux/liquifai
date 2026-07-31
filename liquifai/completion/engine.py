@@ -26,6 +26,7 @@ from liquifai.grammar import (
     looks_like_key,
     stops_positional,
 )
+from liquifai.walk import Nav, tokenize, walk_invocation
 
 from . import cache, tree
 from .shells import SHELLS
@@ -38,6 +39,65 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+class _TreeNav:
+    """:class:`~liquifai.walk.Nav` over a serialized command-tree node.
+
+    The completion counterpart of :class:`liquifai.router._AppNav`: same walk,
+    different data shape. Stdlib-only — it reads plain JSON dicts.
+    """
+
+    def __init__(self, node: Dict[str, Any]) -> None:
+        self.node = node
+
+    def sub_app(self, token: str) -> Optional["Nav"]:
+        sub = (self.node.get("sub_apps") or {}).get(token)
+        return _TreeNav(sub) if sub is not None else None
+
+    def has_command(self, token: str) -> bool:
+        return token in (self.node.get("commands") or [])
+
+    def is_script_command(self, cmd: str) -> bool:
+        return cmd in (self.node.get("script_cmds") or [])
+
+    def positionals(self, cmd: str) -> List[str]:
+        return list((self.node.get("positionals") or {}).get(cmd, []))
+
+
+def _peek_config(token: str) -> Optional[Path]:
+    """Consume a script-command's promoted config token WITHOUT resolving it.
+
+    The dispatcher's counterpart resolves through confluid's search tiers, but
+    that would import confluid on every TAB — so the hot path defers: the token
+    is recorded as-is (bare names gain ``.yaml``) and only the branch that
+    actually reads the YAML calls :func:`_resolve_config_path`, which is
+    already past the stdlib-only boundary.
+    """
+    p = Path(token)
+    return p if p.suffix else p.with_suffix(".yaml")
+
+
+def _resolve_config_path(config_path: Path) -> Optional[Path]:
+    """Resolve ``config_path`` through confluid's search tiers; None if absent.
+
+    A relative config lives under ``./``, ``./config/`` or an XDG dir — the
+    dispatcher resolves all four tiers, so completion must too. Testing
+    ``config_path.exists()`` on the typed-as-is path (the old behaviour) made
+    the whole config-present branch dead for every layout except CWD: TAB
+    offered only the command's signature flags and never the YAML's own
+    override keys.
+
+    Confluid is imported lazily here — this branch already left the
+    stdlib-only fast path (it is about to parse the YAML).
+    """
+    try:
+        import confluid
+
+        resolved = confluid.resolve_config_path(config_path)
+    except Exception:
+        resolved = config_path
+    return resolved if resolved.exists() else None
+
+
 def complete(app: "LiquifyApp", words: List[str], cword: int) -> List[str]:
     """Convenience wrapper: snapshot ``app`` then call :func:`complete_from_tree`."""
     return complete_from_tree(tree.serialize_app(app), words, cword)
@@ -47,7 +107,8 @@ def complete_from_tree(
     tree: Dict[str, Any],
     words: List[str],
     cword: int,
-    lazy_refresh: Optional[Callable[[str, Dict[str, str]], None]] = None,
+    lazy_refresh: Optional[Callable[..., None]] = None,
+    force_refresh: bool = False,
 ) -> List[str]:
     """Compute completion candidates from a serialized command tree.
 
@@ -56,11 +117,18 @@ def complete_from_tree(
         words: Tokenized command line including the program name at index 0.
         cword: Index of the word being completed (0-based).
         lazy_refresh: Optional ``(cache_key, inputs)`` callback invoked when a
-            DEPENDENT positional's per-input cache is missing or stale, so the fast
-            path can self-heal it in the background (see
-            :func:`make_lazy_refresh_spawner`). Whatever is cached now (or the
-            placeholder) is still returned immediately; this never blocks. ``None``
-            (the default, used by tests / in-process completion) disables it.
+            positional's value cache should be refreshed, so the fast path can
+            self-heal it in the background (see :func:`make_lazy_refresh_spawner`).
+            Whatever is cached now (or the placeholder) is still returned immediately;
+            this never blocks. ``None`` (the default, used by tests / in-process
+            completion) disables it.
+        force_refresh: When True (a repeated/second TAB — see
+            :func:`liquifai.completion.wants_forced_refresh`), the value cache for the
+            current positional is refreshed REGARDLESS of its age, so a cache that is
+            fresh-by-age but wrong (e.g. an item deleted upstream) still updates. Only
+            the age gate is bypassed — the spawner's throttle still applies, so a burst
+            of double-TABs triggers at most one refresh per session. The refresh is
+            detached, so the corrected list appears on the NEXT TAB.
 
     Returns:
         Candidates, one per line. Empty list means "no suggestion".
@@ -77,38 +145,23 @@ def complete_from_tree(
     if prev in GLOBAL_VALUE_FLAGS:
         return []
 
-    cur = tree
-    cmd_name: Optional[str] = None
-    config_path: Optional[Path] = None
-    consumed_config = False
+    # The descent to (sub-app, command, promoted config, positionals) is the
+    # SAME walk the dispatcher runs — shared via liquifai.walk so the two can
+    # no longer drift (they did: the old copy here never resolved a promoted
+    # config through confluid's search tiers). `_TreeNav` is the adapter that
+    # teaches the walker to read a serialized tree instead of live app objects.
+    walk = walk_invocation(tokenize(parsed), _TreeNav(tree), _peek_config)
+    cur = walk.nav.node if isinstance(walk.nav, _TreeNav) else tree
+    cmd_name = walk.cmd_name
+    config_path: Optional[Path] = walk.config_path
+    consumed_config = walk.consumed_config
 
-    i = 0
-    while i < len(parsed):
-        tok = parsed[i]
-        if cmd_name is None and tok in cur["sub_apps"]:
-            cur = cur["sub_apps"][tok]
-            i += 1
-            continue
-        if cmd_name is None and tok in cur["commands"]:
-            cmd_name = tok
-            i += 1
-            if cmd_name in cur["script_cmds"] and i < len(parsed) and not parsed[i].startswith("-"):
-                p = Path(parsed[i])
-                if not p.suffix:
-                    p = p.with_suffix(".yaml")
-                config_path = p
-                consumed_config = True
-                i += 1
-            continue
-        if tok in PATH_VALUE_FLAGS and i + 1 < len(parsed):
-            if tok in ("--config", "-c"):
-                config_path = Path(parsed[i + 1])
-            i += 2
-            continue
-        if tok in GLOBAL_VALUE_FLAGS and i + 1 < len(parsed):
-            i += 2
-            continue
-        i += 1
+    # An explicit ``--config PATH`` outranks a promoted token for the
+    # override-key branch below (the walk leaves the flag in `remaining`).
+    leftovers = [t.text for t in walk.remaining]
+    for i, tok in enumerate(leftovers):
+        if tok in ("--config", "-c") and i + 1 < len(leftovers):
+            config_path = Path(leftovers[i + 1])
 
     if cmd_name is None:
         if incomplete.startswith("-"):
@@ -255,9 +308,11 @@ def complete_from_tree(
                     # Self-heal: if this combo's cache is missing or stale, kick off a
                     # background refresh for it (non-blocking) so new datasets / new
                     # versions / beyond-the-cap names become current on the NEXT TAB.
+                    # ``force_refresh`` (a double-TAB) refreshes regardless of age; the
+                    # spawner's own throttle still bounds it to once per session.
                     if lazy_refresh is not None:
                         age = cache._dependent_value_cache_age(app_name, info["key"], inputs)
-                        if age is None or age > cache.DEPENDENT_REFRESH_TTL:
+                        if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
                             lazy_refresh(info["key"], inputs)
             elif info.get("key"):
                 cached_values = cache.read_value_cache(app_name, info["key"])
@@ -265,9 +320,12 @@ def complete_from_tree(
                 # brand-new positional that has never been refreshed) populates itself in
                 # the background on first TAB, so it appears on the next one — no manual
                 # `--refresh-completions` needed. Empty ``inputs`` marks a static refresh.
+                # ``force_refresh`` (a double-TAB) refreshes regardless of age — the fix
+                # for a fresh-by-age but wrong list (e.g. an item deleted upstream); the
+                # spawner's throttle still bounds it to once per session.
                 if lazy_refresh is not None:
                     age = cache._value_cache_age(app_name, info["key"])
-                    if age is None or age > cache.DEPENDENT_REFRESH_TTL:
+                    if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
                         lazy_refresh(info["key"], {})
             positional_hint = list(cached_values) if cached_values else [f"<{pos_name}>"]
             # The notice is a ``<…>`` hint: shown at a bare TAB (alongside the values),
@@ -285,14 +343,15 @@ def complete_from_tree(
     # the YAML) so completion and ``--help`` agree; otherwise use the flags
     # collapsed at serialize time (the stdlib-only fast path — no confluid).
     candidates = list(GLOBAL_FLAGS)
-    if is_script_cmd and config_path is not None and config_path.exists():
+    resolved_config = _resolve_config_path(config_path) if (is_script_cmd and config_path is not None) else None
+    if resolved_config is not None:
         # Local import: the module-level ``tree`` name is shadowed here by the
         # ``tree`` parameter (the serialized command dict), and this branch has
         # already left the stdlib-only fast path (it reads the YAML).
         from .tree import _collapse_to_flags
 
         try:
-            yaml_paths = _resolve_override_keys(config_path)
+            yaml_paths = _resolve_override_keys(resolved_config)
         except Exception:
             yaml_paths = []
         candidates.extend(f for f in _collapse_to_flags(signature_paths + yaml_paths) if _not_used(f))

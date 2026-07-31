@@ -1,6 +1,6 @@
 import inspect
-import os
 import sys
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, get_args
@@ -9,18 +9,30 @@ import confluid
 import loggair
 from loggair import get_logger
 from rich.console import Console
-from rich.table import Table
+from rich.markup import escape
 
-from liquifai import di, grammar, overrides
+from liquifai import completion_cli, di, flags, grammar, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
-from liquifai.exceptions import CommandDefinitionError, LiquifaiError, UnknownOperationError
-from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
+from liquifai.exceptions import (
+    CommandDefinitionError,
+    ConfigNotFoundError,
+    LiquifaiError,
+    UnknownCommandError,
+    UnknownOperationError,
+)
+from liquifai.introspection import graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args
+from liquifai.walk import Token, literal_texts, option_texts, tokenize
 
 FlowMode = Literal["manual", "auto"]
 
 #: Valid values for the ``presentation`` parameter of :meth:`LiquifyApp.operation`.
 Presentation = Literal["list", "fields", "status"]
+
+#: How ``--help`` / ``--docs`` render a command's options — the Rich grid or
+#: one greppable line per option. Closed so a typo fails at the call site
+#: instead of silently falling through to the table branch.
+HelpLayout = Literal["table", "lines"]
 
 console = Console()
 logger = get_logger("liquifai.core")
@@ -39,19 +51,23 @@ class Invocation:
 
     #: The (sub-)app the command tokens descended into.
     target_app: "LiquifyApp"
-    #: Matched command token, or None when no command was found.
-    cmd_name: Optional[str]
     #: The handler to dispatch (may be the group's default command).
     target_func: Optional[Callable[..., Any]]
     #: Config path consumed by script-command promotion (NOT ``--config``,
     #: which is parsed later in phase 3).
     config_path: Optional[Path]
+    #: The raw token promotion consumed, pre-resolution — carried so
+    #: :meth:`LiquifyApp._log_promotion_source` can report WHICH search tier
+    #: supplied the file once logging is live.
+    config_token: Optional[str]
     #: Declared positional names for the matched command, in order.
     positional_names: List[str]
     #: Leading positional tokens actually consumed (may be fewer than names).
     positional_values: List[str]
-    #: Every token not consumed by routing — input to the global/override parsers.
-    remaining_argv: List[str]
+    #: Every token not consumed by routing — input to the global/override
+    #: parsers. Tokens, not strings, so those parsers can tell an option from a
+    #: post-``--`` literal (which they must never consume).
+    remaining_tokens: List[Token]
 
 
 class LiquifyApp:
@@ -158,12 +174,8 @@ class LiquifyApp:
             empty: str = meta.get("empty", "No results")
             completions: Dict[str, Callable[..., Any]] = meta.get("completions", {})
 
-            # Shared signature surgery with make_mcp_tools (liquifai.tools):
-            # strip the context param, then stamp the wrapper's advertised
-            # signature/annotations for the introspection consumers.
-            from liquifai.tools import graft_signature, split_context_param
-
             sig, params_no_ctx = split_context_param(op_func)
+
             positionals = [p.name for p in params_no_ctx if p.default is inspect.Parameter.empty]
 
             # Capture all loop variables — Python closures capture by reference.
@@ -374,136 +386,32 @@ class LiquifyApp:
             setattr(fn, "__liquifai_op_metadata__", meta)
         meta.setdefault("completions", {}).update(completions)
 
+    # --- Shell-completion interception ------------------------------------
+    # These are thin delegations to :mod:`liquifai.completion_cli` (the
+    # Rich-using CLI glue that can't live in the stdlib-only ``completion/``
+    # package). Kept as same-named private methods so ``run()``/``_execute()``
+    # call sites and tests (``tests/test_completion.py`` calls
+    # ``_maybe_background_refresh_values``) stay unchanged.
+
     def _maybe_handle_completion_install(self, argv: List[str]) -> bool:
-        """Handle ``--show-completion`` / ``--install-completion`` early.
-
-        Both must run before Confluid bootstrap (no config required) and
-        before help rendering. ``--install-completion`` also primes the
-        on-disk command-tree cache so the very first TAB after installing
-        is fast (the user does not have to invoke the slow app once first).
-        Returns True if one was handled.
-        """
-        for special in ("--show-completion", "--install-completion"):
-            if special not in argv:
-                continue
-            from liquifai.completion import SHELLS, detect_shell, install_script, render_script, write_cache
-
-            idx = argv.index(special)
-            shell = argv[idx + 1] if idx + 1 < len(argv) and argv[idx + 1] in SHELLS else detect_shell()
-            if special == "--show-completion":
-                print(render_script(self.name, shell))
-                # Side effect: prime the cache while the app is loaded.
-                # liquifai-install-completions auto-discovers apps by
-                # probing them with `<app> --show-completion bash`; the
-                # cache is what makes the resulting `complete` calls
-                # actually return suggestions, so we MUST seed it here
-                # — otherwise tab-completion is registered but silent.
-                # Best-effort: never fail the script output on a cache
-                # write error.
-                try:
-                    write_cache(self)
-                except Exception:
-                    pass
-            else:
-                target = install_script(self.name, shell)
-                cache_target = write_cache(self)
-                console.print(f"[green]Installed[/green] {self.name} {shell} completion in [cyan]{target}[/cyan]")
-                console.print(f"[dim]Cached command tree: {cache_target}[/dim]")
-                console.print(f"[dim]Restart your shell or `source {target}` to activate.[/dim]")
-            return True
-        return False
+        """Handle ``--show-completion`` / ``--install-completion`` early."""
+        return completion_cli.handle_completion_install(self, argv)
 
     def _refresh_completion_cache(self) -> None:
         """Best-effort refresh of the on-disk command-tree cache."""
-        try:
-            from liquifai.completion import write_cache
-
-            write_cache(self)
-        except Exception:
-            pass
+        completion_cli.refresh_completion_cache(self)
 
     def _maybe_handle_refresh_completions(self, argv: List[str]) -> bool:
-        """Handle ``--refresh-completions`` early (before bootstrap).
-
-        Runs every registered positional value provider (``@command(...,
-        completions=...)``) in THIS process — providers may import the heavy SDK
-        and hit the network — and writes each result to its value cache so TAB
-        can offer real values for a ``<name>`` slot. Returns True if handled.
-        """
-        if "--refresh-completions" not in argv:
-            return False
-        from liquifai.completion import refresh_value_caches, write_cache
-
-        try:
-            write_cache(self)  # keep the command tree fresh too
-        except Exception:
-            pass
-        written = refresh_value_caches(self)
-        total = sum(written.values())
-        if written:
-            console.print(
-                f"[green]Refreshed[/green] {len(written)} completion value cache(s) "
-                f"([cyan]{total}[/cyan] values) for [cyan]{self.name}[/cyan]."
-            )
-        else:
-            console.print(f"[dim]No positional completion providers registered for {self.name}.[/dim]")
-        return True
+        """Handle ``--refresh-completions`` early (before bootstrap)."""
+        return completion_cli.handle_refresh_completions(self, argv)
 
     def _maybe_handle_refresh_completion_value(self, argv: List[str]) -> bool:
-        """Handle ``--refresh-completion-value '<json>'`` early (background self-heal).
-
-        The detached helper the fast path spawns to refresh ONE dependent positional's
-        cache for a single input combo (``{"key": ..., "inputs": {...}}``). Runs the
-        targeted provider and writes the cache, then exits — no command, no bootstrap.
-        Silent and best-effort (it runs in the background). Returns True if handled.
-        """
-        if "--refresh-completion-value" not in argv:
-            return False
-        import json
-
-        from liquifai.completion import refresh_one
-
-        idx = argv.index("--refresh-completion-value")
-        try:
-            spec = json.loads(argv[idx + 1]) if idx + 1 < len(argv) else {}
-            refresh_one(self, str(spec.get("key", "")), dict(spec.get("inputs", {}) or {}))
-        except Exception:
-            pass
-        return True
+        """Handle ``--refresh-completion-value '<json>'`` early (self-heal)."""
+        return completion_cli.handle_refresh_completion_value(self, argv)
 
     def _maybe_background_refresh_values(self, ttl: float = 600.0) -> None:
-        """Opportunistically refresh stale positional value caches in the background.
-
-        **Opt-in** — does nothing unless ``$LIQUIFAI_BG_REFRESH`` is set. When
-        enabled, after a successful command, if any registered provider's value
-        cache is missing or older than ``ttl`` seconds, the providers run in a
-        detached daemon thread so the next TAB sees fresh values without blocking
-        the command that just ran. Best-effort: any failure is swallowed.
-
-        It is OFF by default because a provider may hit the network (e.g. query a
-        platform), and a normal run should never trigger a surprise background
-        request — the deterministic path is ``--refresh-completions``. Set
-        ``LIQUIFAI_BG_REFRESH=1`` (e.g. in a project rc) to keep caches warm for free.
-        """
-        if not os.environ.get("LIQUIFAI_BG_REFRESH"):
-            return
-        try:
-            import threading
-
-            from liquifai.completion import has_stale_value_caches, refresh_value_caches
-
-            if not has_stale_value_caches(self, ttl):
-                return
-
-            def _bg() -> None:
-                try:
-                    refresh_value_caches(self)
-                except Exception:
-                    pass
-
-            threading.Thread(target=_bg, daemon=True, name=f"liquifai-refresh-{self.name}").start()
-        except Exception:
-            pass
+        """Opportunistically refresh stale positional value caches in background."""
+        completion_cli.maybe_background_refresh_values(self, ttl)
 
     def run(self) -> Any:
         """Main entry point for the CLI.
@@ -534,6 +442,10 @@ class LiquifyApp:
         confluid.set_app_name(self.name)
 
         argv = sys.argv[1:]
+        # Every argv inspection below reads the OPTION texts only — a token
+        # after ``--`` is a literal value, so `app run -- --help` runs the
+        # command with a literal ``--help`` argument instead of printing help.
+        flags = set(option_texts(tokenize(argv)))
 
         # 1. IDENTIFY COMMAND, GROUP & PROMOTION
         inv = self._route(argv)
@@ -542,8 +454,8 @@ class LiquifyApp:
         # ``--docs`` is a help variant that renders the same code-extracted option
         # documentation one option per line (greppable / pipe-friendly) instead of
         # a Rich table.
-        wants_docs = "--docs" in argv
-        if "--help" in argv or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
+        wants_docs = "--docs" in flags
+        if "--help" in flags or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
             self._show_help(
                 inv.target_app,
                 inv.target_func,
@@ -569,13 +481,17 @@ class LiquifyApp:
             self._prepare(inv)
             return self._execute(inv)
         except (LiquifaiError, confluid.ConfluidError) as exc:
-            if "--debug" in argv or "-d" in argv or (self.context is not None and self.context.debug):
+            if flags & {"--debug", "-d"} or (self.context is not None and self.context.debug):
                 raise
             import traceback
 
             log = self.context.logger if self.context is not None and self.context.logger is not None else logger
             log.debug(f"CLI failure traceback:\n{traceback.format_exc()}")
-            console.print(f"[red]Error:[/red] {exc}")
+            # `escape`: the message is untrusted text interpolated into a Rich MARKUP
+            # string, so any bracketed run that parses as a style is silently eaten —
+            # a hint like `pip install 'myapp[extra]'` would render as `pip install
+            # 'myapp'`, i.e. a WRONG instruction handed to the user.
+            console.print(f"[red]Error:[/red] {escape(str(exc))}")
             sys.exit(1)
 
     def _route(self, argv: List[str]) -> "Invocation":
@@ -584,73 +500,20 @@ class LiquifyApp:
         Descends through sub-app groups, matches the command token, consumes a
         promoted config path for ``script_command``s, and consumes leading
         positional tokens. Everything unconsumed lands in
-        ``Invocation.remaining_argv`` for the global/override parsers.
+        ``Invocation.remaining_tokens`` for the global/override parsers.
         """
-        config_path: Optional[Path] = None
-        cmd_name: Optional[str] = None
-        remaining_argv: List[str] = []
-        target_app = self
-        target_func = None
-        # Positional args consumed for the matched command (bound after
-        # bootstrap, before overrides — see _prepare()).
-        positional_names: List[str] = []
-        positional_values: List[str] = []
-
-        i = 0
-        while i < len(argv):
-            arg = argv[i]
-            if not target_func and arg in target_app._sub_apps:
-                target_app = target_app._sub_apps[arg]
-                i += 1
-            elif not target_func and arg in target_app._commands:
-                cmd_name = arg
-                target_func = target_app._commands[cmd_name]
-                i += 1
-                if cmd_name in target_app._script_cmds and i < len(argv) and not argv[i].startswith("-"):
-                    cp = Path(argv[i]) if Path(argv[i]).suffix else Path(argv[i]).with_suffix(".yaml")
-                    # Resolve through confluid's search tiers (./ -> ./config/
-                    # -> XDG dirs) so `myapp train myexp` finds e.g.
-                    # ~/.config/myapp/myexp.yaml, not only a CWD file.
-                    cp = confluid.resolve_config_path(cp)
-                    if cp.exists():
-                        config_path, i = cp, i + 1
-                # Consume leading positional tokens declared via
-                # ``@command(positionals=[...])``. Stops at the first flag-like
-                # (``-``/``+``/``~``) or ``key=value`` token so the equals form
-                # (``info name=foo``) and trailing flags still route through the
-                # normal override path. Fewer tokens than declared is fine —
-                # the rest fall back to the command's parameter defaults.
-                positional_names = list(getattr(target_func, "__liquifai_positionals__", []))
-                for _ in positional_names:
-                    if i < len(argv) and not grammar.stops_positional(argv[i]):
-                        positional_values.append(argv[i])
-                        i += 1
-                    else:
-                        break
-            else:
-                remaining_argv.append(arg)
-                i += 1
-
-        if not target_func:
-            target_func = target_app._default_cmd
-
-        return Invocation(
-            target_app=target_app,
-            cmd_name=cmd_name,
-            target_func=target_func,
-            config_path=config_path,
-            positional_names=positional_names,
-            positional_values=positional_values,
-            remaining_argv=remaining_argv,
-        )
+        return router.route(self, argv)
 
     def _prepare(self, inv: "Invocation") -> None:
         """Phases 3–5: parse globals, initialize state, apply overrides."""
-        # 3. PARSE GLOBALS
+        # 3. PARSE GLOBALS. Tokens (not strings) all the way down, so every
+        # phase can tell an option from a post-``--`` literal it must not touch.
         config_path = inv.config_path
-        final_config_path, scopes, debug, log_overrides, final_argv = self._parse_globals(inv.remaining_argv)
-        if final_config_path:
-            config_path = final_config_path
+        globals_ = flags.parse_globals(inv.remaining_tokens)
+        scopes, debug, log_overrides = globals_.scopes, globals_.debug, globals_.log_overrides
+        final_tokens = globals_.remaining
+        if globals_.config_path:
+            config_path = globals_.config_path
         if config_path is not None:
             # Resolve once through confluid's search tiers so the context,
             # the not-found error, and the "Loaded configuration from:" line
@@ -659,7 +522,7 @@ class LiquifyApp:
 
         # 3b. BIND DIMENSION FLAGS — raw-load the config (if any) to discover
         # which `--KEY` flags should activate scope dimensions, then re-parse
-        # `final_argv` so those flags are routed into `scopes` instead of
+        # `final_tokens` so those flags are routed into `scopes` instead of
         # being treated as config overrides.
         #
         # We use ``load_config_with_paths`` here (instead of plain
@@ -671,7 +534,7 @@ class LiquifyApp:
         included_paths: List[Path] = []
         if config_path is not None and config_path.exists():
             raw_config, included_paths = confluid.load_config_with_paths(config_path)
-            scopes, final_argv = self._bind_dimension_flags(scopes, raw_config, final_argv)
+            scopes, final_tokens = flags.bind_dimension_flags(scopes, raw_config, final_tokens)
 
         # 4. INITIALIZE STATE
         self.context = LiquifyContext(
@@ -684,6 +547,10 @@ class LiquifyApp:
         )
         set_context(self.context)
         self._bootstrap(raw_config=raw_config)
+        # Logging only becomes live in _bootstrap, so the promotion provenance
+        # captured back in phase 1 is reported HERE, not at the point of the
+        # decision (a debug/trace call before configure_logging is dropped).
+        self._log_promotion_source(inv, config_path)
 
         # 4b. BIND POSITIONALS — write each consumed positional into the config
         # under its declared name (verbatim string) so DI resolves the matching
@@ -696,13 +563,64 @@ class LiquifyApp:
             self.context.logger.debug(f"Bound positionals: {bound}")
 
         # 5. APPLY OVERRIDES
-        self._apply_overrides(final_argv)
+        self._apply_overrides(final_tokens)
+        self._warn_unbound_literals(inv)
+
+    def _log_promotion_source(self, inv: "Invocation", config_path: Optional[Path]) -> None:
+        """Record WHERE a promoted config token was resolved from.
+
+        Config promotion is deliberately eager: a bare positional token is
+        consumed as a config as soon as a matching YAML exists in ANY of
+        confluid's search tiers — the working directory, ``./config/``, or an
+        XDG directory. That is convenient in the common case and a genuine
+        footgun in the rare one: a stale ``~/.config/<app>/report.yaml`` will
+        quietly swallow ``myapp run report`` that meant ``report`` as a
+        positional, and nothing in the output says so.
+
+        So every promotion is recorded at TRACE, and a promotion resolved from
+        OUTSIDE the working directory — the surprising kind — additionally at
+        DEBUG. Called from :meth:`_prepare` rather than at the point of the
+        decision because routing happens in phase 1, before ``_bootstrap``
+        configures loggair: a ``debug``/``trace`` call there is dropped on the
+        floor.
+        """
+        if self.context is None or self.context.logger is None:
+            return
+        token, path = inv.config_token, inv.config_path
+        if token is None or path is None:
+            return
+        if config_path != path:
+            return  # an explicit --config outranked the promoted token
+
+        cwd_candidate = (Path.cwd() / Path(token)).with_suffix(path.suffix)
+        from_cwd = path.resolve() == cwd_candidate.resolve()
+        self.context.logger.trace(f"Promoted token {token!r} to config {path} (search tier: {path.parent})")
+        if not from_cwd:
+            self.context.logger.debug(
+                f"Config promotion resolved OUTSIDE the working directory: token {token!r} -> {path}. "
+                f"Promotion is eager — a matching YAML in ./config/ or an XDG config dir is consumed "
+                f"even when {token!r} was meant as a positional argument."
+            )
+
+    def _warn_unbound_literals(self, inv: "Invocation") -> None:
+        """Warn about post-``--`` tokens that no positional slot claimed.
+
+        A literal is deliberately never parsed as an override (that is what
+        ``--`` buys), so an extra one would otherwise vanish in silence — the
+        same failure mode the dropped-token warning exists to prevent.
+        """
+        assert self.context is not None
+        extra = literal_texts(inv.remaining_tokens)
+        if extra:
+            self.context.logger.warning(
+                f"Ignoring {len(extra)} argument(s) after `--` that no positional slot claimed: "
+                f"{extra}. Tokens after `--` are literal values, never options."
+            )
 
     def _execute(self, inv: "Invocation") -> Any:
         """Phase 6: dispatch the command and refresh the completion caches."""
         if not inv.target_func:
-            console.print("[red]Error:[/red] Unknown command or group")
-            sys.exit(1)
+            raise UnknownCommandError("Unknown command or group")
 
         result = self.run_command(inv.target_func)
 
@@ -714,91 +632,6 @@ class LiquifyApp:
         self._maybe_background_refresh_values()
 
         return result
-
-    def _parse_globals(self, argv: List[str]) -> Tuple[Optional[Path], List[str], bool, Dict[str, Any], List[str]]:
-        """Extract the value-taking global flags declared in :mod:`liquifai.grammar`.
-
-        Table-driven off :data:`liquifai.grammar.GLOBAL_FLAG_SPECS` — the same
-        declaration help and completion render from — so the three surfaces
-        can never drift. Only the bootstrap-relevant dests are consumed here;
-        help/completion flags are handled by their own short-circuits.
-        """
-        config_path: Optional[Path] = None
-        scopes: List[str] = []
-        debug = False
-        log_overrides: Dict[str, Any] = {}
-        remaining: List[str] = []
-
-        path_dests = {"config_path", "log_dir"}
-        value_specs = {
-            flag: spec
-            for spec in GLOBAL_FLAG_SPECS
-            if spec.takes_value
-            and spec.dest in ("config_path", "scopes", "log_level", "console_level", "file_level", "log_dir")
-            for flag in spec.flags
-        }
-        debug_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "debug" for flag in spec.flags}
-
-        i = 0
-        while i < len(argv):
-            arg = argv[i]
-            spec = value_specs.get(arg)
-            if spec is not None and i + 1 < len(argv):
-                value = argv[i + 1]
-                if spec.dest == "config_path":
-                    config_path = Path(value)
-                elif spec.dest == "scopes":
-                    scopes.extend(value.split(","))
-                elif spec.dest in path_dests:
-                    log_overrides[spec.dest] = Path(value)
-                else:
-                    log_overrides[spec.dest] = value
-                i += 2
-            elif arg in debug_flags:
-                debug = True
-                i += 1
-            else:
-                remaining.append(arg)
-                i += 1
-        return config_path, scopes, debug, log_overrides, remaining
-
-    def _bind_dimension_flags(self, scopes: List[str], raw_config: Any, argv: List[str]) -> Tuple[List[str], List[str]]:
-        """Promote ``--KEY VAL`` / ``--KEY=VAL`` flags into ``scopes`` when ``KEY``
-        is a declared scope dimension in the raw config.
-
-        After globals are parsed, the raw YAML is walked once by
-        :func:`confluid.discover_dimensions` to learn which keys appear in any
-        ``!scope:KEY=VAL`` / ``!scope:KEY(VAL)`` block. Those keys then bind to
-        implicit CLI flags so users can write ``--task classification`` in
-        addition to ``--scope task=classification``. Non-dimension flags pass
-        through unchanged and continue down the normal CLI-override path.
-        """
-        dimensions = confluid.discover_dimensions(raw_config)
-        if not dimensions:
-            return scopes, argv
-
-        remaining: List[str] = []
-        i = 0
-        while i < len(argv):
-            arg = argv[i]
-            if arg.startswith("--"):
-                # ``--KEY=VAL`` form.
-                if "=" in arg:
-                    key, value = arg[2:].split("=", 1)
-                    if key in dimensions:
-                        scopes.append(f"{key}={value}")
-                        i += 1
-                        continue
-                # ``--KEY VAL`` form — requires a non-flag follower.
-                else:
-                    key = arg[2:]
-                    if key in dimensions and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-                        scopes.append(f"{key}={argv[i + 1]}")
-                        i += 2
-                        continue
-            remaining.append(arg)
-            i += 1
-        return scopes, remaining
 
     def _bootstrap(self, raw_config: Optional[Any] = None) -> None:
         """Standard Trio Bootstrap.
@@ -831,19 +664,26 @@ class LiquifyApp:
 
         if self.context.config_path:
             if not self.context.config_path.exists():
-                console.print(f"[red]Error:[/red] Configuration file not found: {self.context.config_path}")
-                sys.exit(1)
+                raise ConfigNotFoundError(f"Configuration file not found: {self.context.config_path}")
             data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
-            self.context.config_data = confluid.load(data, flow=False, scopes=self.context.scopes or None)
-            self.context.config_data = expand_strings(self.context.config_data)
+            # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
+            # string primitive. Overrides get the same expansion later, in
+            # `overrides.apply_overrides`.
+            loaded = confluid.load(data, flow=False, scopes=self.context.scopes or None)
+            self.context.config_data = expand_strings(loaded)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
 
-    def _apply_overrides(self, args: List[str]) -> None:
-        if not self.context or not args:
+    def _apply_overrides(self, tokens: List[Token]) -> None:
+        """Phase 5: parse the leftover OPTION tokens and merge them into the config.
+
+        Literals (post-``--``) are excluded by construction — they are values
+        the user protected, reported separately by :meth:`_warn_unbound_literals`.
+        """
+        if not self.context or not tokens:
             return
 
-        parsed_overrides, deletions, dropped = parse_override_args(args)
+        parsed_overrides, deletions, dropped = parse_override_args(option_texts(tokens))
 
         # A dropped token is almost always a typo'd override (``lr 0.1``
         # instead of ``--lr 0.1``) — silently ignoring one can cost an entire
@@ -857,35 +697,8 @@ class LiquifyApp:
         if not parsed_overrides and not deletions:
             return
 
-        from confluid import deep_merge, expand_dotted_keys
-
-        parsed_overrides = expand_strings(parsed_overrides)
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
-        self.context.config_data = deep_merge(self.context.config_data, parsed_overrides)
-        # ``deep_merge`` leaves dotted-key overrides as literal-string keys
-        # at the top level (``{"processor.lookback_days": 5}``). We need to
-        # collapse them INTO the existing config tree so a CLI
-        # ``--processor.lookback_days 5`` actually reaches the Fluid at
-        # ``config["processor"]``. ``expand_dotted_keys`` walks dicts AND
-        # Fluid.kwargs, so the override lands in the Fluid's kwargs dict
-        # before any later ``flow()`` reads from it. This step is critical
-        # for the ``flow_mode="auto"`` + ``Any``-typed param path, where
-        # the Fluid is consumed directly without going through
-        # ``materialize()`` (which internally does the same expansion on
-        # its context).
-        if isinstance(self.context.config_data, dict):
-            self.context.config_data = expand_dotted_keys(self.context.config_data)
-        for path in deletions:
-            overrides.delete_dotted_key(self.context.config_data, path)
-        # Second-pass: flat overrides still need to broadcast to nested
-        # Fluids by name (``--max_epochs 10`` reaching every Fluid whose
-        # accept-list includes ``max_epochs``) and dotted overrides need to
-        # match Fluids by their ``name:`` kwarg (``--overlay.visualize
-        # true`` reaching the Fluid with ``name: overlay`` even when it
-        # isn't at ``config["overlay"]``). New ``+key=val`` adds also
-        # need this pass because the new key isn't yet in any Fluid's
-        # kwargs.
-        overrides.merge_overrides_into_fluids(self.context.config_data, parsed_overrides)
+        self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
@@ -895,8 +708,12 @@ class LiquifyApp:
         kwargs = self._resolve_kwargs(func)
         flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
         if flow_mode == "auto":
+            # `context=` is what makes the flat-config contract work: a Fluid that came
+            # from the document is built AGAINST it, so top-level keys broadcast into
+            # same-named constructor params. Without it every one of them is dropped
+            # silently — see `di.deep_flow`.
             with di.confluid_active_context(self.context.config_data):
-                kwargs = {k: di.deep_flow(v) for k, v in kwargs.items()}
+                kwargs = {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
         return func(**kwargs)
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
@@ -950,14 +767,14 @@ class LiquifyApp:
         # kwargs deferred (they flow lazily in production), but the liquify
         # contract is "fully flowed graph" — introspection tools need every
         # attribute resolved.
-        return {k: di.deep_flow(v) for k, v in kwargs.items()}
+        return {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
 
     def _show_help(
         self,
         app: "LiquifyApp",
         target_func: Optional[Callable[..., Any]] = None,
         config_path: Optional[Path] = None,
-        layout: str = "table",
+        layout: HelpLayout = "table",
     ) -> None:
         """Beautiful help menu via Rich.
 
@@ -1007,56 +824,57 @@ class LiquifyApp:
                     target_func, title="Command Configuration Options", layout=layout, positionals=positionals
                 )
         else:
-            table = Table(box=None, padding=(0, 2))
-            table.add_column("Command/Group", style="cyan")
-            table.add_column("Description")
+            report.show_command_index(app, console)
 
-            for name, sub_app in sorted(app._sub_apps.items()):
-                if name in app._sub_app_aliases:
-                    continue  # alias rows fold into their canonical group below
-                aliases = sorted(a for a, canon in app._sub_app_aliases.items() if canon == name)
-                label = f"{name} ({', '.join(aliases)})" if aliases else name
-                desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
-                table.add_row(label, desc)
-
-            for name, func in sorted(app._commands.items()):
-                desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
-                table.add_row(name, desc)
-
-            console.print(table)
-
-        # Rendered from the ONE flag declaration (grammar.GLOBAL_FLAG_SPECS) —
-        # the same table the parser and completion derive from, so help can
-        # never drift from what the CLI actually accepts.
-        console.print("\n[bold]Global Options:[/bold]")
-        visible = [spec for spec in GLOBAL_FLAG_SPECS if not spec.hidden]
-        width = max(len(flag_display(spec)) for spec in visible)
-        for spec in visible:
-            console.print(f"  {flag_display(spec).ljust(width)}  {spec.help}")
-        console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
-        console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
-        console.print("")
+        # The Global Options block is rendered from the ONE flag declaration
+        # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion
+        # derive from, so help can never drift from what the CLI accepts.
+        report.show_global_options(console)
 
 
 # ---------------------------------------------------------------------------
-# Backward-compatible re-exports.
+# DEPRECATED re-exports — scheduled for removal in v1.0.
 #
 # The consolidation split moved these helpers to their own modules
-# (:mod:`liquifai.grammar`, :mod:`liquifai.overrides`, :mod:`liquifai.di`),
-# but external callers import them from ``liquifai.core`` under their
-# historical underscore-prefixed names (fluxstudio's graphio tests use
-# ``_confluid_active_context`` / ``_deep_flow`` / ``_expand_strings``; this
-# repo's own tests pin the rest). Keep these aliases — new code should import
-# from the owning module instead.
+# (:mod:`liquifai.grammar`, :mod:`liquifai.overrides`, :mod:`liquifai.di`), but
+# external callers imported them from ``liquifai.core`` under their historical
+# underscore-prefixed names. They still resolve, and now emit a
+# ``DeprecationWarning`` naming the exact replacement import.
+#
+# They are served through a PEP-562 module ``__getattr__`` rather than plain
+# assignments so ACCESS is what warns — a plain alias cannot be detected, which
+# is why the previous "keep them forever" note never converged on a cleanup.
+# Nothing inside liquifai uses them (pinned by
+# ``tests/test_deprecated_aliases.py``); the remaining consumers are external.
 # ---------------------------------------------------------------------------
 
-_confluid_active_context = di.confluid_active_context
-_deep_flow = di.deep_flow
-_parse_override_args = overrides.parse_override_args
-_merge_overrides_into_fluids = overrides.merge_overrides_into_fluids
-_accepted_override_keys = overrides.accepted_override_keys
-_delete_dotted_key = overrides.delete_dotted_key
-_expand_strings = overrides.expand_strings
-_stops_positional = grammar.stops_positional
-_looks_like_arg = grammar.looks_like_arg
-_looks_like_key = grammar.looks_like_key
+#: ``{alias: (owning module, public name)}`` — the full deprecated surface.
+_DEPRECATED_ALIASES: Dict[str, Tuple[str, str]] = {
+    "_confluid_active_context": ("liquifai.di", "confluid_active_context"),
+    "_deep_flow": ("liquifai.di", "deep_flow"),
+    "_parse_override_args": ("liquifai.overrides", "parse_override_args"),
+    "_merge_overrides_into_fluids": ("liquifai.overrides", "merge_overrides_into_fluids"),
+    "_delete_dotted_key": ("liquifai.overrides", "delete_dotted_key"),
+    "_expand_strings": ("liquifai.overrides", "expand_strings"),
+    "_stops_positional": ("liquifai.grammar", "stops_positional"),
+    "_looks_like_arg": ("liquifai.grammar", "looks_like_arg"),
+    "_looks_like_key": ("liquifai.grammar", "looks_like_key"),
+}
+
+_ALIAS_MODULES = {"liquifai.di": di, "liquifai.grammar": grammar, "liquifai.overrides": overrides}
+
+
+def __getattr__(name: str) -> Any:
+    """Serve the deprecated ``liquifai.core`` aliases, warning on each access."""
+    target = _DEPRECATED_ALIASES.get(name)
+    if target is None:
+        raise AttributeError(f"module 'liquifai.core' has no attribute {name!r}")
+    module_name, public_name = target
+    warnings.warn(
+        f"liquifai.core.{name} is deprecated and will be removed in v1.0; "
+        f"import it from its owning module instead: "
+        f"`from {module_name} import {public_name}`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return getattr(_ALIAS_MODULES[module_name], public_name)
