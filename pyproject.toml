@@ -29,10 +29,12 @@ classifiers = [
 dependencies = [
     "rich>=10.0.0",
     "loggair>=0.1.0",
-    # 0.2.0 is the floor for `accepts_key` / `accepts_broadcast` — the settability
-    # predicates liquifai/overrides.py imports at module level. Against 0.1.0 the
-    # package does not import at all, so this floor is load-bearing, not advisory.
-    "confluid>=0.2.0",
+    # 0.3.0 is the floor for `accepts_any_key` — which joined `accepts_key` /
+    # `accepts_broadcast` as the settability predicates liquifai/overrides.py imports
+    # at module level (0.2.0 was the floor for the first two). Against an older
+    # confluid the package does not import at all, so this floor is load-bearing,
+    # not advisory.
+    "confluid>=0.3.0",
 ]
 requires-python = ">=3.12"
 

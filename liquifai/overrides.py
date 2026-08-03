@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from confluid import accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
+from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
 
@@ -171,6 +171,18 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
       ``NoBroadcast[T]`` is skipped — the same opt-outs a bare top-level YAML
       key obeys. Addressed writes deliberately bypass them.
 
+    A ``**kwargs`` target is DELIBERATELY NOT written here, even though it
+    accepts every key: writing into a marker's own kwargs is the ADDRESSED
+    channel, and confluid hands an addressed key to the CONSTRUCTOR while a bare
+    one becomes a post-init attribute. Claiming a bare ``--run_name`` was
+    addressed to a class that merely cannot refuse it is how run identity ended
+    up as a constructor argument of a metric, which raised ``Unexpected keyword
+    arguments`` from inside a library that never asked for it. Such a key is
+    left alone: ``apply_overrides`` has already merged it into the document, so
+    confluid's own broadcasting delivers it with the right provenance. A class
+    that DECLARES the key is unaffected — it is still written here, so a
+    ``--num_workers 8`` still reaches the constructor that takes it.
+
     A Fluid whose target class cannot be resolved (a ``!class:`` naming a
     module that is not importable yet) has no accept-list to consult, so it
     falls back to "the key is already in the YAML kwargs" — a deferred marker
@@ -202,6 +214,8 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
             if cls is None:
                 if k in data.kwargs:
                     data.kwargs[k] = v
+            elif accepts_any_key(cls):
+                continue  # no accept-list to filter with — let it cascade as a BARE key
             elif accepts_broadcast(cls, k):
                 data.kwargs[k] = v
         for v in list(data.kwargs.values()):

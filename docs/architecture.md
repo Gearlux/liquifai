@@ -245,6 +245,65 @@ matching predicate. Never reintroduce a local accept list, and never read a
 `__confluid_*__` marker directly from here; if a new gate is needed, it belongs
 in confluid next to the ones it joins.
 
+### Amendment: asking is not the same as delivering
+
+*2026-08-03*
+
+The consequence above — *"`**kwargs` targets became CLI-overridable, because they
+always were YAML-overridable"* — was right about **settability** and wrong about
+**delivery**, and the gap took a year's worth of confusing failures to surface.
+
+YAML delivers a bare key to a `**kwargs` class as a post-init **attribute**.
+liquifai delivered it by writing into `Fluid.kwargs`, which is confluid's
+*addressed* channel — so it arrived as a **constructor argument**. Deferring the
+question to confluid while re-implementing the answer's delivery put the two back
+out of step, in the one place the predicates cannot warn about: for a target with
+no accept list, `accepts_broadcast` says yes to **every key in the document**, so
+every bare override was handed to somebody else's constructor.
+
+What that looked like in practice: `--run_name x` reached a metric's constructor
+and the metric library raised `Unexpected keyword arguments`, from a call site
+nowhere near the config; the same flag reached a dataset loader, where nothing
+raised at all and it silently became part of a cache key. The tell that this was
+liquifai's bug rather than the engine's: a top-level *YAML* `run_name:` had always
+been fine, so a working config broke the moment the flag was added.
+
+**Decision.** confluid gained a third predicate, `accepts_any_key(target)` — not
+"may this key land?" but "does this target discriminate between keys at all?" —
+and the bare branch checks it **first**. A target that answers `True` is skipped
+rather than written; `apply_overrides` has already merged the key into the
+document, so confluid's own broadcasting delivers it with the right provenance.
+A class that *declares* the key is untouched and still receives it as a
+constructor argument.
+
+```python
+if accepts_any_key(cls):
+    continue                      # no accept-list -> let it cascade as a BARE key
+elif accepts_broadcast(cls, k):
+    data.kwargs[k] = v            # declared -> an argument is what was meant
+```
+
+**Consequences.**
+
+- Delivery now follows the same split as settability: liquifai chooses the
+  *channel* from the same predicate family confluid uses internally, instead of
+  writing into the addressed channel unconditionally.
+- Nothing is dropped. A `**kwargs` target still receives the key, as an attribute
+   — verified end to end rather than argued: the metric builds *and*
+  `metric.run_name` is set.
+- The rejected alternative was to catch the constructor's `ValueError`, parse the
+  offending keys out of its message, and retry without them. It fails on all
+  three counts that matter: it only catches libraries that **validate** (the
+  dataset-loader case raised nothing, and that is the more dangerous half), it
+  couples liquifai to every upstream library's error-message spelling, and it
+  re-runs a constructor that may already have had side effects.
+
+**What you may change.** The narrowing is deliberately minimal — it moves only
+the targets that have no accept list. Removing the bare-key write *entirely* (and
+letting confluid broadcast every override) is the tidier end state and is on the
+backlog, blocked on proving the coverage first: a marker never materialized
+against the document would silently stop seeing overrides.
+
 ---
 
 ## 5. Positionals bind as top-level config keys

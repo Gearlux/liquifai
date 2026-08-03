@@ -8,9 +8,29 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [0.1.1] — unreleased
 
-_Patch release: two bug fixes, no API changes. Stamp the date when tagging._
+_Patch release: three bug fixes, no API changes. Requires `confluid>=0.3.0`.
+Stamp the date when tagging._
 
 ### Fixed
+
+- **A bare `--key value` override no longer becomes a constructor argument of a
+  `**kwargs` class.** Writing a key into a marker's own kwargs is confluid's
+  ADDRESSED channel, so what lands there is passed to the **constructor** while a
+  bare cascading key becomes a post-init attribute. `merge_overrides_into_fluids`
+  wrote every accepted key there, which erased that distinction — and for a target
+  with a `**kwargs` constructor the accept-list is "everything", so *any* bare CLI
+  override was delivered as though the user had addressed it at that node. The
+  visible failures were a run-identity flag reaching a metric
+  (`ValueError: Unexpected keyword arguments: run_name`, raised by the metric
+  library from a call site nowhere near the config) and the same flag reaching a
+  dataset loader, where nothing raised at all — it silently became part of a cache
+  key. Note the asymmetry that made this a CLI-only bug: a top-level *YAML* key
+  stays bare and has always landed as an attribute, so a working config broke the
+  moment `--run_name` was added. Such a key is now left in the document for
+  confluid's own broadcasting to deliver with the right provenance (new predicate
+  `confluid.accepts_any_key`, hence the dependency floor). A class that
+  **declares** the key is unaffected and still receives it as a constructor
+  argument, so `--num_workers 8` and friends are unchanged.
 
 - **A flat config's top-level keys now reach a command parameter annotated `Any`.**
   DI has always built a parameter annotated with a *configurable class* against the
