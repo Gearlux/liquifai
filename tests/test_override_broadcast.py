@@ -13,11 +13,12 @@ Other Fluids are left alone — no typo broadcasting.
 
 from typing import Optional
 
+import confluid
 import pytest
 from confluid import NoBroadcast, accepts_broadcast, accepts_key, configurable
-from confluid.fluid import Class
+from confluid.fluid import Class, Instance
 
-from liquifai.overrides import merge_overrides_into_fluids
+from liquifai.overrides import apply_overrides, merge_overrides_into_fluids
 
 
 @configurable
@@ -205,11 +206,42 @@ def test_flat_override_skips_no_broadcast_param_but_not_its_siblings() -> None:
     assert fluid.kwargs["lr"] == 0.5  # ordinary slot still broadcasts
 
 
-def test_flat_override_reaches_kwargs_constructor() -> None:
-    """A `**kwargs` target accepts everything in confluid — so must the CLI."""
+def test_flat_override_is_not_written_into_a_kwargs_targets_own_kwargs() -> None:
+    """A `**kwargs` target cannot REFUSE a key, which is not the same as declaring it.
+
+    A marker's own kwargs are confluid's ADDRESSED channel — what lands there
+    becomes a CONSTRUCTOR ARGUMENT. Writing a bare key there claims the user aimed
+    it at this node, and for a target with no accept-list that claim is never
+    justified: every key in the document fits through a `**kwargs` signature. The
+    key is left to cascade instead (see the end-to-end test below).
+    """
     fluid = Class(_KwargsTarget)
     merge_overrides_into_fluids({"m": fluid}, {"anything": 7})
-    assert fluid.kwargs["anything"] == 7
+    assert "anything" not in fluid.kwargs
+
+
+def test_flat_override_still_reaches_a_kwargs_target_as_an_attribute() -> None:
+    """Not written as an ARGUMENT is not the same as dropped — it still lands.
+
+    The end-to-end guarantee the test above only tells half of: `apply_overrides`
+    has already merged the key into the document, so confluid's own broadcasting
+    delivers it with BARE provenance — a post-init attribute rather than a
+    constructor argument.
+    """
+    doc = confluid.load(apply_overrides({"m": Instance(_KwargsTarget)}, {"anything": 7}, []))
+    assert doc["m"].kw == {}  # the constructor was NOT called with it ...
+    assert doc["m"].anything == 7  # ... and it landed anyway
+
+
+def test_flat_override_still_reaches_a_class_that_declares_the_key() -> None:
+    """The narrowing is scoped to targets with NO accept-list — nothing else moves.
+
+    A class that DECLARES the key keeps taking it as a constructor argument, which
+    is what every `--num_workers` / `--max_epochs` style override relies on.
+    """
+    fluid = Class(_WithDefaultKwarg)
+    merge_overrides_into_fluids({"m": fluid}, {"root": "/data"})
+    assert fluid.kwargs["root"] == "/data"
 
 
 def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
