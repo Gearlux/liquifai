@@ -181,7 +181,7 @@ def test_liquify_and_show_end_to_end(tmp_path: Path) -> None:
 
     app = LiquifyApp(name="test-app")
 
-    # Use `Any` annotation to match real commands (marainer's `process(processor: Any)`).
+    # Use `Any` annotation to match real commands (matrainer's `process(processor: Any)`).
     @app.command()
     def dummy(parent: Any) -> None:
         return None

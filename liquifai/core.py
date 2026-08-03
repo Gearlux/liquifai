@@ -272,7 +272,7 @@ class LiquifyApp:
                 * ``"auto"``: deep-flow every kwarg before calling the command.
                   Attributes annotated with :class:`confluid.Lazy` stay deferred
                   so domain code can still flow them at runtime with extra
-                  kwargs (the marainer ``configure_optimizers`` pattern). Any
+                  kwargs (the matrainer ``configure_optimizers`` pattern). Any
                   non-``Lazy`` Class stub that can't be instantiated raises
                   immediately.
             positionals: Ordered positional-argument names (see
@@ -528,7 +528,7 @@ class LiquifyApp:
         # We use ``load_config_with_paths`` here (instead of plain
         # ``load_config``) so the resolved tree of YAML files — entrypoint
         # plus every transitively ``include:``-d file — is captured for
-        # downstream consumers (e.g. marainer's trainer logs them as
+        # downstream consumers (e.g. matrainer's trainer logs them as
         # artifacts to every wired Lightning logger).
         raw_config: Optional[Any] = None
         included_paths: List[Path] = []
