@@ -20,8 +20,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
+from loggair import get_logger
 
 from liquifai.grammar import looks_like_arg, looks_like_key
+
+logger = get_logger(__name__)
 
 
 def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], List[str]]:
@@ -142,6 +145,12 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     if data is None:
         data = {}
 
+    # The document's OWN top-level keys, read before the merge invents any. A dotted
+    # override expands into a top-level block (`--a.b 1` -> `{a: {b: 1}}`), so after
+    # the merge every dotted head LOOKS like a real key and "did this address
+    # anything?" is no longer answerable. Captured here, it still is.
+    document_keys = set(data.keys()) if isinstance(data, dict) else set()
+
     data = deep_merge(data, parsed)
     if isinstance(data, dict):
         data = expand_dotted_keys(data)
@@ -149,11 +158,41 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     for path in deletions:
         delete_dotted_key(data, path)
 
-    merge_overrides_into_fluids(data, parsed)
+    matched = merge_overrides_into_fluids(data, parsed)
+    _warn_unmatched_dotted_overrides(parsed, matched, document_keys)
     return data
 
 
-def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:
+def _warn_unmatched_dotted_overrides(overrides: Dict[str, Any], matched: Set[str], document_keys: Set[str]) -> None:
+    """Warn for a ``--<head>.<key>`` override whose ``<head>`` addresses nothing.
+
+    The dotted form targets an instance by its YAML ``name:``. Aim it at anything
+    else — most often an ``__init__``-body slot such as ``--optimizer.lr`` — and it
+    silently does nothing: the value expands into a top-level block that matches no
+    node, so the run proceeds on the default and looks configured. That is the same
+    failure the dropped-token warning exists to prevent, one step further in.
+
+    A head is considered addressed if a Fluid claimed it by name, if the document
+    already had that key (so the block lands on real content), or if it names a
+    registered class (the ``ClassName:`` block form).
+    """
+    for key in overrides:
+        if "." not in key or key in matched:
+            continue
+        head, _, tail = key.partition(".")
+        if head in document_keys or resolve_class(head) is not None:
+            continue
+        logger.warning(
+            f"Override {key!r} matched nothing and was ignored: no configured object is named "
+            f"{head!r}, and {head!r} is not a key in the configuration. The dotted form addresses "
+            f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
+            f"('--{tail} <value>') or set it inside that object's config block."
+        )
+
+
+def merge_overrides_into_fluids(
+    data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None, _matched: Optional[Set[str]] = None
+) -> Set[str]:
     """Merge CLI overrides into Fluid kwargs throughout the config tree.
 
     Two override forms, matching Confluid's own addressing rules exactly (the
@@ -190,14 +229,20 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
 
     Cycle-safe via ``id()`` tracking: a ``!ref:``-shared marker graph with a
     back-edge is visited once.
+
+    Returns the set of DOTTED override keys some Fluid claimed by name, so the
+    caller can warn about the ones that addressed nothing (see
+    :func:`_warn_unmatched_dotted_overrides`).
     """
     if _visited is None:
         _visited = set()
+    if _matched is None:
+        _matched = set()
 
     if isinstance(data, Fluid):
         vid = id(data)
         if vid in _visited:
-            return
+            return _matched
         _visited.add(vid)
 
         cls = _resolve_target_class(data.target)
@@ -210,6 +255,7 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
                 head, _, tail = k.partition(".")
                 if head == str(fluid_name) and (tail in data.kwargs or accepts_key(cls, tail)):
                     data.kwargs[tail] = v
+                    _matched.add(k)
                     continue  # dotted form handled — don't also broadcast-match.
             if cls is None:
                 if k in data.kwargs:
@@ -219,13 +265,14 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
             elif accepts_broadcast(cls, k):
                 data.kwargs[k] = v
         for v in list(data.kwargs.values()):
-            merge_overrides_into_fluids(v, overrides, _visited)
+            merge_overrides_into_fluids(v, overrides, _visited, _matched)
     elif isinstance(data, dict):
         for v in data.values():
-            merge_overrides_into_fluids(v, overrides, _visited)
+            merge_overrides_into_fluids(v, overrides, _visited, _matched)
     elif isinstance(data, list):
         for item in data:
-            merge_overrides_into_fluids(item, overrides, _visited)
+            merge_overrides_into_fluids(item, overrides, _visited, _matched)
+    return _matched
 
 
 def _resolve_target_class(target: Any) -> Any:
