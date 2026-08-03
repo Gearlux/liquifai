@@ -257,10 +257,10 @@ def test_show_completion_filters_shells(app: LiquifyApp) -> None:
 
 @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
 def test_render_script_substitutes_prog(shell: str) -> None:
-    script = comp.render_script("marainer", shell)
-    assert "_marainer_completion" in script or "__fish_marainer_complete" in script
+    script = comp.render_script("matrainer", shell)
+    assert "_matrainer_completion" in script or "__fish_matrainer_complete" in script
     # Fast-path: must invoke the lightweight liquifai-complete entry, not the slow app.
-    assert "liquifai-complete marainer" in script
+    assert "liquifai-complete matrainer" in script
     # Should not contain the literal placeholder tokens after rendering.
     assert "{prog}" not in script
 
@@ -274,7 +274,7 @@ def test_bash_script_suppresses_trailing_space_for_directories() -> None:
     """Bash auto-inserts a space after every completion; for directory
     candidates we need `compopt -o nospace` so the user can keep tabbing in.
     """
-    script = comp.render_script("marainer", "bash")
+    script = comp.render_script("matrainer", "bash")
     assert "compopt -o nospace" in script
     # Guard: the suppression must be conditional on the candidate ending in `/`
     # (suppressing unconditionally would break file completion).
@@ -288,7 +288,7 @@ def test_bash_script_suppresses_trailing_space_for_directories() -> None:
 def test_bash_script_forwards_comp_line_for_quote_aware_tokenizing() -> None:
     """The bash wrapper must forward $COMP_LINE/$COMP_POINT so liquifai-complete can
     re-tokenize quote-aware (bash's own $COMP_WORDS splits "Helios Base Model")."""
-    script = comp.render_script("marainer", "bash")
+    script = comp.render_script("matrainer", "bash")
     assert 'COMP_LINE="$COMP_LINE"' in script
     assert 'COMP_POINT="$COMP_POINT"' in script
     # COMP_WORDS stays too, as the fallback for old installs.
@@ -310,7 +310,7 @@ def test_zsh_script_suppresses_trailing_space_for_directories() -> None:
     """Zsh's `compadd` adds a trailing space by default; for directory
     candidates we need `-S ''` so the user can keep tabbing in.
     """
-    script = comp.render_script("marainer", "zsh")
+    script = comp.render_script("matrainer", "zsh")
     assert "compadd -U -S '' --" in script
     # Conditional on `*/` so non-directory candidates still get a trailing
     # space (the normal "ready for next arg" UX).
@@ -365,14 +365,14 @@ def test_words_from_comp_line_out_of_range_point_clamps() -> None:
 
 def test_install_script_bash_embeds_function_directly(tmp_path: Path) -> None:
     home = tmp_path
-    rc = comp.install_script("marainer", "bash", home=home)
+    rc = comp.install_script("matrainer", "bash", home=home)
     contents = rc.read_text()
     assert rc == home / ".bashrc"
-    # Function body must be embedded — no `eval "$(marainer --show-completion ...)"`,
+    # Function body must be embedded — no `eval "$(matrainer --show-completion ...)"`,
     # otherwise every shell startup re-invokes the slow app.
-    assert "_marainer_completion()" in contents
-    assert "liquifai-complete marainer" in contents
-    assert "marainer --show-completion" not in contents
+    assert "_matrainer_completion()" in contents
+    assert "liquifai-complete matrainer" in contents
+    assert "matrainer --show-completion" not in contents
 
 
 def test_install_script_bash_replaces_old_block(tmp_path: Path) -> None:
@@ -380,16 +380,16 @@ def test_install_script_bash_replaces_old_block(tmp_path: Path) -> None:
     rc = home / ".bashrc"
     rc.write_text(
         "# unrelated\n"
-        "\n# >>> liquifai completion for marainer >>>\n"
-        'eval "$(marainer --show-completion bash)"\n'
-        "# <<< liquifai completion for marainer <<<\n"
+        "\n# >>> liquifai completion for matrainer >>>\n"
+        'eval "$(matrainer --show-completion bash)"\n'
+        "# <<< liquifai completion for matrainer <<<\n"
         "# tail\n"
     )
-    comp.install_script("marainer", "bash", home=home)
+    comp.install_script("matrainer", "bash", home=home)
     contents = rc.read_text()
     # Old eval-style line is gone, new fast-path content is in.
-    assert 'eval "$(marainer --show-completion bash)"' not in contents
-    assert "liquifai-complete marainer" in contents
+    assert 'eval "$(matrainer --show-completion bash)"' not in contents
+    assert "liquifai-complete matrainer" in contents
     # Surrounding unrelated content is preserved.
     assert "# unrelated" in contents
     assert "# tail" in contents
@@ -432,27 +432,27 @@ def test_render_helpers_fish_is_empty() -> None:
 
 
 def test_install_writes_shared_helpers_block_once(tmp_path: Path) -> None:
-    comp.install_script("marainer", "bash", home=tmp_path)
+    comp.install_script("matrainer", "bash", home=tmp_path)
     comp.install_script("annotaide", "bash", home=tmp_path)
     contents = (tmp_path / ".bashrc").read_text()
     # Helpers block should appear exactly once even after installing two apps.
     assert contents.count(comp._HELPERS_MARKER) == 1
     assert contents.count(comp._HELPERS_END_MARKER) == 1
     # Both per-app blocks should be present.
-    assert "_marainer_completion()" in contents
+    assert "_matrainer_completion()" in contents
     assert "_annotaide_completion()" in contents
 
 
 def test_install_zsh_writes_shared_helpers_block(tmp_path: Path) -> None:
-    comp.install_script("marainer", "zsh", home=tmp_path)
+    comp.install_script("matrainer", "zsh", home=tmp_path)
     contents = (tmp_path / ".zshrc").read_text()
     assert "liquifai-bind-alias" in contents
     assert "_liquifai_alias_complete" in contents
 
 
 def test_install_fish_does_not_write_helpers(tmp_path: Path) -> None:
-    comp.install_script("marainer", "fish", home=tmp_path)
-    target = tmp_path / ".config" / "fish" / "completions" / "marainer.fish"
+    comp.install_script("matrainer", "fish", home=tmp_path)
+    target = tmp_path / ".config" / "fish" / "completions" / "matrainer.fish"
     assert "liquifai-bind-alias" not in target.read_text()
 
 
@@ -536,7 +536,7 @@ def test_complete_from_tree_works_without_app(app: LiquifyApp) -> None:
 # annotations against the function's __globals__ — local-scoped classes
 # inside a test wouldn't be reachable, but real-world Liquifai apps always
 # import their @configurable types at the top of their CLI module (e.g.
-# marainer/cli.py imports LightningTrainer), so module-scope helpers mirror
+# matrainer/cli.py imports LightningTrainer), so module-scope helpers mirror
 # the production shape exactly.
 
 from confluid import configurable as _configurable  # noqa: E402
@@ -560,7 +560,7 @@ class _CompTestTrainer:
 def _configurable_app() -> LiquifyApp:
     """An app whose script_command's annotated arg is a @configurable class.
 
-    Mirrors the marainer pattern: ``train(trainer: LightningTrainer)``.
+    Mirrors the matrainer pattern: ``train(trainer: LightningTrainer)``.
     """
     root = LiquifyApp(name="myapp")
 
@@ -732,38 +732,38 @@ def test_install_script_target_rc_writes_target_not_home(tmp_path: Path) -> None
     home = tmp_path / "home"
     home.mkdir()
     target_rc = tmp_path / "ws" / ".project.bashrc.completion"
-    rc = comp.install_script("marainer", "bash", home=home, target_rc=target_rc)
+    rc = comp.install_script("matrainer", "bash", home=home, target_rc=target_rc)
     assert rc == target_rc
     assert target_rc.exists()
     # ~/.bashrc must remain pristine — this is the whole point of target_rc.
     assert not (home / ".bashrc").exists()
     body = target_rc.read_text()
-    assert "_marainer_completion()" in body
+    assert "_matrainer_completion()" in body
     assert comp._HELPERS_MARKER in body
 
 
 def test_install_script_target_rc_idempotent(tmp_path: Path) -> None:
     target_rc = tmp_path / ".project.bashrc.completion"
-    comp.install_script("marainer", "bash", target_rc=target_rc)
-    comp.install_script("marainer", "bash", target_rc=target_rc)
+    comp.install_script("matrainer", "bash", target_rc=target_rc)
+    comp.install_script("matrainer", "bash", target_rc=target_rc)
     body = target_rc.read_text()
     assert body.count(comp._HELPERS_MARKER) == 1
-    assert body.count("# >>> liquifai completion for marainer >>>") == 1
+    assert body.count("# >>> liquifai completion for matrainer >>>") == 1
 
 
 def test_install_script_target_rc_two_apps_share_helpers(tmp_path: Path) -> None:
     target_rc = tmp_path / ".project.bashrc.completion"
-    comp.install_script("marainer", "bash", target_rc=target_rc)
+    comp.install_script("matrainer", "bash", target_rc=target_rc)
     comp.install_script("annotaide", "bash", target_rc=target_rc)
     body = target_rc.read_text()
     assert body.count(comp._HELPERS_MARKER) == 1
-    assert "_marainer_completion()" in body
+    assert "_matrainer_completion()" in body
     assert "_annotaide_completion()" in body
 
 
 def test_install_script_target_rc_creates_parent(tmp_path: Path) -> None:
     target_rc = tmp_path / "nested" / "dir" / "rc"
-    comp.install_script("marainer", "bash", target_rc=target_rc)
+    comp.install_script("matrainer", "bash", target_rc=target_rc)
     assert target_rc.exists()
 
 
@@ -806,9 +806,9 @@ def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path, monkey
     # A real Liquifai-shaped responder — output must contain the marker
     # `liquifai-complete <name>` that render_script always emits.
     _make_stub_script(
-        bindir / "marainer",
+        bindir / "matrainer",
         exit_code=0,
-        stdout="_marainer_completion() { :; }; liquifai-complete marainer 2>/dev/null",
+        stdout="_matrainer_completion() { :; }; liquifai-complete matrainer 2>/dev/null",
     )
     # Non-Liquifai CLI (exits non-zero on --show-completion).
     _make_stub_script(bindir / "some-other-tool", exit_code=2, stdout="")
@@ -828,7 +828,7 @@ def test_discover_liquifai_apps_filters_by_probe_response(tmp_path: Path, monkey
         stdout="liquifai-complete liquifai-complete",
     )
     found = comp.discover_liquifai_apps(prefix=prefix)
-    assert found == ["marainer"]
+    assert found == ["matrainer"]
 
 
 def test_install_for_apps_auto_discover(tmp_path: Path, monkeypatch: Any) -> None:
@@ -837,9 +837,9 @@ def test_install_for_apps_auto_discover(tmp_path: Path, monkeypatch: Any) -> Non
     bindir = prefix / "bin"
     bindir.mkdir(parents=True)
     _make_stub_script(
-        bindir / "marainer",
+        bindir / "matrainer",
         exit_code=0,
-        stdout="_marainer_completion() { :; }; liquifai-complete marainer",
+        stdout="_matrainer_completion() { :; }; liquifai-complete matrainer",
     )
     _make_stub_script(
         bindir / "annotaide",
@@ -850,9 +850,9 @@ def test_install_for_apps_auto_discover(tmp_path: Path, monkeypatch: Any) -> Non
 
     target_rc = tmp_path / "rc"
     installed = comp.install_for_apps(target_rc=target_rc, shell="bash", prefix=prefix)
-    assert sorted(installed) == ["annotaide", "marainer"]
+    assert sorted(installed) == ["annotaide", "matrainer"]
     body = target_rc.read_text()
-    assert "_marainer_completion()" in body
+    assert "_matrainer_completion()" in body
     assert "_annotaide_completion()" in body
     assert "_ls-fake_completion" not in body
 
@@ -938,12 +938,12 @@ def test_discover_missing_bindir_still_returns_declared(tmp_path: Path, monkeypa
 
 def test_cli_install_completions_explicit_apps(tmp_path: Path, capsys: Any) -> None:
     target_rc = tmp_path / "rc"
-    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash", "marainer", "annotaide"])
+    rc = comp._cli_install_completions(["--target-rc", str(target_rc), "--shell", "bash", "matrainer", "annotaide"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "marainer" in out and "annotaide" in out
+    assert "matrainer" in out and "annotaide" in out
     body = target_rc.read_text()
-    assert "_marainer_completion()" in body
+    assert "_matrainer_completion()" in body
     assert "_annotaide_completion()" in body
 
 
@@ -952,7 +952,7 @@ def test_cli_install_completions_auto_discover_empty(tmp_path: Path, capsys: Any
 
     Discovery is mocked to empty so this never probes the REAL venv. Probing it
     spawned every console-script with ``--show-completion`` — and the heavy ML
-    CLIs (marainer/navigaitor/raidar/…) import torch before the short-circuit,
+    CLIs (matrainer/navigaitor/raidar/…) import torch before the short-circuit,
     several hitting the 15 s timeout — which made this single test ~225 s (99%
     of the suite). The real probe loop is covered deterministically by
     ``test_discover_liquifai_apps_*`` / ``test_install_for_apps_auto_discover``

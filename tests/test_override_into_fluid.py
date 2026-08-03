@@ -13,7 +13,7 @@ whether the consumer later goes through ``materialize`` or directly
 through ``flow()``.
 
 These tests exercise the path end-to-end through a real ``LiquifyApp``
-with a ``script_command(flow_mode="auto")``, matching the marainer
+with a ``script_command(flow_mode="auto")``, matching the matrainer
 ``download`` / ``convert`` / ``process`` shape.
 """
 
@@ -85,7 +85,7 @@ def test_flow_mode_auto_applies_dotted_overrides_to_processor_fluid(tmp_path: Pa
     """End-to-end through a real LiquifyApp: ``--processor.lookback_days 5``
     must reach the live ``_DownloadFearGreed`` instance.
 
-    This mirrors the marainer ``download`` / ``convert`` / ``process``
+    This mirrors the matrainer ``download`` / ``convert`` / ``process``
     shape: a single ``processor: Any`` parameter with ``flow_mode="auto"``.
     """
     yaml = tmp_path / "smoke.yaml"

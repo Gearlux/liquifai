@@ -292,8 +292,8 @@ _liquifai_alias_complete() {
 }
 
 # Public helper. Usage:
-#   alias mt='marainer train'
-#   liquifai-bind-alias mt marainer train
+#   alias mt='matrainer train'
+#   liquifai-bind-alias mt matrainer train
 liquifai-bind-alias() {
     if [ "$#" -lt 2 ]; then
         echo "usage: liquifai-bind-alias <alias-name> <app> [<prefix-args>...]" >&2
@@ -340,8 +340,8 @@ _liquifai_alias_complete() {
 }
 
 # Public helper. Usage:
-#   alias mt='marainer train'
-#   liquifai-bind-alias mt marainer train
+#   alias mt='matrainer train'
+#   liquifai-bind-alias mt matrainer train
 liquifai-bind-alias() {
     if (( $# < 2 )); then
         echo "usage: liquifai-bind-alias <alias-name> <app> [<prefix-args>...]" >&2
