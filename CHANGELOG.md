@@ -8,10 +8,23 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [0.1.1] — unreleased
 
-_Patch release: three bug fixes, no API changes. Requires `confluid>=0.3.0`.
+_Patch release: four bug fixes, no API changes. Requires `confluid>=0.3.0`.
 Stamp the date when tagging._
 
 ### Fixed
+
+- **A dotted `--head.key` override that addresses nothing now warns instead of
+  vanishing.** The dotted form targets an instance by its YAML `name:`; aimed at
+  anything else — most often a slot declared in code, `--optimizer.lr 0.001` —
+  the value expanded into a top-level block that matched no node, so it was
+  silently discarded and the run proceeded on the default looking configured.
+  That is the failure the dropped-token warning already guards against, one step
+  further in. The warning names the offending key and the spelling that does
+  work. A head that a marker claims by `name:`, that the document already has as
+  a key, or that names a registered class stays silent — so nothing that
+  previously applied now warns. `merge_overrides_into_fluids` returns the set of
+  dotted keys it claimed (it previously returned `None`); the extra `_matched`
+  parameter is internal recursion state.
 
 - **A bare `--key value` override no longer becomes a constructor argument of a
   `**kwargs` class.** Writing a key into a marker's own kwargs is confluid's

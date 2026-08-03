@@ -262,6 +262,47 @@ def test_merge_is_cycle_safe() -> None:
     assert b.kwargs["max_packs"] == 3
 
 
+def _warnings_from(config: object, argv_overrides: dict, monkeypatch: pytest.MonkeyPatch) -> list:
+    """Collect `overrides.logger.warning` calls — loggair does not reach caplog."""
+    from liquifai import overrides as overrides_module
+
+    collected: list = []
+    monkeypatch.setattr(overrides_module.logger, "warning", lambda msg, *a, **k: collected.append(str(msg)))
+    apply_overrides(config, argv_overrides, [])
+    return collected
+
+
+def test_a_dotted_override_that_addresses_nothing_is_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--optimizer.lr` against a code-declared slot used to be a SILENT no-op.
+
+    The dotted form addresses an instance by its YAML `name:`. Aimed anywhere else it
+    expands into a top-level block matching no node, so the value vanished and the run
+    proceeded on the default looking configured — the same failure class the
+    dropped-token warning exists to prevent, one step further in.
+    """
+    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"optimizer.lr": 0.5}, monkeypatch)
+    assert any("'optimizer.lr'" in w and "matched nothing" in w for w in warned)
+    assert any("--lr" in w for w in warned)  # names the spelling that does work
+
+
+def test_a_dotted_override_that_names_a_real_instance_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    fluid = Class(_WithDefaultKwarg, name="overlay")
+    warned = _warnings_from({"m": fluid}, {"overlay.max_packs": 3}, monkeypatch)
+    assert warned == [] and fluid.kwargs["max_packs"] == 3
+
+
+def test_a_dotted_override_onto_an_existing_config_key_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The head names a real document key, so the expanded block lands on real content."""
+    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"runnable.max_packs": 3}, monkeypatch)
+    assert warned == []
+
+
+def test_a_bare_override_is_never_warned_about(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the DOTTED form can address nothing — a bare key is a document-wide cascade."""
+    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"max_packs": 3}, monkeypatch)
+    assert warned == []
+
+
 def test_broadcast_predicates_agree_with_the_merge() -> None:
     """The merge asks confluid; these are the answers it gets (drift pin)."""
     assert accepts_key(_OptedOutOfBroadcast, "lr")
