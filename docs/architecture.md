@@ -304,6 +304,115 @@ letting confluid broadcast every override) is the tidier end state and is on the
 backlog, blocked on proving the coverage first: a marker never materialized
 against the document would silently stop seeing overrides.
 
+### Amendment: delivering is not the same as winning
+
+*2026-08-04*
+
+Handing a key to confluid's broadcast, as the amendment above decided, makes its
+delivery subject to confluid's precedence rule — and confluid has exactly one:
+**document order, last spec wins, no specificity tiers**. So a cascading override
+does not beat a value addressed at a node by being an override. It beats it by
+sitting *later in the document*.
+
+`deep_merge` gives that away for free only when the key is new — a fresh
+top-level key is appended, i.e. last. When the document *already declares* the
+key, merge replaces it **in place**, and the CLI value inherits that key's
+original position:
+
+```yaml
+run_name: from_yaml          # line 1 — and the CLI value lands here
+runnable:
+  metric: !class:SomeMetric  # a **kwargs target
+    run_name: addressed_in_yaml
+```
+
+`--run_name from_cli` was silently discarded: the marker's own key sits later, so
+it won. Nothing warned, because from the engine's side nothing was wrong — the
+key *was* used, with the file's value. Only confluid's DEBUG `override:` line
+showed the CLI value losing the contest.
+
+**Decision.** Every bare override key is moved to the END of the top-level
+mapping after the merge (`overrides._move_cli_keys_last`). The user typed it
+after the whole file; document-last is the honest encoding of that.
+
+```python
+data = deep_merge(data, parsed)
+data = expand_dotted_keys(data)
+for key in parsed:                    # the CLI spoke last -> it sits last
+    if "." not in key and key in data:
+        data[key] = data.pop(key)
+```
+
+**Consequences.**
+
+- Precedence stays confluid's single rule. The rejected alternative was to ask
+  for a CLI *tier* that outranks document order — which is the specificity
+  ladder confluid deliberately does not have, and adding one for a single
+  front-end would make "why did my knob not take?" un-answerable from the
+  document alone.
+- Only **bare** keys move. A dotted `--<name>.<key>` is written straight into the
+  target's kwargs, where order does not arbitrate; and moving its expanded block
+  would reorder YAML content the user never overrode.
+- Positionals are unaffected: they land in `config_data` before overrides, so an
+  explicit `--name` still wins over the positional slot.
+
+**What you may change.** If the bare-key write is ever removed entirely (see
+above), this repositioning becomes the *only* thing that makes a CLI override
+win, not just the thing that makes a cascading one win — so it must be kept and
+its pin (`test_flat_override_beats_a_key_the_document_already_declares`) treated
+as load-bearing rather than incidental.
+
+### Amendment: a hoisted block has no position
+
+*2026-08-04*
+
+The same root cause, one layer over and on a different code path. DI resolves a
+`@configurable` parameter by selecting a config block and copying it into a
+synthesized marker's kwargs:
+
+```python
+instance = confluid.Instance(cls_name)
+instance.kwargs.update(config_block)          # <- the block leaves the document
+kwargs[name] = materialize(instance, context=context.config_data)
+```
+
+For a **class-name** block that copy is what breaks precedence. `Trainer: {lr:
+0.5}` is confluid's own addressed-block spelling — it reads it out of the context
+document, at the position the author wrote it. Hoisted into the marker, it is no
+longer *at* any position, and a value with no position cannot lose the one contest
+confluid runs. Measured on `{lr: 0.1, Trainer: {lr: 0.5}}` with `--lr 0.9`, after
+the repositioning above has correctly produced `['Trainer', 'lr']`:
+
+```
+materialize(Instance(Trainer, **block), context=doc)  ->  0.5   # hoisted
+materialize(Instance(Trainer),          context=doc)  ->  0.9   # left in place
+```
+
+**Decision.** The class-name branch does not hoist. The other two selections keep
+copying, because neither has a spelling confluid recognises on its own: a
+param-name block (`widget: {size: 7}`) matches by class name or instance `name:`,
+and a synthesized marker has neither; the flat-config fallback is the whole
+document, which is already the context.
+
+**Consequences.**
+
+- One rule now governs every spelling reaching a DI-injected parameter, so a CLI
+  override wins over a class-name block and a bare key written *above* one still
+  loses to it. Both directions are pinned — a fix that simply made the bare key
+  win would be a specificity tier by another name.
+- Behaviour changes for existing configs: a bare key written *after* a class-name
+  block now reaches the injected instance where the block previously always won.
+  A config that relied on the block winning must move the key above it.
+- The empty-block contract is untouched. `Trainer: {}` and YAML-null `Trainer:`
+  still mean "construct with defaults" — confluid applies an empty block to
+  nothing, which is what the hoist did too.
+
+**What you may change.** The param-name and flat-fallback branches are the
+remaining hoists, and they have the same latent shape. Removing them needs a
+spelling confluid can match — giving the synthesized marker a `name:` would make
+the param-name block addressable — and is only worth doing together with the
+`Fluid.kwargs` removal already on the backlog.
+
 ---
 
 ## 5. Positionals bind as top-level config keys

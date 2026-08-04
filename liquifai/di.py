@@ -45,6 +45,10 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
     for name, param in sig.parameters.items():
         if reg.is_configurable(param.annotation):
             cls_name = getattr(param.annotation, "__confluid_name__", param.annotation.__name__)
+            # Whether the selected block must be COPIED into the synthesized
+            # marker's kwargs, or is already reachable where it sits. Only the
+            # class-name block is confluid's own spelling; see below.
+            hoist_block = True
             if isinstance(cfg, dict):
                 # Membership checks, NOT truthiness: a present-but-empty block
                 # (``trainer: {}`` or YAML-null ``trainer:``) means "construct
@@ -53,6 +57,7 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
                 # ENTIRE top-level config into the instance's kwargs.
                 if cls_name in cfg:
                     config_block = cfg[cls_name]
+                    hoist_block = False
                 elif name in cfg:
                     config_block = cfg[name]
                 else:
@@ -85,7 +90,18 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
                 # the legacy ``{"_confluid_class_": ...}`` marker dicts
                 # are gone.
                 instance = confluid.Instance(cls_name)
-                if isinstance(config_block, dict):
+                if isinstance(config_block, dict) and hoist_block:
+                    # A param-name block (``widget: {size: 7}``) and the
+                    # flat-config fallback have no spelling confluid recognises
+                    # on its own, so their keys must be copied onto the marker.
+                    #
+                    # A CLASS-NAME block is the exception, and NOT hoisting it is
+                    # load-bearing: ``Trainer: {lr: 0.5}`` is confluid's own
+                    # addressed-block form, read out of the context document at
+                    # its DOCUMENT POSITION. Copying it into the marker's kwargs
+                    # moves it out of the document, and a value with no position
+                    # cannot lose the one precedence contest confluid runs —
+                    # so ``--lr 0.9`` lost to the block no matter where it sat.
                     instance.kwargs.update(config_block)
                 kwargs[name] = materialize(instance, context=context.config_data)
         else:

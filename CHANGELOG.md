@@ -8,10 +8,39 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [0.1.1] — unreleased
 
-_Patch release: four bug fixes, no API changes. Requires `confluid>=0.3.0`.
-Stamp the date when tagging._
+_Patch release: seven bug fixes, no core API changes (one provisional-extra type
+widening, below). Requires `confluid>=0.3.0`. Stamp the date when tagging._
 
 ### Fixed
+
+- **A bare key written after a class-name block now reaches a
+  dependency-injected parameter.** Config precedence is document order, last spec
+  wins — but DI copied a selected class-name block into the synthesized marker's
+  kwargs, which took it out of the document, and a value with no position cannot
+  lose that contest. `Trainer: {lr: 0.5}` therefore beat a later `lr: 0.9` — and
+  every `--lr` override — unconditionally. The class-name branch no longer
+  hoists: the block is confluid's own addressed-block spelling and is read from
+  the context document where it was written. Param-name blocks
+  (`widget: {size: 7}`) and the flat-config fallback still hoist, neither having
+  a spelling confluid can match on its own. A bare key written *above* the block
+  still loses to it, and `Trainer: {}` / YAML-null `Trainer:` still mean
+  "construct with defaults". Note for existing configs: one that relied on the
+  block outranking a *later* top-level key resolves differently now — move that
+  key above the block to keep the old value.
+
+- **A CLI override now outranks a key the document already declares.** Confluid
+  has one precedence rule — document order, last spec wins — so a bare override
+  left to cascade (see the `**kwargs` fix below) beats a value addressed at a
+  node only by sitting later. `deep_merge` appends a *new* key, but replaces an
+  existing one **in place**, which handed the CLI value that key's original
+  position: with a top-level `run_name: from_yaml` on line 1 and a marker
+  further down setting its own `run_name`, `--run_name from_cli` lost the
+  contest and was discarded. Nothing warned — the key *was* used, just with the
+  file's value; only confluid's DEBUG `override:` line showed it. Every bare
+  override key is now moved to the end of the document after the merge
+  (`_move_cli_keys_last`), which is where the user typed it. Dotted overrides
+  are unaffected: they are written straight into the target's kwargs, where
+  order does not arbitrate.
 
 - **A dotted `--head.key` override that addresses nothing now warns instead of
   vanishing.** The dotted form targets an instance by its YAML `name:`; aimed at
@@ -25,6 +54,28 @@ Stamp the date when tagging._
   previously applied now warns. `merge_overrides_into_fluids` returns the set of
   dotted keys it claimed (it previously returned `None`); the extra `_matched`
   parameter is internal recursion state.
+
+- **…and that warning no longer fires on two spellings that DO reach a node.**
+  Confluid's dotted grammar has more legal heads than an instance `name:`: the
+  glob segments (`--**.lr` reaches every accepting descendant, `--*.lr` the
+  direct children) route by shape rather than by naming anything, and a
+  multi-hop path (`--runner.opt.lr`) floats its first segment and then takes
+  strict one-level hops. Both were reported as *"matched nothing and was
+  ignored"* while the value landed — for `--**.lr`, confluid's own report says
+  `applied=[('lr', "… 'opt'", "glob '**'")]`. Glob heads are now skipped, and a
+  head that names a marker counts as addressed even when its tail is not
+  something liquifai can write there (routing a multi-hop tail is confluid's
+  job; a tail the target refuses is a wrong-*key* failure, which confluid
+  reports itself). The motivating `--optimizer.lr` case still warns.
+
+### Changed
+
+- **`liquifai.bridge`: `columns` is typed `Any`** on `ExposeSpec` / `CustomSpec`
+  and the `@expose` / `@custom` decorators (was `Tuple[Tuple[str, str], ...]`),
+  so a consumer's presenter can accept a richer column shape than a plain
+  pairs-tuple — the same "opaque to the engine" treatment `options` already had.
+  Inside the provisional `liquifai[bridge]` extra, which sits outside the
+  version contract.
 
 - **A bare `--key value` override no longer becomes a constructor argument of a
   `**kwargs` class.** Writing a key into a marker's own kwargs is confluid's

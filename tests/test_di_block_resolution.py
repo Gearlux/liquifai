@@ -23,6 +23,7 @@ import pytest
 
 from liquifai.context import LiquifyContext
 from liquifai.di import resolve_kwargs
+from liquifai.overrides import apply_overrides
 
 
 @confluid.configurable
@@ -91,6 +92,32 @@ def test_param_name_block_is_used() -> None:
 def test_class_name_takes_precedence_over_param_name() -> None:
     ctx = _context({"DiWidget": {"size": 5}, "widget": {"size": 7}})
     kwargs = resolve_kwargs(ctx, _command)
+    assert kwargs["widget"].size == 5
+
+
+def test_a_cli_override_beats_a_class_name_block() -> None:
+    """The block must stay IN the document, or it cannot lose a precedence contest.
+
+    Confluid decides bare-vs-addressed by document position. A class-name block
+    copied into the synthesized marker's kwargs has left the document, and a value
+    with no position can never be outranked — so ``--size 9`` lost to
+    ``DiWidget: {size: 5}`` wherever it sat. `resolve_kwargs` therefore does NOT
+    hoist a class-name block: it is confluid's own addressed-block spelling, read
+    from the context document where the author wrote it.
+    """
+    config = apply_overrides({"DiWidget": {"size": 5}}, {"size": 9}, [])
+    kwargs = resolve_kwargs(_context(config), _command)
+    assert kwargs["widget"].size == 9
+
+
+def test_a_class_name_block_still_wins_over_an_earlier_bare_key() -> None:
+    """The other direction — position decides, not a "CLI/bare always wins" tier.
+
+    Without this the fix above could be "make the bare key win", which is a
+    specificity tier by another name and would break every config that overrides
+    a global default at one node.
+    """
+    kwargs = resolve_kwargs(_context({"size": 1, "DiWidget": {"size": 5}}), _command)
     assert kwargs["widget"].size == 5
 
 
