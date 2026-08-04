@@ -233,6 +233,23 @@ def test_flat_override_still_reaches_a_kwargs_target_as_an_attribute() -> None:
     assert doc["m"].anything == 7  # ... and it landed anyway
 
 
+def test_flat_override_beats_a_key_the_document_already_declares() -> None:
+    """A cascading override must not lose the position contest to the file.
+
+    The other half of leaving a bare key to cascade: delivery is then decided by
+    confluid's ONE precedence rule (document order, last spec wins), and
+    ``deep_merge`` replaces a key the document ALREADY has *in place* — so the
+    CLI value inherits line 1's position and a marker addressing the same key
+    further down wins. Nothing warns, because the key IS used; it just carries
+    the file's value. ``_move_cli_keys_last`` re-seats it at the end, which is
+    where the user typed it.
+    """
+    doc = {"anything": "from_yaml", "m": Instance(_KwargsTarget, anything="addressed_in_yaml")}
+    built = confluid.load(apply_overrides(doc, {"anything": "from_cli"}, []))
+    assert built["m"].kw == {}  # still not a constructor argument ...
+    assert built["m"].anything == "from_cli"  # ... and the CLI value is the one that lands
+
+
 def test_flat_override_still_reaches_a_class_that_declares_the_key() -> None:
     """The narrowing is scoped to targets with NO accept-list — nothing else moves.
 
@@ -295,6 +312,42 @@ def test_a_dotted_override_onto_an_existing_config_key_is_silent(monkeypatch: py
     """The head names a real document key, so the expanded block lands on real content."""
     warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"runnable.max_packs": 3}, monkeypatch)
     assert warned == []
+
+
+def test_a_glob_headed_override_is_not_warned_about(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--**.lr` routes by SHAPE, not by naming a node — and it lands.
+
+    Confluid's dotted grammar has more legal heads than an instance `name:`:
+    `**` reaches every accepting descendant, `*` the direct children. Warning
+    that such a key "matched nothing and was ignored" states the opposite of
+    what confluid's own report says (`applied=[('lr', "… 'opt'", "glob '**'")]`).
+    """
+    fluid = Class(_WithDefaultKwarg, name="opt")
+    for head in ("**", "*"):
+        assert _warnings_from({"m": fluid}, {f"{head}.max_packs": 3}, monkeypatch) == []
+
+
+def test_a_multi_hop_dotted_override_at_a_named_instance_is_not_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A head that names a real marker is addressed, however long the tail is.
+
+    `--runner.opt.lr` is confluid's strict-hop form: the head floats to the node
+    named `runner`, later segments are one-level hops. liquifai can only write a
+    single-segment tail, but "I could not write it here" is not "it addressed
+    nothing" — the previous rule warned that no object is named `runner` while
+    the marker named `runner` was the one being walked.
+    """
+    inner = Class(_WithDefaultKwarg, name="opt")
+    outer = Class(_WithDefaultKwarg, name="runner", sub=inner)
+    assert _warnings_from({"m": outer}, {"runner.opt.max_packs": 3}, monkeypatch) == []
+
+
+def test_a_dotted_override_at_an_unknown_head_is_still_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The narrowing must not swallow the case the warning was written for."""
+    inner = Class(_WithDefaultKwarg, name="opt")
+    warned = _warnings_from({"m": inner}, {"optimizer.max_packs": 3}, monkeypatch)
+    assert any("'optimizer.max_packs'" in w and "matched nothing" in w for w in warned)
 
 
 def test_a_bare_override_is_never_warned_about(monkeypatch: pytest.MonkeyPatch) -> None:

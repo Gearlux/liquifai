@@ -11,10 +11,22 @@ the app itself.
 
 import subprocess
 import sys
+import tempfile
+import textwrap
+from pathlib import Path
 
 from confluid import configurable
 
 from liquifai import LiquifyApp
+
+# A config that sets `lr` TWICE: once as a top-level key, once at the node — and
+# the node sits LATER, so by confluid's document-order rule it wins. A CLI `--lr`
+# must still beat both: it was typed after the whole file, so it is applied last.
+PRECEDENCE_CONFIG = """
+lr: 0.1
+trainer: !class:Trainer
+  lr: 0.5
+"""
 
 
 @configurable
@@ -53,10 +65,18 @@ def demo() -> None:
         # so the override is NOT applied and max_epochs keeps its default.
         (["show", "--", "--max_epochs", "3"], "`--` ends option parsing"),
     ]
-    for argv, label in cases:
-        proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True)
-        result = [line for line in proc.stdout.splitlines() if line.startswith("RESULT")][0]
-        print(f"$ overrides-demo {' '.join(argv):<24} # {label}\n  {result}")
+    with tempfile.TemporaryDirectory() as td:
+        cfg = Path(td) / "precedence.yaml"
+        cfg.write_text(textwrap.dedent(PRECEDENCE_CONFIG))
+        cases += [
+            (["show", "--config", str(cfg)], "config alone: the node's `lr` wins, being later"),
+            (["show", "--config", str(cfg), "--lr", "0.9"], "the CLI beats it — an override applies last"),
+        ]
+        for argv, label in cases:
+            proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True)
+            result = [line for line in proc.stdout.splitlines() if line.startswith("RESULT")][0]
+            shown = " ".join("<config>" if a.endswith(".yaml") else a for a in argv)
+            print(f"$ overrides-demo {shown:<24} # {label}\n  {result}")
 
 
 if __name__ == "__main__":
