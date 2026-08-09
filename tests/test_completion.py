@@ -582,22 +582,26 @@ def _plain_cmd(layers: int = 1, name: str = "x") -> None:
 def test_introspect_function_keys_walks_configurable() -> None:
     """Signature introspection (via confluid `get_hierarchy`) descends into
     @configurable types and emits the flat list of LEAF override paths — no
-    configurable container roots/intermediates, and the instance-identity
-    `name` param is skipped (`_CompTestTrainer.name` does not appear)."""
+    configurable container roots/intermediates. A declared `name` param IS a
+    knob (confluid adjudication 2026-08-09): it was always settable via
+    `--outer.name`, and every other introspection surface (`to_pydantic`,
+    `input_specs`, the live-instance walker) already reported it — hiding it
+    here made completion deny a flag the override machinery accepts."""
     keys = comp._introspect_function_keys(_walking_cmd)
     assert keys == [
         "outer.epochs",
+        "outer.name",
         "outer.optimizer.lr",
         "outer.optimizer.weight_decay",
     ]
 
 
 def test_introspect_function_keys_plain_annotation_lists_params() -> None:
-    """Plain params are leaves; the special `name` param is skipped (matching
-    `--help`/`get_hierarchy`), so `_plain_cmd(layers, name)` yields just
-    `layers`."""
+    """Plain params are leaves — a declared `name` param included (matching
+    `--help`/`get_hierarchy` since the 2026-08-09 confluid adjudication), so
+    `_plain_cmd(layers, name)` yields both."""
     keys = comp._introspect_function_keys(_plain_cmd)
-    assert keys == ["layers"]
+    assert keys == ["layers", "name"]
 
 
 def test_complete_signature_keys_shortest_unique_paths() -> None:
