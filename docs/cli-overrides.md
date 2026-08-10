@@ -97,8 +97,11 @@ no CLI involved.
 
 ### When an override reaches nothing
 
-A dotted key whose head names neither a configured instance, an existing config
-key, nor a registered class cannot land anywhere, and says so:
+Whether an override actually landed is judged by the configuration engine's own
+delivery report, collected around dependency-injection materialization — not
+guessed from the document's shape. Every override the report says matched
+nothing is warned about, before the command body runs. A dotted key whose head
+names no configured instance:
 
 ```
 Override 'optimizer.lr' matched nothing and was ignored: no configured object is
@@ -106,8 +109,17 @@ named 'optimizer' … for a slot declared in code, use the bare form ('--lr 0.00
 or set it inside that object's config block.
 ```
 
-The bare form has no such failure mode — it is a document-wide cascade, so a key
-no node declares is simply not applied, which is normal rather than a mistake.
+A bare key that *no* object accepts — most often a typo — is caught the same
+way:
+
+```
+Override 'max_pcaks' matched nothing and was ignored: no configured object
+accepts 'max_pcaks'. Check the spelling against the declared parameters
+(`--help` lists them).
+```
+
+A bare key that lands on *some* nodes and not others stays silent — that is
+what a document-wide cascade means, not a mistake.
 
 The single source of truth for the global-flag vocabulary and token
 classification is `liquifai/grammar.py` (stdlib-only); the parser, `--help`,

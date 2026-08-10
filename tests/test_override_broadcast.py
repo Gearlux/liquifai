@@ -11,7 +11,8 @@ looser :func:`confluid.accepts_key`, bypassing those opt-outs.
 Other Fluids are left alone — no typo broadcasting.
 """
 
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 import confluid
 import pytest
@@ -279,13 +280,37 @@ def test_merge_is_cycle_safe() -> None:
     assert b.kwargs["max_packs"] == 3
 
 
+@configurable
+class _ReportRunner:
+    """End-to-end fixture: a runnable with one declared knob and no `optimizer`."""
+
+    def __init__(self, max_packs: int = 0, name: str = "") -> None:
+        self.max_packs, self.name = max_packs, name
+
+    def run(self) -> None:
+        pass
+
+
 def _warnings_from(config: object, argv_overrides: dict, monkeypatch: pytest.MonkeyPatch) -> list:
-    """Collect `overrides.logger.warning` calls — loggair does not reach caplog."""
+    """Collect the post-materialization unused-override warnings — loggair does not reach caplog.
+
+    Mirrors ``core.run_command``'s ordering exactly: overrides applied first,
+    DI materialization inside ``confluid.collect_report()``, then
+    ``warn_unused_overrides`` judged from the report. The pre-materialization
+    heuristic this replaced could only guess (and guessed wrong on glob heads
+    and multi-hop paths); the report is confluid's own delivery ledger.
+    """
+    from liquifai import di
     from liquifai import overrides as overrides_module
 
     collected: list = []
     monkeypatch.setattr(overrides_module.logger, "warning", lambda msg, *a, **k: collected.append(str(msg)))
-    apply_overrides(config, argv_overrides, [])
+    cfg = apply_overrides(config, argv_overrides, [])
+    with confluid.collect_report() as rep:
+        with di.confluid_active_context(cfg):
+            for key, value in cfg.items():
+                di.deep_flow(value, context=cfg)
+    overrides_module.warn_unused_overrides(argv_overrides, rep)
     return collected
 
 
@@ -350,10 +375,22 @@ def test_a_dotted_override_at_an_unknown_head_is_still_warned(monkeypatch: pytes
     assert any("'optimizer.max_packs'" in w and "matched nothing" in w for w in warned)
 
 
-def test_a_bare_override_is_never_warned_about(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the DOTTED form can address nothing — a bare key is a document-wide cascade."""
+def test_a_bare_override_some_node_accepts_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare key that cascades into ANY accepting node is used — no warning."""
     warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"max_packs": 3}, monkeypatch)
     assert warned == []
+
+
+def test_a_bare_override_nothing_accepts_is_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """NEW coverage the pre-materialization heuristic could never provide.
+
+    A bare key is a document-wide cascade, so "did it land?" is unknowable
+    before materialization — the old rule simply never warned about bare keys,
+    and a typo'd ``--max_pcaks 3`` ran the job on defaults, silently. The
+    report knows: a registered candidate no node accepted reports unused.
+    """
+    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"max_pcaks": 3}, monkeypatch)
+    assert any("'max_pcaks'" in w and "matched nothing" in w for w in warned)
 
 
 def test_broadcast_predicates_agree_with_the_merge() -> None:
@@ -365,3 +402,42 @@ def test_broadcast_predicates_agree_with_the_merge() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_end_to_end_a_doomed_override_warns_from_the_real_run(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full CLI path: run_command wraps DI in collect_report and warns pre-execution.
+
+    One doomed override (`--optimizer.lr` — no object named `optimizer`) and one
+    good one (`--max_packs`) through a real ``app.run()``: exactly the doomed key
+    is warned about, the good one lands, and the command still executes.
+    """
+    import sys
+
+    from liquifai import LiquifyApp
+    from liquifai import overrides as overrides_module
+    from liquifai.context import set_context
+
+    collected: list = []
+    monkeypatch.setattr(overrides_module.logger, "warning", lambda msg, *a, **k: collected.append(str(msg)))
+
+    seen: list = []
+    app = LiquifyApp(name="report-app")
+
+    @app.script_command(flow_mode="auto")
+    def go(runnable: Any) -> None:
+        seen.append(runnable)
+
+    config = tmp_path / "cfg.yaml"
+    config.write_text("runnable: !class:_ReportRunner\n")
+    monkeypatch.setattr(sys, "argv", ["report-app", "go", str(config), "--optimizer.lr", "0.5", "--max_packs", "3"])
+    set_context(None)
+
+    app.run()
+
+    (runner,) = seen
+    assert runner.max_packs == 3  # the good override landed
+    doomed = [w for w in collected if "'optimizer.lr'" in w and "matched nothing" in w]
+    assert doomed, collected
+    assert not any("max_packs" in w for w in collected)  # the good one is not warned about

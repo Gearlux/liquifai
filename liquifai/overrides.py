@@ -14,25 +14,19 @@ with the completion fast path); this module may import confluid freely.
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
+from confluid.report import ConfigurationReport
 from loggair import get_logger
 
 from liquifai.grammar import looks_like_arg, looks_like_key
 
 logger = get_logger(__name__)
-
-# Confluid's glob routing segments (its docs' "Bare, addressed, glob" grammar):
-# ``--**.lr`` cascades to every accepting descendant and ``--*.lr`` to the direct
-# children, so neither head NAMES a node and neither can be judged from here.
-# Restated locally only because the whole local heuristic in
-# :func:`_warn_unmatched_dotted_overrides` is slated for deletion in favour of
-# confluid's own report (see ``TASKS.md``) — do not grow it.
-_GLOB_SEGMENTS = frozenset({"*", "**"})
 
 
 def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], List[str]]:
@@ -156,12 +150,6 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     if data is None:
         data = {}
 
-    # The document's OWN top-level keys, read before the merge invents any. A dotted
-    # override expands into a top-level block (`--a.b 1` -> `{a: {b: 1}}`), so after
-    # the merge every dotted head LOOKS like a real key and "did this address
-    # anything?" is no longer answerable. Captured here, it still is.
-    document_keys = set(data.keys()) if isinstance(data, dict) else set()
-
     data = deep_merge(data, parsed)
     if isinstance(data, dict):
         data = expand_dotted_keys(data)
@@ -170,8 +158,13 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     for path in deletions:
         delete_dotted_key(data, path)
 
-    matched = merge_overrides_into_fluids(data, parsed)
-    _warn_unmatched_dotted_overrides(parsed, matched, document_keys)
+    merge_overrides_into_fluids(data, parsed)
+    # "Did this override reach anything?" is deliberately NOT judged here — this
+    # runs BEFORE materialization, where the question can only be guessed at (the
+    # deleted local heuristic guessed wrong twice: glob heads and multi-hop paths
+    # were reported ignored while the value landed). Confluid answers it
+    # authoritatively after DI materializes: see :func:`warn_unused_overrides`,
+    # called from ``core.run_command`` with the pass's ``ConfigurationReport``.
     return data
 
 
@@ -204,39 +197,52 @@ def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None
             data[key] = data.pop(key)
 
 
-def _warn_unmatched_dotted_overrides(overrides: Dict[str, Any], matched: Set[str], document_keys: Set[str]) -> None:
-    """Warn for a ``--<head>.<key>`` override whose ``<head>`` addresses nothing.
+def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> None:
+    """Warn for each CLI override the materialization REPORT says matched nothing.
 
-    The dotted form targets an instance by its YAML ``name:``. Aim it at anything
-    else — most often an ``__init__``-body slot such as ``--optimizer.lr`` — and it
-    silently does nothing: the value expands into a top-level block that matches no
-    node, so the run proceeds on the default and looks configured. That is the same
-    failure the dropped-token warning exists to prevent, one step further in.
+    This asks confluid instead of guessing: ``report.unused`` is authoritative
+    across every delivery mechanism (bare cascade, addressed blocks, glob
+    riders, the nested-marker cascade into deferred slots), so the verdicts
+    the deleted pre-materialization heuristic got wrong — a glob head, a
+    multi-hop path, each reported "ignored" while the value landed — are right
+    by construction. It also covers what the heuristic could not see at all: a
+    BARE override no object accepts.
 
-    A head is considered addressed if a Fluid claimed it by name, if the document
-    already had that key (so the block lands on real content), if it names a
-    registered class (the ``ClassName:`` block form), or if it is one of
-    confluid's glob segments (``*`` / ``**``), which route by shape rather than
-    by naming a node — ``--**.lr`` reaches every accepting descendant, and
-    calling that "matched nothing" told the operator the opposite of the truth.
+    The report's candidate spelling for an override key: a glob-headed
+    override keeps its full key (a ``'**'`` block registers per leaf as
+    ``**.lr``), a named dotted override is its HEAD block (``--opt.lr``
+    expands to a top-level ``opt:`` mapping), a bare override is the key
+    itself. A command that materializes nothing registers no candidates, so
+    the check degrades to silence rather than to guessing.
+
+    Called from ``core.run_command`` after DI materializes and BEFORE the
+    command body runs — a doomed multi-hour run gets its warning up front.
+    Do NOT downgrade to debug/trace: an override the operator typed and did
+    not get is exactly the actionable condition ``warning`` is reserved for.
     """
+    unused = set(report.unused)
     for key in overrides:
-        if "." not in key or key in matched:
+        head, dot, tail = key.partition(".")
+        dotted_at_name = bool(dot) and head not in ("*", "**")
+        candidate = head if dotted_at_name else key
+        if candidate not in unused:
             continue
-        head, _, tail = key.partition(".")
-        if head in _GLOB_SEGMENTS or head in document_keys or resolve_class(head) is not None:
-            continue
-        logger.warning(
-            f"Override {key!r} matched nothing and was ignored: no configured object is named "
-            f"{head!r}, and {head!r} is not a key in the configuration. The dotted form addresses "
-            f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
-            f"('--{tail} <value>') or set it inside that object's config block."
-        )
+        if dotted_at_name:
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object is named "
+                f"{head!r}, and {head!r} is not a key in the configuration. The dotted form addresses "
+                f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
+                f"('--{tail} <value>') or set it inside that object's config block."
+            )
+        else:
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object accepts "
+                f"{(tail or key)!r}. Check the spelling against the declared parameters "
+                f"(`--help` lists them)."
+            )
 
 
-def merge_overrides_into_fluids(
-    data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None, _matched: Optional[Set[str]] = None
-) -> Set[str]:
+def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:
     """Merge CLI overrides into Fluid kwargs throughout the config tree.
 
     Two override forms, matching Confluid's own addressing rules exactly (the
@@ -274,21 +280,17 @@ def merge_overrides_into_fluids(
     Cycle-safe via ``id()`` tracking: a ``!ref:``-shared marker graph with a
     back-edge is visited once.
 
-    Returns the set of DOTTED override keys whose HEAD named some Fluid — the
-    exact question :func:`_warn_unmatched_dotted_overrides` asks. A head counts
-    as matched even when its tail was not written here (a multi-hop path that is
-    confluid's to route, or a key this particular target refuses): the head did
-    address a real node, which is all the warning claims to detect.
+    Whether an override REACHED anything is deliberately not judged here (nor
+    returned): confluid's report answers that after materialization — see
+    :func:`warn_unused_overrides`.
     """
     if _visited is None:
         _visited = set()
-    if _matched is None:
-        _matched = set()
 
     if isinstance(data, Fluid):
         vid = id(data)
         if vid in _visited:
-            return _matched
+            return
         _visited.add(vid)
 
         cls = _resolve_target_class(data.target)
@@ -300,15 +302,10 @@ def merge_overrides_into_fluids(
             if fluid_name and "." in k:
                 head, _, tail = k.partition(".")
                 if head == str(fluid_name):
-                    # The head names THIS instance, so the override DID address a
-                    # real node — record that even when the tail is nothing to
-                    # write here. A multi-hop tail (``opt.lr``) is confluid's to
-                    # route (its first segment floats, later ones are strict
-                    # hops) and a tail this target refuses is a WRONG-KEY
-                    # failure confluid reports itself; neither is the "addressed
-                    # nothing" case the warning exists for, and claiming
-                    # otherwise names an instance that is demonstrably there.
-                    _matched.add(k)
+                    # The head names THIS instance. A multi-hop tail (``opt.lr``)
+                    # is confluid's to route (its first segment floats, later
+                    # ones are strict hops); only a single-segment tail this
+                    # target takes is written here.
                     if tail in data.kwargs or accepts_key(cls, tail):
                         data.kwargs[tail] = v
                         continue  # dotted form handled — don't also broadcast-match.
@@ -320,27 +317,32 @@ def merge_overrides_into_fluids(
             elif accepts_broadcast(cls, k):
                 data.kwargs[k] = v
         for v in list(data.kwargs.values()):
-            merge_overrides_into_fluids(v, overrides, _visited, _matched)
+            merge_overrides_into_fluids(v, overrides, _visited)
     elif isinstance(data, dict):
         for v in data.values():
-            merge_overrides_into_fluids(v, overrides, _visited, _matched)
+            merge_overrides_into_fluids(v, overrides, _visited)
     elif isinstance(data, list):
         for item in data:
-            merge_overrides_into_fluids(item, overrides, _visited, _matched)
-    return _matched
+            merge_overrides_into_fluids(item, overrides, _visited)
 
 
 def _resolve_target_class(target: Any) -> Any:
     """Normalize a Fluid ``target`` into the class to ask about, or ``None``.
 
-    ``target`` may be a class, an instance, or the dotted string Confluid uses
-    for deferred resolution (``!class:module.Cls``). ``None`` means "not
-    introspectable" — the caller falls back to the already-in-YAML rule.
+    ``target`` may be a class, a plain callable (a registered builder
+    FUNCTION), an instance, or the dotted string Confluid uses for deferred
+    resolution (``!class:module.Cls``). ``None`` means "not introspectable" —
+    the caller falls back to the already-in-YAML rule. A routine is returned
+    AS-IS: taking ``type(fn)`` (= ``function``, whose ``__init__`` takes
+    ``**kwargs``) would hand the predicates a target that accepts everything —
+    the exact degradation confluid's own target normalizer exists to prevent.
     """
     cls: Any = resolve_class(target) if isinstance(target, str) else target
     if cls is None:
         return None
-    return cls if isinstance(cls, type) else type(cls)
+    if isinstance(cls, type) or inspect.isroutine(cls):
+        return cls
+    return type(cls)
 
 
 def delete_dotted_key(config: Any, path: str) -> None:
