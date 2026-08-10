@@ -6,6 +6,25 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed (behavior)
+
+- **"Did this override reach anything?" is now answered by confluid's report,
+  not guessed.** When CLI overrides were applied, `run_command` wraps DI
+  materialization in `confluid.collect_report()` and warns — before the
+  command body runs — for every override the report says matched nothing.
+  The pre-materialization heuristic (`_warn_unmatched_dotted_overrides`) is
+  deleted: it re-derived confluid's addressing model and had been wrong twice
+  (glob heads and multi-hop paths were reported "ignored" while the value
+  landed). Two visible changes: a BARE override no object accepts now warns
+  too (`--max_pcaks 3` used to run the job on defaults, silently — the old
+  rule structurally could not see bare keys), and the warning now fires at
+  execution time (phase 6) rather than during override application (phase 5).
+  `merge_overrides_into_fluids` no longer returns the matched-head set
+  (returns `None`); `LiquifyContext` gains a `cli_overrides` field. Requires
+  confluid > 0.3.0's report fix (a cascade-delivered leaf satisfies its
+  glob-registered candidate). A run without CLI overrides does not engage the
+  report machinery at all.
+
 ## [0.1.1] — unreleased
 
 _Patch release: seven bug fixes, no core API changes (one provisional-extra type

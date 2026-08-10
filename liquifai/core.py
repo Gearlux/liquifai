@@ -697,23 +697,48 @@ class LiquifyApp:
         if not parsed_overrides and not deletions:
             return
 
+        # Kept for the post-materialization unused-override check in
+        # ``run_command`` — confluid's report says which of these matched nothing.
+        self.context.cli_overrides = dict(parsed_overrides)
+
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
         self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
-        """Execute with Dependency Injection."""
+        """Execute with Dependency Injection.
+
+        When CLI overrides were applied, the DI materialization runs inside
+        ``confluid.collect_report()`` and every override the report says
+        matched NOTHING is warned about BEFORE the command body runs
+        (:func:`liquifai.overrides.warn_unused_overrides`) — confluid is the
+        authority on delivery, so this replaces the deleted pre-materialization
+        heuristic that had to guess (and guessed wrong on glob heads and
+        multi-hop paths). Without overrides the report machinery is not
+        engaged at all — the default path stays zero-cost.
+        """
         if not self.context:
             return func()
-        kwargs = self._resolve_kwargs(func)
-        flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
-        if flow_mode == "auto":
-            # `context=` is what makes the flat-config contract work: a Fluid that came
-            # from the document is built AGAINST it, so top-level keys broadcast into
-            # same-named constructor params. Without it every one of them is dropped
-            # silently — see `di.deep_flow`.
-            with di.confluid_active_context(self.context.config_data):
-                kwargs = {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
+        context = self.context
+
+        def _materialize_kwargs() -> Dict[str, Any]:
+            kwargs = self._resolve_kwargs(func)
+            flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
+            if flow_mode == "auto":
+                # `context=` is what makes the flat-config contract work: a Fluid that came
+                # from the document is built AGAINST it, so top-level keys broadcast into
+                # same-named constructor params. Without it every one of them is dropped
+                # silently — see `di.deep_flow`.
+                with di.confluid_active_context(context.config_data):
+                    kwargs = {k: di.deep_flow(v, context=context.config_data) for k, v in kwargs.items()}
+            return kwargs
+
+        if context.cli_overrides:
+            with confluid.collect_report() as report:
+                kwargs = _materialize_kwargs()
+            overrides.warn_unused_overrides(context.cli_overrides, report)
+        else:
+            kwargs = _materialize_kwargs()
         return func(**kwargs)
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
