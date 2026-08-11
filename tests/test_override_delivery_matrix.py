@@ -234,14 +234,18 @@ def test_an_unresolvable_target_is_overridable_only_where_the_yaml_already_had_t
     assert marker.kwargs.get(key) == expected
 
 
-def test_a_deferred_class_stub_in_a_parents_slot_carries_the_override() -> None:
-    """A no-parens `!class:` reaches the parent as a STUB, for the parent to flow itself.
+def test_a_marker_in_a_parents_slot_is_BUILT_with_the_override() -> None:
+    """A marker in an ordinary slot builds during `load()`, override already applied.
 
-    The parent is built during `load()` but does not build its slot, so the stub is
-    handed on with the override already merged in — the same "flowed later" shape as
-    a listed marker, arrived at a different way.
+    This shape MOVED (confluid 2026-08-11), which is what this file exists to record: the
+    parens-less `!class:X` used to reach the parent as a STUB, deferred because the parent
+    happened to be `@configurable`. That parent-context rule is gone — there are two
+    construction modes and `partial` alone picks between them, so `X` and `X()` are one
+    thing. Deferral is now a slot's own declaration (`Partial[T]`), covered by
+    `test_a_document_level_lazy_marker_carries_the_override_into_a_later_flow`.
+
+    The delivery property under test is unchanged: the override reaches the nested node.
     """
     doc = run_cli("node: !class:Holder()\n  child: !class:Leaf\n", ["--rate", "0.5"])
-    stub = doc["node"].child
-    assert isinstance(stub, Class) and dict(stub.kwargs)["rate"] == 0.5
-    assert flow(stub).rate == 0.5  # whoever flows it, later, gets the overridden value
+    child = doc["node"].child
+    assert isinstance(child, Leaf) and child.rate == 0.5
