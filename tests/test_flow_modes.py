@@ -61,10 +61,24 @@ def _run(app: LiquifyApp, argv: List[str], monkeypatch: Any) -> None:
     app.run()
 
 
-def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
-    """Default ``manual`` mode preserves nested Class stubs as Fluids."""
+def test_manual_mode_keeps_a_partial_nested_slot_deferred(tmp_path: Path, monkeypatch: Any) -> None:
+    """Default ``manual`` mode preserves a DEFERRED nested slot as a Fluid.
+
+    The trigger changed 2026-08-11: confluid merged its eager and deferred markers, so a
+    parens-less ``!class:X`` builds like any other target and deferral is asked for
+    explicitly. What manual mode promises is unchanged — it does not deep-flow what the
+    config said to leave unbuilt.
+    """
     config = tmp_path / "manual.yaml"
-    config.write_text("exporter: !class:_Exporter\n" "  name: m1\n" "  store: !class:_Store\n" "    path: /tmp/x\n")
+    config.write_text(
+        "exporter:\n"
+        "  _target_: _Exporter\n"
+        "  name: m1\n"
+        "  store:\n"
+        "    _target_: _Store\n"
+        "    _partial_: true\n"
+        "    path: /tmp/x\n"
+    )
     app = LiquifyApp(name="manual-app")
     captured: Dict[str, Any] = {}
 
@@ -79,7 +93,7 @@ def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -
     exporter = captured["exporter"]
     assert isinstance(exporter, _Exporter)
     assert exporter.name == "m1"
-    assert isinstance(exporter.store, Fluid), "manual mode must leave nested Class as a Fluid"
+    assert isinstance(exporter.store, Fluid), "manual mode must leave a partial slot deferred"
 
 
 def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
