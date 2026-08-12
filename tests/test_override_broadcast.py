@@ -17,7 +17,7 @@ from typing import Any, Optional
 import confluid
 import pytest
 from confluid import NoBroadcast, accepts_broadcast, accepts_key, configurable
-from confluid.fluid import Class, Instance
+from confluid.fluid import Target
 
 from liquifai.overrides import apply_overrides, merge_overrides_into_fluids
 
@@ -80,34 +80,34 @@ def test_accepted_keys_for_non_configurable_is_ctor_only() -> None:
 
 def test_merge_applies_ctor_kwarg_even_when_missing_from_yaml() -> None:
     """Override for `max_packs` must land even though YAML doesn't set it."""
-    fluid = Class(_WithDefaultKwarg, root="/data")
+    fluid = Target(_WithDefaultKwarg, root="/data")
     merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs.get("max_packs") == 1
 
 
 def test_merge_applies_property_kwarg_for_configurable() -> None:
-    fluid = Class(_WithProperty, x=0)
+    fluid = Target(_WithProperty, x=0)
     merge_overrides_into_fluids({"obj": fluid}, {"threshold": 42})
     assert fluid.kwargs.get("threshold") == 42
 
 
 def test_merge_skips_unknown_kwarg_on_non_configurable() -> None:
-    fluid = Class(_NotConfigurable, a=1)
+    fluid = Target(_NotConfigurable, a=1)
     merge_overrides_into_fluids({"obj": fluid}, {"typo": 99})
     assert "typo" not in fluid.kwargs
 
 
 def test_merge_preserves_existing_kwarg_override_path() -> None:
     """The legacy "already in kwargs" path still wins — post-construction toggles stay overridable."""
-    fluid = Class(_WithDefaultKwarg, root="/data", max_packs=7)
+    fluid = Target(_WithDefaultKwarg, root="/data", max_packs=7)
     merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs["max_packs"] == 1
 
 
 def test_dotted_override_targets_instance_by_name() -> None:
     """`--overlay.visualize true` lands only on the Fluid whose `name: overlay`."""
-    overlay = Class(_WithDefaultKwarg, root="/a", name="overlay")
-    ls = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    overlay = Target(_WithDefaultKwarg, root="/a", name="overlay")
+    ls = Target(_WithDefaultKwarg, root="/b", name="labelstudio")
     merge_overrides_into_fluids(
         {"o": overlay, "l": ls},
         {"overlay.max_packs": 1},
@@ -119,8 +119,8 @@ def test_dotted_override_targets_instance_by_name() -> None:
 
 def test_flat_override_still_broadcasts_to_named_instances() -> None:
     """Plain `--max_packs 1` continues to broadcast (legacy behaviour preserved)."""
-    a = Class(_WithDefaultKwarg, root="/a", name="overlay")
-    b = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    a = Target(_WithDefaultKwarg, root="/a", name="overlay")
+    b = Target(_WithDefaultKwarg, root="/b", name="labelstudio")
     merge_overrides_into_fluids(
         {"a": a, "b": b},
         {"max_packs": 5},
@@ -131,7 +131,7 @@ def test_flat_override_still_broadcasts_to_named_instances() -> None:
 
 def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
     """Unknown names don't fall back to broadcast — avoid surprise matches."""
-    fluid = Class(_WithDefaultKwarg, root="/a", name="overlay")
+    fluid = Target(_WithDefaultKwarg, root="/a", name="overlay")
     merge_overrides_into_fluids(
         {"o": fluid},
         {"wrong_name.max_packs": 99},
@@ -143,7 +143,7 @@ def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
 
 def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
     """Without a YAML `name`, dotted keys can't target the instance."""
-    fluid = Class(_WithDefaultKwarg, root="/a")  # no name
+    fluid = Target(_WithDefaultKwarg, root="/a")  # no name
     merge_overrides_into_fluids(
         {"o": fluid},
         {"overlay.max_packs": 1},
@@ -152,8 +152,8 @@ def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
 
 
 def test_merge_broadcasts_to_nested_fluids() -> None:
-    inner = Class(_WithDefaultKwarg, root="/inner")
-    outer = Class(_WithDefaultKwarg, root="/outer", sub=inner)
+    inner = Target(_WithDefaultKwarg, root="/inner")
+    outer = Target(_WithDefaultKwarg, root="/outer", sub=inner)
     merge_overrides_into_fluids({"s": outer}, {"max_packs": 5})
     # Both Fluids had `max_packs` in their ctor → both get the override.
     assert outer.kwargs["max_packs"] == 5
@@ -188,20 +188,20 @@ class _KwargsTarget:
 
 
 def test_flat_override_skips_class_that_opted_out_of_broadcast() -> None:
-    fluid = Class(_OptedOutOfBroadcast, lr=0.001)
+    fluid = Target(_OptedOutOfBroadcast, lr=0.001)
     merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9})
     assert fluid.kwargs["lr"] == 0.001  # bare key must not land
 
 
 def test_dotted_override_still_reaches_broadcast_opted_out_class() -> None:
     """The opt-out gates BARE keys only — an addressed write is still allowed."""
-    fluid = Class(_OptedOutOfBroadcast, lr=0.001, name="model")
+    fluid = Target(_OptedOutOfBroadcast, lr=0.001, name="model")
     merge_overrides_into_fluids({"m": fluid}, {"model.lr": 0.9})
     assert fluid.kwargs["lr"] == 0.9
 
 
 def test_flat_override_skips_no_broadcast_param_but_not_its_siblings() -> None:
-    fluid = Class(_WithNoBroadcastParam, lr=0.1, tag="x")
+    fluid = Target(_WithNoBroadcastParam, lr=0.1, tag="x")
     merge_overrides_into_fluids({"m": fluid}, {"tag": "y", "lr": 0.5})
     assert fluid.kwargs["tag"] == "x"  # NoBroadcast[str] slot untouched
     assert fluid.kwargs["lr"] == 0.5  # ordinary slot still broadcasts
@@ -216,7 +216,7 @@ def test_flat_override_is_not_written_into_a_kwargs_targets_own_kwargs() -> None
     justified: every key in the document fits through a `**kwargs` signature. The
     key is left to cascade instead (see the end-to-end test below).
     """
-    fluid = Class(_KwargsTarget)
+    fluid = Target(_KwargsTarget)
     merge_overrides_into_fluids({"m": fluid}, {"anything": 7})
     assert "anything" not in fluid.kwargs
 
@@ -229,7 +229,7 @@ def test_flat_override_still_reaches_a_kwargs_target_as_an_attribute() -> None:
     delivers it with BARE provenance — a post-init attribute rather than a
     constructor argument.
     """
-    doc = confluid.load(apply_overrides({"m": Instance(_KwargsTarget)}, {"anything": 7}, []))
+    doc = confluid.load(apply_overrides({"m": Target(_KwargsTarget)}, {"anything": 7}, []))
     assert doc["m"].kw == {}  # the constructor was NOT called with it ...
     assert doc["m"].anything == 7  # ... and it landed anyway
 
@@ -245,7 +245,7 @@ def test_flat_override_beats_a_key_the_document_already_declares() -> None:
     the file's value. ``_move_cli_keys_last`` re-seats it at the end, which is
     where the user typed it.
     """
-    doc = {"anything": "from_yaml", "m": Instance(_KwargsTarget, anything="addressed_in_yaml")}
+    doc = {"anything": "from_yaml", "m": Target(_KwargsTarget, anything="addressed_in_yaml")}
     built = confluid.load(apply_overrides(doc, {"anything": "from_cli"}, []))
     assert built["m"].kw == {}  # still not a constructor argument ...
     assert built["m"].anything == "from_cli"  # ... and the CLI value is the one that lands
@@ -257,14 +257,14 @@ def test_flat_override_still_reaches_a_class_that_declares_the_key() -> None:
     A class that DECLARES the key keeps taking it as a constructor argument, which
     is what every `--num_workers` / `--max_epochs` style override relies on.
     """
-    fluid = Class(_WithDefaultKwarg)
+    fluid = Target(_WithDefaultKwarg)
     merge_overrides_into_fluids({"m": fluid}, {"root": "/data"})
     assert fluid.kwargs["root"] == "/data"
 
 
 def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
     """A `!class:` naming an unimportable module has no accept-list to consult."""
-    fluid = Class("not.importable.Anywhere", lr=0.001)
+    fluid = Target("not.importable.Anywhere", lr=0.001)
     merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9, "unknown": 1})
     assert fluid.kwargs["lr"] == 0.9  # present in YAML -> overridable
     assert "unknown" not in fluid.kwargs  # absent -> not invented
@@ -272,8 +272,8 @@ def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
 
 def test_merge_is_cycle_safe() -> None:
     """A marker graph with a back-edge is visited once, not until stack exhaustion."""
-    a = Class(_WithDefaultKwarg, root="/a")
-    b = Class(_WithDefaultKwarg, root="/b", sub=a)
+    a = Target(_WithDefaultKwarg, root="/a")
+    b = Target(_WithDefaultKwarg, root="/b", sub=a)
     a.kwargs["sub"] = b  # cycle
     merge_overrides_into_fluids({"a": a}, {"max_packs": 3})
     assert a.kwargs["max_packs"] == 3
@@ -322,20 +322,20 @@ def test_a_dotted_override_that_addresses_nothing_is_warned(monkeypatch: pytest.
     proceeded on the default looking configured — the same failure class the
     dropped-token warning exists to prevent, one step further in.
     """
-    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"optimizer.lr": 0.5}, monkeypatch)
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"optimizer.lr": 0.5}, monkeypatch)
     assert any("'optimizer.lr'" in w and "matched nothing" in w for w in warned)
     assert any("--lr" in w for w in warned)  # names the spelling that does work
 
 
 def test_a_dotted_override_that_names_a_real_instance_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
-    fluid = Class(_WithDefaultKwarg, name="overlay")
+    fluid = Target(_WithDefaultKwarg, name="overlay")
     warned = _warnings_from({"m": fluid}, {"overlay.max_packs": 3}, monkeypatch)
     assert warned == [] and fluid.kwargs["max_packs"] == 3
 
 
 def test_a_dotted_override_onto_an_existing_config_key_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     """The head names a real document key, so the expanded block lands on real content."""
-    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"runnable.max_packs": 3}, monkeypatch)
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"runnable.max_packs": 3}, monkeypatch)
     assert warned == []
 
 
@@ -347,7 +347,7 @@ def test_a_glob_headed_override_is_not_warned_about(monkeypatch: pytest.MonkeyPa
     that such a key "matched nothing and was ignored" states the opposite of
     what confluid's own report says (`applied=[('lr', "… 'opt'", "glob '**'")]`).
     """
-    fluid = Class(_WithDefaultKwarg, name="opt")
+    fluid = Target(_WithDefaultKwarg, name="opt")
     for head in ("**", "*"):
         assert _warnings_from({"m": fluid}, {f"{head}.max_packs": 3}, monkeypatch) == []
 
@@ -363,21 +363,21 @@ def test_a_multi_hop_dotted_override_at_a_named_instance_is_not_warned_about(
     nothing" — the previous rule warned that no object is named `runner` while
     the marker named `runner` was the one being walked.
     """
-    inner = Class(_WithDefaultKwarg, name="opt")
-    outer = Class(_WithDefaultKwarg, name="runner", sub=inner)
+    inner = Target(_WithDefaultKwarg, name="opt")
+    outer = Target(_WithDefaultKwarg, name="runner", sub=inner)
     assert _warnings_from({"m": outer}, {"runner.opt.max_packs": 3}, monkeypatch) == []
 
 
 def test_a_dotted_override_at_an_unknown_head_is_still_warned(monkeypatch: pytest.MonkeyPatch) -> None:
     """The narrowing must not swallow the case the warning was written for."""
-    inner = Class(_WithDefaultKwarg, name="opt")
+    inner = Target(_WithDefaultKwarg, name="opt")
     warned = _warnings_from({"m": inner}, {"optimizer.max_packs": 3}, monkeypatch)
     assert any("'optimizer.max_packs'" in w and "matched nothing" in w for w in warned)
 
 
 def test_a_bare_override_some_node_accepts_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     """A bare key that cascades into ANY accepting node is used — no warning."""
-    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"max_packs": 3}, monkeypatch)
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"max_packs": 3}, monkeypatch)
     assert warned == []
 
 
@@ -389,7 +389,7 @@ def test_a_bare_override_nothing_accepts_is_warned(monkeypatch: pytest.MonkeyPat
     and a typo'd ``--max_pcaks 3`` ran the job on defaults, silently. The
     report knows: a registered candidate no node accepted reports unused.
     """
-    warned = _warnings_from({"runnable": Class(_WithDefaultKwarg)}, {"max_pcaks": 3}, monkeypatch)
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"max_pcaks": 3}, monkeypatch)
     assert any("'max_pcaks'" in w and "matched nothing" in w for w in warned)
 
 

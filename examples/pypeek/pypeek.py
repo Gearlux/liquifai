@@ -335,7 +335,7 @@ def _build_client() -> PyPI:
     """
     ctx = get_context()
     cfg = ctx.config_data if ctx is not None and isinstance(ctx.config_data, dict) else {}
-    client = confluid.materialize(confluid.Instance("PyPI"), context=cfg)
+    client = confluid.materialize(confluid.Target("PyPI"), context=cfg)
     assert isinstance(client, PyPI)
     return client
 

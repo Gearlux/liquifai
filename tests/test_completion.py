@@ -1623,7 +1623,7 @@ def test_dependent_refresh_respects_max_combos(iso_cache: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Lazy self-heal of dependent caches (new/stale versions refresh in background)
+# Partial self-heal of dependent caches (new/stale versions refresh in background)
 # ---------------------------------------------------------------------------
 
 

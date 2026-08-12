@@ -1,4 +1,4 @@
-"""Tests for ``script_command(flow_mode=...)`` — manual / auto + ``Lazy[T]``."""
+"""Tests for ``script_command(flow_mode=...)`` — manual / auto + ``Partial[T]``."""
 
 import sys
 from pathlib import Path
@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import confluid
 import pytest
-from confluid import Lazy
+from confluid import Partial
 
 from liquifai import LiquifyApp
 from liquifai.context import set_context
@@ -38,9 +38,9 @@ class _NeedsRuntimeKwarg:
 
 @confluid.configurable
 class _ContainerWithLazy:
-    """Holds a ``_NeedsRuntimeKwarg`` declared ``Lazy[Any]``."""
+    """Holds a ``_NeedsRuntimeKwarg`` declared ``Partial[Any]``."""
 
-    def __init__(self, name: str, optimizer: Lazy[Any] = None, model: Any = None) -> None:
+    def __init__(self, name: str, optimizer: Partial[Any] = None, model: Any = None) -> None:
         self.name = name
         self.optimizer = optimizer  # stays a Class stub under flow_mode="auto"
         self.model = model  # eagerly flowed
@@ -48,7 +48,7 @@ class _ContainerWithLazy:
 
 @confluid.configurable
 class _ContainerEager:
-    """Same shape as ``_ContainerWithLazy`` but no Lazy annotation — auto must fail."""
+    """Same shape as ``_ContainerWithLazy`` but no Partial annotation — auto must fail."""
 
     def __init__(self, name: str, optimizer: Any = None) -> None:
         self.name = name
@@ -116,7 +116,7 @@ def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> 
 
 
 def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -> None:
-    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Lazy.
+    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Partial.
 
     The flow failure is a ConfluidError, so the CLI failure contract renders
     it as a clean error + exit 1 (see ``test_failure_contract.py``); with
@@ -142,7 +142,7 @@ def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -
 
 
 def test_auto_mode_honors_lazy_annotation(tmp_path: Path, monkeypatch: Any) -> None:
-    """Attributes declared ``Lazy[T]`` stay as Class stubs; non-Lazy ones flow."""
+    """Attributes declared ``Partial[T]`` stay as Class stubs; non-Partial ones flow."""
     config = tmp_path / "lazy.yaml"
     config.write_text(
         "container: !class:_ContainerWithLazy\n"
@@ -165,10 +165,10 @@ def test_auto_mode_honors_lazy_annotation(tmp_path: Path, monkeypatch: Any) -> N
 
     container = captured["container"]
     assert isinstance(container, _ContainerWithLazy)
-    # Lazy[Any]-marked param: stays deferred so domain code can flow it with
+    # Partial[Any]-marked param: stays deferred so domain code can flow it with
     # runtime kwargs (e.g. params=self.parameters()).
     assert isinstance(container.optimizer, Fluid)
-    # Non-Lazy attr: eagerly flowed.
+    # Non-Partial attr: eagerly flowed.
     assert isinstance(container.model, _Store)
     assert container.model.path == "/tmp/lazy-model"
 

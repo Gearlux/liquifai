@@ -99,7 +99,7 @@ def test_the_context_reaches_fluids_inside_containers() -> None:
 
 def test_a_lazy_fluid_stays_deferred_even_with_a_context() -> None:
     """``!lazy:`` is a runtime-injection point — broadcasting must not build it early."""
-    from confluid.fluid import Lazy as LazyFluid
+    from confluid.fluid import Partial as LazyFluid
 
     document = confluid.load("runnable: !lazy:_BroadcastRunner\nmax_epochs: 3\n", flow=False)
 
@@ -114,7 +114,7 @@ def test_a_live_instances_attributes_are_not_broadcast_into() -> None:
     """
     document = _document()
     holder = _BroadcastRunner()
-    holder.dataset = confluid.fluid.Class("_BroadcastRunner")
+    holder.dataset = confluid.fluid.Target("_BroadcastRunner")
 
     deep_flow(holder, context=document)
 
