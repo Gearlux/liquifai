@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Set
 import confluid
 from confluid import active_context, flow, get_registry, materialize
 from confluid.fluid import Fluid
-from confluid.fluid import Lazy as LazyFluid
-from confluid.lazy import lazy_param_names
+from confluid.fluid import Partial as LazyFluid
+from confluid.partial import partial_param_names
 
 if TYPE_CHECKING:
     from liquifai.context import LiquifyContext
@@ -80,16 +80,16 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
             if isinstance(config_block, Fluid):
                 # User wrote `name: !class:...` — the Fluid already carries
                 # the full kwargs; materialize it directly so its payload
-                # isn't discarded by the synthesized-Instance path below.
+                # isn't discarded by the synthesized-Target path below.
                 kwargs[name] = materialize(config_block, context=context.config_data)
             else:
-                # Synthesize an Instance Fluid for the annotated class
+                # Synthesize an Target Fluid for the annotated class
                 # (kwargs assigned post-construction so a config key
                 # literally named ``target`` can't collide with the Fluid
                 # ctor's own parameter). Confluid's IR is Fluid objects —
                 # the legacy ``{"_confluid_class_": ...}`` marker dicts
                 # are gone.
-                instance = confluid.Instance(cls_name)
+                instance = confluid.Target(cls_name)
                 if isinstance(config_block, dict) and hoist_block:
                     # A param-name block (``widget: {size: 7}``) and the
                     # flat-config fallback have no spelling confluid recognises
@@ -158,10 +158,10 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
     Skips dunder attrs (``__*__``) on instances — those are framework
     bookkeeping (e.g. confluid's ``__confluid_kwargs__`` round-trip mirror,
     Python internals) that shouldn't be re-flowed by an external walker.
-    Honors :func:`confluid.lazy.lazy_param_names` to leave attrs marked
-    ``Lazy[T]`` deferred.
+    Honors :func:`confluid.partial.partial_param_names` to leave attrs marked
+    ``Partial[T]`` deferred.
 
-    ``confluid.fluid.Lazy`` (YAML ``!lazy:``) Fluids are likewise left
+    ``confluid.fluid.Partial`` (YAML ``!lazy:``) Fluids are likewise left
     deferred at every level — they are runtime-injection points (e.g. an
     optimizer needing ``params=model.parameters()``) and must be flowed
     later by domain code with the missing runtime kwargs.
@@ -200,14 +200,14 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
             return value
         _visited.add(vid)
 
-        lazy = lazy_param_names(type(value))
+        lazy = partial_param_names(type(value))
         for attr_name, attr_value in list(vars(value).items()):
             if attr_name.startswith("__") and attr_name.endswith("__"):
                 continue  # framework bookkeeping (e.g. __confluid_kwargs__)
             if attr_name in lazy:
-                continue  # honor Lazy[T]: leave runtime-injection attrs deferred
+                continue  # honor Partial[T]: leave runtime-injection attrs deferred
             if isinstance(attr_value, LazyFluid):
-                continue  # YAML !lazy: stays deferred even without the Lazy[T] mirror
+                continue  # YAML !lazy: stays deferred even without the Partial[T] mirror
             # Deliberately NOT threading `context` here: this attribute belongs to an
             # already-built object, not to the config document, so broadcasting the
             # document's top-level keys into it is not what the flat-config contract

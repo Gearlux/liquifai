@@ -23,8 +23,8 @@ from typing import Any, Optional
 import confluid
 import pytest
 import yaml
-from confluid import Lazy, LazyClass, NoBroadcast, configurable, flow
-from confluid.fluid import Class
+from confluid import NoBroadcast, Partial, PartialClass, configurable, flow
+from confluid.fluid import Target
 from confluid.loader import ConfluidLoader
 
 from liquifai.overrides import apply_overrides, expand_strings, parse_override_args
@@ -52,7 +52,7 @@ class Deferred:
 
     def __init__(self, rate: float = 0.001) -> None:
         self.rate = rate
-        self.slot: Lazy[Leaf] = LazyClass(Leaf)
+        self.slot: Partial[Leaf] = PartialClass(Leaf)
 
 
 @configurable
@@ -227,7 +227,7 @@ def test_an_unresolvable_target_is_overridable_only_where_the_yaml_already_had_t
     Asserted on the MARKER, because an unimportable target can never be built —
     this shape's whole purpose is that it stays a marker for someone else to flow.
     """
-    marker = Class("not.importable.Anywhere", rate=0.001)
+    marker = Target("not.importable.Anywhere", rate=0.001)
     raw: Any = {"node": marker}
     overrides, deletions, _ = parse_override_args([f"--{key}", "0.9"])
     apply_overrides(raw, overrides, deletions)

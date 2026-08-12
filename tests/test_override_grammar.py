@@ -243,15 +243,15 @@ def test_delete_dotted_key_missing_is_noop() -> None:
 
 def test_delete_dotted_key_into_fluid_kwargs() -> None:
     """Deletion walks into ``Fluid.kwargs`` so ``~trainer.lr`` works even
-    when ``trainer`` is a Class fluid loaded from ``!class:Trainer``."""
-    from confluid.fluid import Class
+    when ``trainer`` is a Target fluid loaded from ``!class:Trainer``."""
+    from confluid.fluid import Target
 
     class _Trainer:
         def __init__(self, max_epochs: int = 1, lr: float = 0.01) -> None:
             self.max_epochs = max_epochs
             self.lr = lr
 
-    fluid = Class(_Trainer, max_epochs=10, lr=0.001)
+    fluid = Target(_Trainer, max_epochs=10, lr=0.001)
     cfg: dict[str, Any] = {"trainer": fluid}
     delete_dotted_key(cfg, "trainer.lr")
     assert "lr" not in fluid.kwargs

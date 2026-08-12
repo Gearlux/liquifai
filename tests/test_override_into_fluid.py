@@ -23,7 +23,7 @@ from typing import Any, List, Optional
 
 import pytest
 from confluid import configurable
-from confluid.fluid import Class
+from confluid.fluid import Target
 from confluid.merger import deep_merge, expand_dotted_keys
 
 from liquifai import LiquifyApp
@@ -66,7 +66,7 @@ def test_dotted_override_reaches_fluid_kwargs_via_expand() -> None:
     override INTO the Fluid's kwargs dict so ``flow()`` reads the new
     value.
     """
-    fluid = Class(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
+    fluid = Target(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
     config_data: Any = {"processor": fluid}
     overrides = {"processor.lookback_days": 5, "processor.skip_if_fresh": False}
 
@@ -199,7 +199,7 @@ def test_bare_equals_form_dotted_override_reaches_fluid(tmp_path: Path, monkeypa
 
 def test_dotted_override_does_not_disturb_other_fluid_kwargs() -> None:
     """``--processor.lookback_days 5`` must NOT clobber unrelated kwargs."""
-    fluid = Class(
+    fluid = Target(
         _DownloadFearGreed,
         out_root="/tmp/yaml",
         lookback_days=365,
@@ -222,7 +222,7 @@ def test_dotted_override_does_not_disturb_other_fluid_kwargs() -> None:
 
 def test_flow_mode_auto_path_via_deep_flow_directly() -> None:
     """Unit-level: the fix at the precise layer the bug fires from."""
-    fluid = Class(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
+    fluid = Target(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
     config: Any = {"processor": fluid}
     overrides = {"processor.lookback_days": 5, "processor.skip_if_fresh": False}
 

@@ -270,10 +270,10 @@ class LiquifyApp:
                   ``!class:`` stubs stay deferred — domain code is responsible
                   for flowing them.
                 * ``"auto"``: deep-flow every kwarg before calling the command.
-                  Attributes annotated with :class:`confluid.Lazy` stay deferred
+                  Attributes annotated with :class:`confluid.Partial` stay deferred
                   so domain code can still flow them at runtime with extra
                   kwargs (the matrainer ``configure_optimizers`` pattern). Any
-                  non-``Lazy`` Class stub that can't be instantiated raises
+                  non-``Partial`` Class stub that can't be instantiated raises
                   immediately.
             positionals: Ordered positional-argument names (see
                 :meth:`command`). The config-file promotion peek runs first, so
