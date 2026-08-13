@@ -413,6 +413,67 @@ spelling confluid can match — giving the synthesized marker a `name:` would ma
 the param-name block addressable — and is only worth doing together with the
 `Fluid.kwargs` removal already on the backlog.
 
+### Amendment: the CLI keys are appended in the order typed
+
+*2026-08-13 (supersedes "only bare keys move" above)*
+
+The 2026-08-04 repositioning moved **only bare** override keys to the end. That
+forced every bare flag after every dotted flag regardless of what the user
+typed, and left a dotted override's expanded block wherever the document put
+it. Two measured consequences:
+
+```bash
+myapp run c.yaml --lr 0.2 --Trainer.lr 0.1     # doc: two markers
+# -> Trainer.lr = 0.2 in BOTH flag orders — the bare key always seated last,
+#    so "override all lr, except Trainer's" was unreachable from the CLI.
+```
+
+```yaml
+Trainer:            # doc line 1
+  layers: 8
+t: {_target_: Trainer}
+lr: 0.9             # doc last line
+```
+```bash
+myapp run c.yaml --Trainer.lr 0.1
+# -> Trainer.lr = 0.9. expand_dotted_keys folded the override into the
+#    EXISTING block at line 1, so the doc's later bare key silently beat the
+#    value the operator typed. With no pre-existing block the same flag WON
+#    (the head was appended, i.e. last) — one flag, two outcomes, decided by
+#    whether the file happened to declare a block.
+```
+
+**Decision.** `_move_cli_keys_last` re-seats **every** override key's top-level
+head — bare and dotted-expanded alike — at the end of the mapping, iterating in
+typed CLI order; a head mentioned twice seats at its last mention. The CLI's
+contract becomes one sentence: *flags behave exactly as if their keys were
+appended to the end of the document, in the order typed.* Both cases above now
+answer 0.1, and flag order arbitrates where flags overlap (last typed wins) —
+which is the shell convention, and the first time the relative order of CLI
+flags has meant anything rather than being forged by the mechanism.
+
+**Consequences.**
+
+- Re-seating a PRE-EXISTING block drags its unrelated keys' precedence with it:
+  on the doc above plus a trailing `layers: 4`, typing `--Trainer.lr 0.1` moves
+  the whole block last, so `layers: 8` beats the bare `layers: 4` the document
+  used to win with. Accepted: the alternative (leave pre-existing blocks in
+  place) keeps the silent-loss case, which is worse. Both directions are pinned
+  in the seating group of `tests/test_override_broadcast.py`.
+- Structural dotted overrides (`--run.name pilot` editing a plain `run:`
+  mapping) are unaffected — a plain value has no position contest, and the edit
+  happens before the re-seat.
+- The 2026-08-04 rationale stands unchanged one level up: this is still
+  position-encoding, not a "CLI beats YAML" tier, and precedence remains
+  answerable from the (effective) document alone.
+
+**What you may change.** Not the no-reorder property: the mechanism may never
+change the relative order of the CLI keys again — that is the defect this
+amendment removes. The known residual is that order-*independence* (specificity
+arbitration: the longest pattern wins regardless of flag order) is not
+expressible by seating at all; if that is ever wanted, it is a confluid-side
+override channel, not a cleverer seat order.
+
 ---
 
 ## 5. Positionals bind as top-level config keys
