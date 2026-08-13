@@ -66,13 +66,15 @@ myapp run c.yaml --trainer.**.lr 0.001    # trainer and every descendant
 myapp run c.yaml --**.lr 0.001            # every accepting node in the tree
 ```
 
-### An override always wins over the file
+### Overrides are appended to the file, in the order typed
 
 Precedence is **position**: config values are applied in document order and the
-last one wins, with no "CLI beats YAML" tier. A CLI override is therefore
-re-seated at the *end* of the document before anything is built — you typed it
-after the whole file, so it is applied after the whole file. That holds whether
-or not the file already declares the key:
+last one wins, with no "CLI beats YAML" tier. The CLI contract is therefore one
+sentence: **flags behave exactly as if their keys were appended to the end of
+the document, in the order typed.** Every override key — bare or dotted — is
+re-seated at the end before anything is built; you typed it after the whole
+file, so it is applied after the whole file, whether or not the file already
+declares the key:
 
 ```yaml
 run_name: from_yaml       # `--run_name from_cli` wins over this ...
@@ -82,18 +84,32 @@ runnable:
 ```
 
 That includes a value written in a **class-name block** for a dependency-injected
-parameter — the block keeps its place in the document, so an override applied
-after the file outranks it:
+parameter — even a block the file already declares is re-seated when a dotted
+flag targets it, so the flag cannot be silently outranked by a bare key written
+lower in the file:
 
 ```yaml
-lr: 0.1
-Trainer:                  # `--lr 0.9` wins over this too
-  lr: 0.5
+Trainer:
+  layers: 8               # `--Trainer.lr 0.1` re-seats this whole block last,
+lr: 0.9                   # so it now beats this — and 0.1 is what trains
 ```
 
-Position, not provenance, is what decides — so the reverse still holds: a bare
-key written *above* the block loses to it, exactly as it would in a config with
-no CLI involved.
+Because flags are appended *in the order typed*, their relative order matters
+exactly like lines in a file — the last flag wins where they overlap:
+
+```bash
+myapp run c.yaml --lr 0.2 --Trainer.lr 0.1   # all lr 0.2, except Trainer: 0.1
+myapp run c.yaml --Trainer.lr 0.1 --lr 0.2   # the bare flag came last: all 0.2
+```
+
+Two consequences worth knowing:
+
+* a head mentioned twice seats at its **last** mention — `--Trainer.lr 0.1
+  --lr 0.2 --Trainer.layers 4` puts the whole `Trainer:` block after the bare
+  key, so `0.1` wins on Trainer;
+* re-seating a block the file already declares moves **all** its keys — in the
+  example above, the block's `layers: 8` now also sits after any bare
+  `layers:` key the file declares later, and wins where it used to lose.
 
 ### When an override reaches nothing
 

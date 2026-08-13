@@ -400,6 +400,136 @@ def test_broadcast_predicates_agree_with_the_merge() -> None:
     assert accepts_broadcast(_WithDefaultKwarg, "max_packs")
 
 
+# --------------------------------------------------------------------------
+# CLI seating order — `_move_cli_keys_last` (2026-08-13)
+#
+# The rule these pin: CLI flags behave exactly as if their keys were APPENDED
+# to the end of the document, in the order typed. `_move_cli_keys_last`
+# re-seats every override key's top-level HEAD at the end — bare keys and
+# dotted-expanded heads alike — iterating in typed order, so the mechanism can
+# never reorder flags relative to each other. (The previous version moved only
+# BARE keys, which forced every bare flag after every dotted flag: a
+# `--lr 0.2 --Trainer.lr 0.1` pair produced 0.2 on Trainer in BOTH flag
+# orders, and a dotted override whose block pre-existed in the document kept
+# the block's early position and silently lost to a later bare document key.)
+#
+# The override dicts below are written in typed CLI order — that is what
+# `parse_override_args` produces and what the seat order is derived from.
+# --------------------------------------------------------------------------
+
+
+@configurable
+class _SeatTrainer:
+    def __init__(self, lr: float = 0.0, layers: int = 1) -> None:
+        self.lr = lr
+        self.layers = layers
+
+
+@configurable
+class _SeatOther:
+    def __init__(self, lr: float = 0.0) -> None:
+        self.lr = lr
+
+
+def test_a_specific_flag_typed_after_a_bare_flag_wins_on_its_class() -> None:
+    """`--lr 0.2 --Trainer.lr 0.1`: the class flag was typed LAST, so it wins on Trainer.
+
+    The previous seating made this outcome unreachable in ANY flag order: the
+    bare key was always forced to the very end, beating the class block it was
+    typed before.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"lr": 0.2, "_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["o"].lr == 0.2
+
+
+def test_a_bare_flag_typed_after_a_specific_flag_wins_everywhere() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2`: the bare flag was typed LAST, so it wins everywhere.
+
+    Flag order carries meaning now — last typed wins, the plain append model.
+    Together with the test above this pins that the two orders DISAGREE.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2}, []))
+    assert built["t"].lr == 0.2
+    assert built["o"].lr == 0.2
+
+
+def test_a_dotted_override_wins_even_when_its_block_preexists_in_the_document() -> None:
+    """The silent-loss case: an early class block + a late bare document key.
+
+    `deep_merge` folds `--_SeatTrainer.lr 0.1` into the document's EXISTING
+    `_SeatTrainer:` block, which used to keep the block's early position — so
+    the document's later `lr: 0.9` beat the value the operator typed, with no
+    warning. Re-seating the HEAD at the end puts the override where the user
+    typed it. The block's other keys ride along (see the drag pin below).
+    """
+    doc = {"_SeatTrainer": {"layers": 8}, "t": Target(_SeatTrainer), "lr": 0.9}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 8  # untouched sibling key still applies
+
+
+def test_distinct_dotted_heads_seat_at_their_own_typed_positions() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2 --Other.lr 0.3`: each head seats where typed.
+
+    Trainer's flag came before the bare one -> the bare wins on Trainer (0.2);
+    Other's flag came after it -> Other keeps 0.3. Distinct heads get distinct
+    seats, so a flag typed last cannot lose to a flag typed earlier.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(
+        apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatOther.lr": 0.3}, [])
+    )
+    assert built["t"].lr == 0.2
+    assert built["o"].lr == 0.3
+
+
+def test_a_head_mentioned_twice_seats_at_its_last_mention() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2 --Trainer.layers 4`: the block re-seats at flag 3.
+
+    A head's seat is its LAST mention — the user's final word about Trainer
+    came after the bare flag, so the whole block (both its keys) sits last and
+    `lr: 0.1` beats the bare 0.2 on Trainer.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(
+        apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatTrainer.layers": 4}, [])
+    )
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 4
+    assert built["o"].lr == 0.2
+
+
+def test_reseating_a_preexisting_block_drags_its_unrelated_keys() -> None:
+    """DOCUMENTED CONSEQUENCE, not a defect: a moved block moves ALL its keys.
+
+    The document says `layers: 4` last, so without the CLI it wins over the
+    early block's `layers: 8`. Typing `--_SeatTrainer.lr 0.1` re-seats the
+    whole block at the end — `layers: 8` now sits after the bare key and wins,
+    changed by a flag that never mentioned layers. Accepted trade (2026-08-13):
+    the alternative — not moving pre-existing blocks — keeps the silent-loss
+    case above, which is worse. If this pin breaks because the drag was fixed
+    WITHOUT regressing the silent-loss pin, delete it happily.
+    """
+    doc = {"_SeatTrainer": {"layers": 8}, "t": Target(_SeatTrainer), "layers": 4}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 8
+
+
+def test_a_structural_dotted_override_still_edits_a_plain_document_value() -> None:
+    """`--run.name pilot` edits the plain `run:` mapping commands read — unchanged.
+
+    The head is re-seated like any other, which is harmless for a plain value
+    (nothing contests it by position); the edit itself must keep working.
+    """
+    doc = {"run": {"name": "baseline"}, "t": Target(_SeatTrainer)}
+    tree = apply_overrides(doc, {"run.name": "pilot"}, [])
+    assert tree["run"]["name"] == "pilot"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

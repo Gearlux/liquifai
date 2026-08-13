@@ -132,8 +132,9 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     1. expand ``$VAR`` / ``~`` in the override VALUES (the tree was expanded at
        load time; overrides arrive later and must get the same treatment),
     2. ``deep_merge`` them into the tree and expand dotted keys into nesting,
-       then move each BARE override key to the END of the document, so
-       confluid's document-order precedence sees that the CLI spoke last
+       then re-seat every override key's top-level head at the END of the
+       document in typed order, so confluid's document-order precedence sees
+       the CLI keys as appended lines, in the order the user typed them
        (:func:`_move_cli_keys_last`),
     3. remove each deleted dotted path,
     4. push the overrides down into any ``Fluid`` kwargs via
@@ -169,32 +170,39 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
 
 
 def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None:
-    """Reposition each BARE override key at the END of the document.
+    """Re-seat every override key's top-level HEAD at the END, in typed order.
 
     Confluid has ONE precedence rule — document order, last spec wins, with no
     specificity tiers — so a key's POSITION decides whether it beats a value
-    addressed at a node. ``deep_merge`` replaces a key the document ALREADY
-    declares *in place*, which hands the CLI value that key's original position:
-    a top-level ``run_name:`` written on line 1 keeps line 1's precedence, and a
-    marker further down addressing the same key wins. The user typed the
-    override AFTER the whole file, so document-last is the honest encoding of
-    that — and it is the only lever, because confluid deliberately offers no
-    "CLI beats YAML" tier to reach for.
+    addressed at a node, and the CLI's only lever is where its keys sit. The
+    honest encoding of "the user typed these after the whole file" is: CLI
+    flags behave exactly as if their keys were APPENDED to the end of the
+    document, in the order typed. ``deep_merge`` alone does not produce that —
+    it replaces a key the document ALREADY declares *in place* (a top-level
+    ``run_name:`` written on line 1 keeps line 1's precedence), and
+    ``expand_dotted_keys`` folds a dotted override into a pre-existing block at
+    the BLOCK's position (an early ``Trainer:`` block plus a late bare ``lr:``
+    silently beat a typed ``--Trainer.lr``, measured 2026-08-13).
 
-    Without this, a bare override left to cascade (every ``**kwargs`` target —
-    see :func:`merge_overrides_into_fluids`) is silently outranked whenever the
-    document happens to declare the same key at top level. Nothing warns: the
-    key IS used, just with the file's value, and only confluid's DEBUG
-    ``override:`` line shows the CLI value losing.
+    So every override key's head — bare keys and dotted-expanded heads alike —
+    is re-seated at the end, iterating in typed CLI order. This function may
+    NEVER reorder flags relative to each other (the previous version moved
+    only BARE keys, forcing every bare flag after every dotted flag: a
+    ``--lr 0.2 --Trainer.lr 0.1`` pair produced 0.2 on Trainer in BOTH flag
+    orders). A head mentioned twice seats at its LAST mention — the user's
+    final word about that block is where it sits.
 
-    Only bare keys move. A dotted ``--<name>.<key>`` is an ADDRESSED write that
-    :func:`merge_overrides_into_fluids` puts straight into the target's kwargs,
-    where document order does not arbitrate; and moving its expanded block would
-    reorder YAML content the user never overrode.
+    Accepted consequence: re-seating a PRE-EXISTING block moves its unrelated
+    keys' precedence with it (``--Trainer.lr`` re-seats the whole ``Trainer:``
+    block, so its ``layers: 8`` now beats a later bare ``layers: 4`` the
+    document used to win with). The alternative — leaving pre-existing blocks
+    in place — keeps the silent-loss case above, which is worse. Both sides
+    are pinned in ``tests/test_override_broadcast.py`` (the seating group).
     """
     for key in overrides:
-        if "." not in key and key in data:
-            data[key] = data.pop(key)
+        head = key.split(".", 1)[0]
+        if head in data:
+            data[head] = data.pop(head)
 
 
 def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> None:

@@ -8,6 +8,24 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Changed (behavior)
 
+- **CLI overrides are appended in the order typed.** `_move_cli_keys_last`
+  now re-seats EVERY override key's top-level head (bare keys and
+  dotted-expanded heads alike) at the end of the document, iterating in typed
+  CLI order — a head mentioned twice seats at its last mention. Previously
+  only BARE keys moved, which forced every bare flag after every dotted flag
+  regardless of what was typed (`--lr 0.2 --Trainer.lr 0.1` produced 0.2 on
+  Trainer in BOTH flag orders) and left a dotted override folded into a
+  pre-existing document block at the BLOCK's early position, where a later
+  bare document key silently beat it (`--Trainer.lr 0.1` against
+  `Trainer: {layers: 8}` + trailing `lr: 0.9` trained at 0.9). Both now
+  answer 0.1. Flag order carries meaning: the CLI behaves exactly as if its
+  keys were appended to the end of the config, in the order typed — last
+  typed wins where flags overlap. Known accepted trade: re-seating a
+  pre-existing block moves its unrelated keys' precedence with it (pinned as
+  documented behaviour in the seating group of
+  `tests/test_override_broadcast.py`). Rationale: `docs/architecture.md` §4
+  → *Amendment: the CLI keys are appended in the order typed*.
+
 - **"Did this override reach anything?" is now answered by confluid's report,
   not guessed.** When CLI overrides were applied, `run_command` wraps DI
   materialization in `confluid.collect_report()` and warns — before the
