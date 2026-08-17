@@ -127,14 +127,12 @@ def test_a_marker_nested_in_another_markers_kwargs_is_reached() -> None:
 
 
 def test_a_marker_inside_a_list_is_reached() -> None:
-    """A listed marker is NOT built by `load()` — it survives, carrying the override.
-
-    Which makes it one of the shapes the delivery question turns on: whoever flows
-    it does so later, so the value has to be on the marker by then.
+    """A listed marker is BUILT by `load()` (confluid builds every marker at any depth since
+    record 19 phase 3 — it used to survive as an unbuilt marker), and the override is on it.
     """
     doc = run_cli("nodes:\n  - !class:Leaf()\n  - !class:Leaf()\n", ["--rate", "0.5"])
-    assert [dict(n.kwargs)["rate"] for n in doc["nodes"]] == [0.5, 0.5]
-    assert [flow(n).rate for n in doc["nodes"]] == [0.5, 0.5]
+    assert [n.rate for n in doc["nodes"]] == [0.5, 0.5]
+    assert [flow(n).rate for n in doc["nodes"]] == [0.5, 0.5]  # flow() of a live object is the object
 
 
 def test_an_override_beats_the_markers_own_inline_kwarg() -> None:

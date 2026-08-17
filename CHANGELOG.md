@@ -6,6 +6,16 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`hydraide` — the command line of confluid's preprocessor** (`liquifai/hydraide.py`, console
+  script `hydraide`). `hydraide emit CONFIG [--scope k=v] [--output FILE]` prints/writes the
+  resolved plain-YAML document; `hydraide check CONFIG` exits 1 with a unified diff unless the
+  file is its own resolution. Confluid ships the FUNCTIONS (`confluid.hydraide.emit` / `check`);
+  this app is the CLI, and it is a plain `LiquifyApp` — config promotion, `--scope`, dimension
+  flags, search tiers and the failure contract come from the framework, unchanged.
+  `tests/test_hydraide_app.py`.
+
 ### Changed (behavior)
 
 - **CLI overrides are appended in the order typed.** `_move_cli_keys_last`
