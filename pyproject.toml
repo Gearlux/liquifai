@@ -67,6 +67,9 @@ dev = [
 [project.scripts]
 liquifai-complete = "liquifai._fast_complete:main"
 liquifai-install-completions = "liquifai.completion:_cli_install_completions"
+# The command line of confluid's preprocessor (confluid ships the functions, this app the CLI):
+# `hydraide emit cfg.yaml [--scope k=v] [--output out.yaml]` / `hydraide check cfg.yaml`.
+hydraide = "liquifai.hydraide:main"
 
 [project.urls]
 Homepage = "https://github.com/Gearlux/liquifai"

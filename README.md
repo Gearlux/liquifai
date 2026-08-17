@@ -210,6 +210,25 @@ returning a `{"dry_run": True, "command", "action", "call"}` descriptor — so
 > an unstable surface is recorded in your own metadata. Rationale:
 > [Architecture Decisions §6](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md).
 
+## `hydraide` — confluid's preprocessor as a command
+
+Confluid ships the *functions* (`confluid.hydraide.emit` / `check`: resolve a config to ONE
+plain-YAML document — includes spliced, scopes applied, dotted keys expanded, interpolation
+burned in, broadcasting settled, shared markers anchored). The *command* is one `LiquifyApp`
+here (`liquifai/hydraide.py`), because it needs nothing the framework does not already give
+every app: config promotion, `--scope` and the config's own dimension flags, the search tiers,
+and the one-line failure contract.
+
+```bash
+hydraide emit experiment.yaml --scope framework=torch            # resolved document on stdout
+hydraide emit experiment.yaml --framework torch --output out.yaml # a declared dimension is a flag
+hydraide check resolved.yaml                                     # exit 1 + diff unless the file is
+                                                                 # its own resolution (a CI gate)
+```
+
+A malformed document is a located `ConfluidError` — one clean line (`file:line:col`), exit 1,
+no traceback, exactly like every other liquifai app.
+
 ## Installation
 ```bash
 pip install liquifai                     # from PyPI
