@@ -14,9 +14,8 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Set
 
 import confluid
-from confluid import active_context, flow, get_registry, load
+from confluid import PartialClass, active_context, flow, get_registry, load
 from confluid.fluid import Fluid
-from confluid.fluid import Partial as LazyFluid
 from confluid.partial import partial_param_names
 
 if TYPE_CHECKING:
@@ -161,7 +160,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
     Honors :func:`confluid.partial.partial_param_names` to leave attrs marked
     ``Partial[T]`` deferred.
 
-    ``confluid.fluid.Partial`` (YAML ``!lazy:``) Fluids are likewise left
+    ``PartialClass`` (YAML ``_partial_: true``) Fluids are likewise left
     deferred at every level — they are runtime-injection points (e.g. an
     optimizer needing ``params=model.parameters()``) and must be flowed
     later by domain code with the missing runtime kwargs.
@@ -169,7 +168,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
     if _visited is None:
         _visited = set()
 
-    if isinstance(value, LazyFluid):
+    if isinstance(value, PartialClass):
         return value
 
     if isinstance(value, Fluid):
@@ -206,7 +205,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
                 continue  # framework bookkeeping (e.g. __confluid_kwargs__)
             if attr_name in lazy:
                 continue  # honor Partial[T]: leave runtime-injection attrs deferred
-            if isinstance(attr_value, LazyFluid):
+            if isinstance(attr_value, PartialClass):
                 continue  # YAML !lazy: stays deferred even without the Partial[T] mirror
             # Deliberately NOT threading `context` here: this attribute belongs to an
             # already-built object, not to the config document, so broadcasting the

@@ -38,10 +38,11 @@ from importlib.metadata import PackageNotFoundError, distribution, distributions
 from typing import Any, Dict, List, Literal, Optional
 
 import confluid
-from liquifai import LiquifyApp, get_context
-from liquifai.exceptions import LiquifaiError
 from rich.console import Console
 from rich.table import Table
+
+from liquifai import LiquifyApp, get_context
+from liquifai.exceptions import LiquifaiError
 
 console = Console()
 app = LiquifyApp(name="pypeek", description="Query the PyPI JSON API (liquifai demo app).")
