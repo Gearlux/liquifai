@@ -479,9 +479,7 @@ def test_distinct_dotted_heads_seat_at_their_own_typed_positions() -> None:
     seats, so a flag typed last cannot lose to a flag typed earlier.
     """
     doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
-    built = confluid.load(
-        apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatOther.lr": 0.3}, [])
-    )
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatOther.lr": 0.3}, []))
     assert built["t"].lr == 0.2
     assert built["o"].lr == 0.3
 
@@ -494,9 +492,7 @@ def test_a_head_mentioned_twice_seats_at_its_last_mention() -> None:
     `lr: 0.1` beats the bare 0.2 on Trainer.
     """
     doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
-    built = confluid.load(
-        apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatTrainer.layers": 4}, [])
-    )
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatTrainer.layers": 4}, []))
     assert built["t"].lr == 0.1
     assert built["t"].layers == 4
     assert built["o"].lr == 0.2

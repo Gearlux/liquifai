@@ -7,6 +7,10 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, get
 
 import confluid
 import loggair
+from loggair import get_logger
+from rich.console import Console
+from rich.markup import escape
+
 from liquifai import completion_cli, di, flags, grammar, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
@@ -19,9 +23,6 @@ from liquifai.exceptions import (
 from liquifai.introspection import graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
-from loggair import get_logger
-from rich.console import Console
-from rich.markup import escape
 
 FlowMode = Literal["manual", "auto"]
 

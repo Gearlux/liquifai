@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 import confluid
 import pytest
+
 from liquifai import LiquifyApp
 from liquifai.context import set_context
 from liquifai.di import deep_flow
@@ -98,11 +99,11 @@ def test_the_context_reaches_fluids_inside_containers() -> None:
 
 def test_a_lazy_fluid_stays_deferred_even_with_a_context() -> None:
     """``!lazy:`` is a runtime-injection point — broadcasting must not build it early."""
-    from confluid.fluid import Partial as LazyFluid
+    from confluid import PartialClass
 
     document = confluid.load("runnable: !lazy:_BroadcastRunner\nmax_epochs: 3\n", until="document")
 
-    assert isinstance(deep_flow(document["runnable"], context=document), LazyFluid)
+    assert isinstance(deep_flow(document["runnable"], context=document), PartialClass)
 
 
 def test_a_live_instances_attributes_are_not_broadcast_into() -> None:
