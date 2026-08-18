@@ -423,9 +423,9 @@ def _resolve_override_keys(config_path: Path) -> List[str]:
 
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with redirect_stdout(buf_out), redirect_stderr(buf_err):
-        raw = confluid.load_config(config_path)
+        raw = confluid.load(config_path, until="raw")
         dimensions = confluid.discover_dimensions(raw)
-        cfg = confluid.load(raw, flow=False)
+        cfg = confluid.load(raw, until="document")
     keys: List[str] = list(dimensions)
     _walk_keys(cfg, prefix="", out=keys)
     return sorted(set(keys))

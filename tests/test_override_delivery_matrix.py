@@ -26,7 +26,6 @@ import yaml
 from confluid import NoBroadcast, Partial, PartialClass, configurable, flow
 from confluid.fluid import Target
 from confluid.loader import ConfluidLoader
-
 from liquifai.overrides import apply_overrides, expand_strings, parse_override_args
 
 
@@ -87,14 +86,14 @@ def config_after_cli(text: str, argv: list) -> Any:
     """The document as `_execute` sees it, in the ORDER `core.py` actually does it.
 
     The ordering is load-bearing and easy to get backwards: `_bootstrap` resolves the
-    document with `confluid.load(..., flow=False)` (core.py:672) — scopes, includes and
+    document with `confluid.load(..., until="document")` (core.py:672) — scopes, includes and
     `!ref:`s applied, markers NOT built — and only THEN does `_apply_overrides` run
     (core.py:701). Overriding a document that has already been through that pass is a
     different problem from overriding raw YAML, so a harness that loads afterwards
     measures a pipeline liquifai does not have.
     """
     data = yaml.load(text, Loader=ConfluidLoader)
-    config_data = expand_strings(confluid.load(data, flow=False))
+    config_data = expand_strings(confluid.load(data, until="document"))
     overrides, deletions, _ = parse_override_args(argv)
     return apply_overrides(config_data, overrides, deletions)
 
@@ -107,7 +106,7 @@ def run_cli(text: str, argv: list) -> Any:
     through its own helper. Materializing WITH the document is what applies
     broadcasting, so passing it is part of the path under test, not a convenience.
     """
-    return confluid.materialize(config_after_cli(text, argv))
+    return confluid.load(config_after_cli(text, argv))
 
 
 # --------------------------------------------------------------------------- #
@@ -164,16 +163,18 @@ def test_a_document_level_lazy_marker_carries_the_override_into_a_later_flow() -
     assert built.params == [1, 2, 3] and built.rate == 0.5
 
 
-def test_a_lazy_slot_assigned_in_an_init_BODY_is_not_reached() -> None:
-    """A known gap, pinned so a change to it is deliberate rather than noticed later.
-
-    The slot's marker is created by `Deferred.__init__`, so it does not exist while
-    the document is being walked and is not a document node when it does. Neither
-    delivery channel can see it.
+def test_a_lazy_slot_assigned_in_an_init_BODY_is_reached_at_construction() -> None:
+    """The slot's marker is created by `Deferred.__init__`, so pass 7 (the document walk)
+    cannot see it — and confluid delivers the document's TOP-LEVEL keys to exactly such
+    ctor-born markers at construction, from the active context (its "one delivery the
+    emitted document cannot show"). This pinned the OPPOSITE until 2026-08-17, because
+    `run_cli` materialized WITHOUT the document as context — a spelling the real DI path
+    never used (`di.resolve_kwargs` passes `context=config_data`); with `confluid.load(doc)`
+    the context is the document, as it is for DI.
     """
     doc = run_cli("node: !class:Deferred()\n", ["--rate", "0.5"])
     assert doc["node"].rate == 0.5  # the parent itself is reached ...
-    assert flow(doc["node"].slot).rate == 0.001  # ... its body-slot marker is not
+    assert flow(doc["node"].slot).rate == 0.5  # ... and so is its body-slot marker
 
 
 # --------------------------------------------------------------------------- #

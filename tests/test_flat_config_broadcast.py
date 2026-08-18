@@ -22,7 +22,6 @@ from typing import Any, Optional
 
 import confluid
 import pytest
-
 from liquifai import LiquifyApp
 from liquifai.context import set_context
 from liquifai.di import deep_flow
@@ -62,7 +61,7 @@ dataset: !class:_BroadcastStore
 
 def _document(text: str = FLAT_CONFIG) -> Any:
     """The document as liquifai loads it — markers resolved, nothing built yet."""
-    return confluid.load(text, flow=False)
+    return confluid.load(text, until="document")
 
 
 # --------------------------------------------------------------------------- #
@@ -101,7 +100,7 @@ def test_a_lazy_fluid_stays_deferred_even_with_a_context() -> None:
     """``!lazy:`` is a runtime-injection point — broadcasting must not build it early."""
     from confluid.fluid import Partial as LazyFluid
 
-    document = confluid.load("runnable: !lazy:_BroadcastRunner\nmax_epochs: 3\n", flow=False)
+    document = confluid.load("runnable: !lazy:_BroadcastRunner\nmax_epochs: 3\n", until="document")
 
     assert isinstance(deep_flow(document["runnable"], context=document), LazyFluid)
 
