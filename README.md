@@ -211,14 +211,11 @@ returning a `{"dry_run": True, "command", "action", "call"}` descriptor — so
 > [Architecture Decisions §6](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md).
 
 ## Installation
-```bash
-pip install liquifai                     # from PyPI
-```
 
-Or straight from GitHub:
+Released on [PyPI](https://pypi.org/project/liquifai/):
 
 ```bash
-pip install git+https://github.com/Gearlux/liquifai.git@main
+pip install liquifai
 ```
 
 ### Optional extras
