@@ -8,7 +8,7 @@ Confluid owns scope resolution; liquifai only translates the CLI surface:
                                     declared as a scope dimension in the YAML
 
 These tests assert that argv → ``context.scopes`` translation works without
-touching confluid's flow pipeline (only ``confluid.load_config`` and
+touching confluid's flow pipeline (only ``confluid.load(until="raw")`` and
 ``discover_dimensions`` get exercised, which are pure-dict operations).
 """
 
@@ -36,7 +36,7 @@ def _run(app: LiquifyApp, argv: List[str]) -> List[str]:
     if parsed.config_path is not None:
         config_path = parsed.config_path
     if config_path is not None and config_path.exists():
-        raw = confluid.load_config(config_path)
+        raw = confluid.load(config_path, until="raw")
         scopes, final_tokens = bind_dimension_flags(scopes, raw, final_tokens)
     return scopes
 
@@ -112,7 +112,7 @@ def test_undeclared_dim_passes_through(tmp_path: Path) -> None:
     # bind_dimension_flags returning the value untouched).
     import confluid
 
-    raw = confluid.load_config(cfg)
+    raw = confluid.load(cfg, until="raw")
     scopes, remaining = bind_dimension_flags([], raw, tokenize(["--task", "classification"]))
     assert scopes == []
     assert [t.text for t in remaining] == ["--task", "classification"]
@@ -146,7 +146,7 @@ if_cls: !scope:task=classification
     )
     import confluid
 
-    raw = confluid.load_config(cfg)
+    raw = confluid.load(cfg, until="raw")
     scopes, remaining = bind_dimension_flags([], raw, tokenize(["--task", "--other"]))
     assert scopes == []
     assert [t.text for t in remaining] == ["--task", "--other"]
@@ -157,7 +157,7 @@ def test_implicit_dim_ignores_a_protected_literal(tmp_path: Path) -> None:
     cfg = _write_cfg(tmp_path / "c.yaml", "if_cls: !scope:task=classification\n  m: classifier\n")
     import confluid
 
-    raw = confluid.load_config(cfg)
+    raw = confluid.load(cfg, until="raw")
     scopes, remaining = bind_dimension_flags([], raw, tokenize(["--", "--task", "classification"]))
     assert scopes == []
     assert [t.text for t in remaining] == ["--task", "classification"]

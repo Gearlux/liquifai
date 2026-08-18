@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Set
 
 import confluid
-from confluid import active_context, flow, get_registry, materialize
+from confluid import active_context, flow, get_registry, load
 from confluid.fluid import Fluid
 from confluid.fluid import Partial as LazyFluid
 from confluid.partial import partial_param_names
@@ -81,7 +81,7 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
                 # User wrote `name: !class:...` — the Fluid already carries
                 # the full kwargs; materialize it directly so its payload
                 # isn't discarded by the synthesized-Target path below.
-                kwargs[name] = materialize(config_block, context=context.config_data)
+                kwargs[name] = load(config_block, context=context.config_data)
             else:
                 # Synthesize an Target Fluid for the annotated class
                 # (kwargs assigned post-construction so a config key
@@ -103,7 +103,7 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
                     # cannot lose the one precedence contest confluid runs —
                     # so ``--lr 0.9`` lost to the block no matter where it sat.
                     instance.kwargs.update(config_block)
-                kwargs[name] = materialize(instance, context=context.config_data)
+                kwargs[name] = load(instance, context=context.config_data)
         else:
             # Non-configurable: Resolve from context data or use default
             if isinstance(cfg, dict) and name in cfg:
@@ -118,7 +118,7 @@ def resolve_kwargs(context: "LiquifyContext", func: Callable[..., Any]) -> Dict[
 def confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
     """Activate confluid's context so bare ``flow()`` resolves ``!ref:``.
 
-    ``materialize()`` already does this internally, but liquifai's deep-flow
+    ``load()`` already does this internally, but liquifai's deep-flow
     runs *after* :func:`resolve_kwargs` has returned (with confluid's context
     restored). For non-configurable parameters whose YAML values contain
     nested ``!ref:`` markers, we need the context active again during the
@@ -143,7 +143,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
 
     ``context`` is the loaded configuration document. Pass it whenever the value
     came from that document: a Fluid is then built with
-    :func:`confluid.materialize`, which BROADCASTS the document's top-level keys
+    :func:`confluid.load`, which BROADCASTS the document's top-level keys
     into same-named constructor parameters — the flat-config contract. Omit it
     and each Fluid is built in isolation with a bare ``flow()``, so every
     top-level key is dropped **silently** (a ``dataset:`` becomes ``None``, a
@@ -173,7 +173,7 @@ def deep_flow(value: Any, _visited: Optional[Set[int]] = None, *, context: Optio
         return value
 
     if isinstance(value, Fluid):
-        built = materialize(value, context=context) if context is not None else flow(value)
+        built = load(value, context=context) if context is not None else flow(value)
         return deep_flow(built, _visited, context=context)
 
     if isinstance(value, (list, tuple)):

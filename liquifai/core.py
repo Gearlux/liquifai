@@ -7,10 +7,6 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, get
 
 import confluid
 import loggair
-from loggair import get_logger
-from rich.console import Console
-from rich.markup import escape
-
 from liquifai import completion_cli, di, flags, grammar, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
@@ -23,6 +19,9 @@ from liquifai.exceptions import (
 from liquifai.introspection import graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
+from loggair import get_logger
+from rich.console import Console
+from rich.markup import escape
 
 FlowMode = Literal["manual", "auto"]
 
@@ -533,7 +532,7 @@ class LiquifyApp:
         raw_config: Optional[Any] = None
         included_paths: List[Path] = []
         if config_path is not None and config_path.exists():
-            raw_config, included_paths = confluid.load_config_with_paths(config_path)
+            raw_config, included_paths = confluid.load(config_path, until="raw", return_paths=True)
             scopes, final_tokens = flags.bind_dimension_flags(scopes, raw_config, final_tokens)
 
         # 4. INITIALIZE STATE
@@ -665,11 +664,11 @@ class LiquifyApp:
         if self.context.config_path:
             if not self.context.config_path.exists():
                 raise ConfigNotFoundError(f"Configuration file not found: {self.context.config_path}")
-            data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
+            data = raw_config if raw_config is not None else confluid.load(self.context.config_path, until="raw")
             # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
             # string primitive. Overrides get the same expansion later, in
             # `overrides.apply_overrides`.
-            loaded = confluid.load(data, flow=False, scopes=self.context.scopes or None)
+            loaded = confluid.load(data, until="document", scopes=self.context.scopes or None)
             self.context.config_data = expand_strings(loaded)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
@@ -782,7 +781,7 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                ctx.config_data = confluid.load(config_path, flow=False, scopes=scopes or None)
+                ctx.config_data = confluid.load(config_path, until="document", scopes=scopes or None)
                 ctx.config_data = expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)
