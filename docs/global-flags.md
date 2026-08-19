@@ -13,9 +13,29 @@ derive from that single table, so they can never drift apart.
 | `--console-level LEVEL` | Console log level only. |
 | `--file-level LEVEL` | File log level only. |
 | `--log-dir DIR` | Redirect the log file directory. |
-| `--help` | Rich options table extracted from the command signature + docstrings. |
+| `--help` | Rich options table extracted from the command signature + docstrings. With a config named, also the **Scope Dimensions** block — see below. |
 | `--docs` | The same code-extracted documentation as `--help`, one option per line. |
 | `--install-completion [SHELL]` / `--show-completion [SHELL]` / `--refresh-completions` | Shell completion management (see [shell completion](shell-completion.md)). |
+
+## `--help` with a config — the Scope Dimensions block
+
+When the command has a config (`my-app train cfg.yaml --help`), help also lists
+what that document's `!scope:KEY=VAL` blocks offer, one implicit flag per
+dimension, and — when the document carries a
+[`default_scopes:`](https://github.com/Gearlux/confluid/blob/main/docs/scopes.md)
+line — the value a bare run picks:
+
+```
+Scope Dimensions (from cfg.yaml):
+  --framework <keras|lightning|torch>  (default: lightning)
+  --model <convnet>
+```
+
+Read from the RAW document (`confluid.discover_dimension_values` +
+`confluid.default_scopes`) — the same walk that binds the `--KEY VAL` flags, so
+the block and the flags cannot disagree. A document declaring no dimension
+prints no block; a dimension declared only by `!notscope:` blocks offers nothing
+to select and shows `<value>`.
 
 ## `--docs` — code-extracted documentation, one option per line
 

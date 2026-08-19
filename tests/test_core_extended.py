@@ -216,3 +216,42 @@ def test_missing_config(monkeypatch: Any, capsys: Any) -> None:
     assert exc.value.code == 1
     captured = capsys.readouterr()
     assert "Configuration file not found" in captured.out
+
+
+def test_help_with_a_config_shows_its_scope_dimensions_and_defaults(
+    tmp_path: Path, capsys: Any, monkeypatch: Any
+) -> None:
+    """`app cmd cfg.yaml --help` renders the Scope Dimensions block — the flags a config's
+    `!scope:KEY=VAL` blocks bind, and the value `default_scopes:` names for a bare run."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text(
+        "default_scopes: [framework=lightning]\n"
+        "lightning: !scope:framework=lightning\n  runnable: L\n"
+        "keras: !scope:framework=keras\n  runnable: K\n"
+    )
+    app = LiquifyApp(name="test-app")
+
+    @app.script_command()  # a script command consumes the positional config path
+    def my_cmd() -> None:
+        """Trains."""
+        return None
+
+    monkeypatch.setattr(sys, "argv", ["test-app", "my-cmd", str(cfg), "--help"])
+    app.run()
+    out = capsys.readouterr().out
+    assert "Scope Dimensions (from cfg.yaml)" in out
+    assert "--framework <keras|lightning>" in out
+    assert "(default: lightning)" in out
+
+
+def test_help_without_a_config_renders_no_scope_dimensions_block(capsys: Any, monkeypatch: Any) -> None:
+    app = LiquifyApp(name="test-app")
+
+    @app.command()
+    def my_cmd() -> None:
+        """Trains."""
+        return None
+
+    monkeypatch.setattr(sys, "argv", ["test-app", "my-cmd", "--help"])
+    app.run()
+    assert "Scope Dimensions" not in capsys.readouterr().out
