@@ -6,6 +6,14 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`--help` with a config renders a Scope Dimensions block** — one implicit `--KEY <v1|v2>`
+  flag per dimension the document's `!scope:KEY=VAL` blocks declare, plus `(default: X)` for a
+  dimension the document's `default_scopes:` names (`liquifai.report.show_scope_dimensions`,
+  read from the RAW document via `confluid.discover_dimension_values` / `confluid.default_scopes`
+  — the same walk `flags.bind_dimension_flags` binds the flags from). No dimensions, no block.
+
 ### Changed (behavior)
 
 - **CLI overrides are appended in the order typed.** `_move_cli_keys_last`

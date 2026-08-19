@@ -298,3 +298,32 @@ def show_global_options(console: Console) -> None:
     console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
     console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
     console.print("")
+
+
+def show_scope_dimensions(raw_config: Any, *, console: Console, source: str) -> None:
+    """Render the Scope Dimensions block: what the named config's blocks offer, and the default.
+
+    One line per keyed dimension the RAW document declares (``!scope:KEY=VAL`` blocks —
+    the same walk :func:`liquifai.flags.bind_dimension_flags` uses to bind ``--KEY VAL``),
+    its values sorted, and ``(default: X)`` when the document's ``default_scopes:`` names
+    one — so ``--help`` shows what a bare run picks, not only what a flag could pick.
+    A dimension declared only by ``!notscope:`` blocks offers nothing to select (confluid
+    reports an empty set) and is shown with a ``<value>`` placeholder. A document with no
+    dimensions prints nothing at all.
+
+    Reads confluid lazily like :func:`show_configuration`: this module must import on a
+    ``--help`` for an app whose command has no config.
+    """
+    from confluid import default_scopes, discover_dimension_values
+
+    dimensions = discover_dimension_values(raw_config)
+    if not dimensions:
+        return
+    defaults = default_scopes(raw_config)
+    console.print(f"\n[bold]Scope Dimensions[/bold] (from {source}):")
+    flags = {dim: f"--{dim} <{'|'.join(sorted(values)) or 'value'}>" for dim, values in dimensions.items()}
+    width = max(len(f) for f in flags.values())
+    for dim in sorted(flags):
+        default = f"(default: {defaults[dim]})" if dim in defaults else ""
+        console.print(f"  {flags[dim].ljust(width)}  {default}".rstrip())
+    console.print("")

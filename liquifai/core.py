@@ -851,6 +851,17 @@ class LiquifyApp:
         else:
             report.show_command_index(app, console)
 
+        # What THIS config's `!scope:KEY=VAL` blocks offer per dimension, and the value
+        # its `default_scopes:` names for a bare run — rendered from the RAW document,
+        # the same walk `flags.bind_dimension_flags` binds the `--KEY VAL` flags from.
+        if config_path is not None:
+            try:
+                raw = confluid.load(config_path, until="raw")
+            except Exception as exc:  # a malformed config: help still renders, the reason is shown
+                console.print(f"[dim]Scope dimensions unavailable: {exc}[/dim]")
+            else:
+                report.show_scope_dimensions(raw, console=console, source=config_path.name)
+
         # The Global Options block is rendered from the ONE flag declaration
         # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion
         # derive from, so help can never drift from what the CLI accepts.

@@ -262,3 +262,66 @@ def test_show_global_options_renders_every_visible_flag() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --------------------------------------------------------------------------- #
+# Scope dimensions block — what a config's `!scope:KEY=VAL` blocks offer, and the
+# default `default_scopes:` names for a dimension the caller leaves unset.
+# --------------------------------------------------------------------------- #
+def _capture_console(renderer: Any, *args: Any, **kwargs: Any) -> str:
+    from io import StringIO
+
+    buf = StringIO()
+    console = Console(file=buf, force_terminal=False, width=200)
+    renderer(*args, console=console, **kwargs)
+    return buf.getvalue()
+
+
+def test_scope_dimensions_block_lists_values_and_the_default(tmp_path: Path) -> None:
+    """`--framework <keras|lightning|torch>  (default: lightning)` — values from the document's
+    blocks, the default from its `default_scopes:`; a dimension without a default shows none."""
+    import confluid
+
+    from liquifai.report import show_scope_dimensions
+
+    path = _write_yaml(
+        tmp_path,
+        """
+        default_scopes: [framework=lightning]
+        lightning: !scope:framework=lightning
+          runnable: L
+        torch: !scope:framework=torch
+          runnable: T
+        keras: !scope:framework=keras
+          runnable: K
+        convnet: !scope:model=convnet
+          model: C
+        """,
+    )
+    out = _capture_console(show_scope_dimensions, confluid.load(path, until="raw"), source=path.name)
+    assert "cfg.yaml" in out
+    assert "--framework <keras|lightning|torch>" in out  # sorted, one flag per dimension
+    assert "(default: lightning)" in out
+    assert "--model <convnet>" in out
+    assert out.count("(default:") == 1  # `model` has no default — nothing is invented for it
+
+
+def test_scope_dimensions_block_is_silent_for_a_document_without_dimensions(tmp_path: Path) -> None:
+    import confluid
+
+    from liquifai.report import show_scope_dimensions
+
+    path = _write_yaml(tmp_path, "x: 1\n")
+    assert _capture_console(show_scope_dimensions, confluid.load(path, until="raw"), source=path.name) == ""
+
+
+def test_scope_dimensions_block_names_a_negation_only_dimension_without_values(tmp_path: Path) -> None:
+    """A dimension declared only by `!notscope:` offers nothing to SELECT — confluid reports an
+    empty value set — so the flag is shown with a `<value>` placeholder, not an empty `<>`."""
+    import confluid
+
+    from liquifai.report import show_scope_dimensions
+
+    path = _write_yaml(tmp_path, "unless_seg: !notscope:task=segmentation\n  head: default\n")
+    out = _capture_console(show_scope_dimensions, confluid.load(path, until="raw"), source=path.name)
+    assert "--task <value>" in out
