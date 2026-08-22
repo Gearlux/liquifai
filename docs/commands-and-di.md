@@ -178,8 +178,33 @@ as required.
 ## Default command redirection
 
 `@app.command(default=True)` marks the command that runs when no command token
-is given — `my-app --lr 0.1` then routes straight to it (and, combined with
-promotion, `my-app experiment.yaml` too).
+is given — `my-app --lr 0.1` routes straight to it. Its **arguments bind without
+the name too**: a leading token that names no command is the default command's
+first positional, or its promoted config for a `@script_command(default=True)`:
+
+```python
+@app.command(name="workspace", default=True, positionals=["workspace"])
+def workspace(workspace: str = "") -> None:
+    ...
+
+@app.script_command(name="run", default=True)
+def run(threshold: float = 0.5) -> None:
+    ...
+```
+
+```bash
+my-app w.yaml                 # workspace="w.yaml"  — same as `my-app workspace w.yaml`
+my-app --workspace w.yaml     # the flag form still works
+my-app other                  # a real command name always wins over the positional
+my-app experiment             # script default: promotes ./config/experiment.yaml (any search tier)
+```
+
+Binding follows the explicit-command rules exactly: only *leading* tokens bind
+(`my-app --lr 0.1 w.yaml` leaves `w.yaml` to the override parser, as `cmd --lr
+0.1 w.yaml` would), a token that resolves to no config file is not swallowed,
+and a default command that declares no positionals and is not a script command
+behaves as before. TAB completion hints the positional at a bare prompt
+(`my-app <TAB>` → `<workspace>` beside the command names).
 
 ## Runnable examples
 

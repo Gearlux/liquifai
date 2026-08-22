@@ -48,6 +48,10 @@ class _AppNav:
     def positionals(self, cmd: str) -> List[str]:
         return list(getattr(self.app._commands[cmd], "__liquifai_positionals__", []))
 
+    def default_command(self) -> Optional[str]:
+        default = self.app._default_cmd
+        return next((name for name, func in self.app._commands.items() if func is default), None)
+
 
 def _resolve_promoted_config(token: str) -> Optional[Path]:
     """Resolve a promoted config token through confluid's search tiers.

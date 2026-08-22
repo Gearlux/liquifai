@@ -158,6 +158,11 @@ forked loop.
   that was going to parse the YAML anyway.
 - `Invocation.remaining_tokens` carries `Token`s rather than strings, so later
   phases can still distinguish an option from a post-`--` literal.
+- The default command is one more `Nav` question (`default_command()`), so
+  `app w.yaml` binds the positional for dispatch AND hints it for TAB from the
+  same branch. Because no token equals the command's name in that case, the
+  walk reports where the arguments start (`Walk.args_index`) instead of letting
+  completion search the line for the name.
 
 **Example.** The adapter is the whole cost of joining the walk:
 
