@@ -257,12 +257,16 @@ class LiquifyApp:
         name: Optional[str] = None,
         flow_mode: FlowMode = "manual",
         positionals: Optional[List[str]] = None,
+        default: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command that supports config-promotion.
 
         Args:
             name: Override the CLI name. Defaults to the function name with
                 underscores replaced by hyphens.
+            default: Run this command when no command token is given (see
+                :meth:`command`). A script default command promotes a leading
+                config token too — ``app experiment.yaml`` loads the file.
             flow_mode: How aggressively to flow injected objects before the
                 command runs.
 
@@ -289,7 +293,7 @@ class LiquifyApp:
             # Store the mode on the function itself; run_command looks it up
             # via getattr, no per-app registry needed.
             setattr(f, "__liquifai_flow_mode__", flow_mode)
-            return self.command(name=cmd_name, positionals=positionals)(f)
+            return self.command(name=cmd_name, positionals=positionals, default=default)(f)
 
         return decorator
 

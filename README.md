@@ -46,7 +46,7 @@ as a reloadable recipe.
 - **Zero-Boilerplate Startup:** Automate the bootstrapping of Loggair and Confluid.
 - **Contextual Scripting:** Support `@app.script_command()` which promotes the first positional argument to a configuration file path.
 - **Type-Safe DI:** Inject fully-configured objects directly into command signatures based on type hints.
-- **Default Command Redirection:** Support running a default command if no subcommand is provided.
+- **Default Command Redirection:** Run a default command when no subcommand is given — its positionals (and a script default's config) bind without the name: `my-app w.yaml`.
 
 ### User Experience
 - **Abbreviation Support:** Allow brief aliases for the main executable (e.g. `ma` for `my-app`).

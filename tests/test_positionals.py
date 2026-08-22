@@ -132,3 +132,61 @@ def test_sub_app_command_positionals(monkeypatch: Any) -> None:
 
     _run(parent, ["ds", "download", "mydata", "2.0"], monkeypatch)
     assert captured == {"name": "mydata", "version": "2.0"}
+
+
+# ---------------------------------------------------------------------------
+# The default command's positionals bind without its name on the line
+# ---------------------------------------------------------------------------
+
+
+def _default_app() -> Tuple[LiquifyApp, Dict[str, Any]]:
+    app = LiquifyApp(name="t")
+    captured: Dict[str, Any] = {}
+
+    @app.command(name="ws", default=True, positionals=["workspace"])
+    def ws(workspace: str = "") -> None:
+        captured.update(workspace=workspace)
+
+    @app.command(name="other")
+    def other() -> None:
+        captured.update(other=True)
+
+    return app, captured
+
+
+def test_default_command_positional_binds_without_a_name_token(monkeypatch: Any) -> None:
+    app, captured = _default_app()
+    _run(app, ["w.yaml"], monkeypatch)
+    assert captured == {"workspace": "w.yaml"}
+
+
+def test_default_command_positional_reaches_the_command_even_when_it_looks_like_a_typo(monkeypatch: Any) -> None:
+    # The command decides what to do with it (a clear "file not found") — the token is
+    # no longer silently ignored with a warning.
+    app, captured = _default_app()
+    _run(app, ["nope"], monkeypatch)
+    assert captured == {"workspace": "nope"}
+
+
+def test_default_command_flag_form_still_binds(monkeypatch: Any) -> None:
+    app, captured = _default_app()
+    _run(app, ["--workspace", "w.yaml"], monkeypatch)
+    assert captured == {"workspace": "w.yaml"}
+
+
+def test_explicit_command_still_wins_over_the_default_positional(monkeypatch: Any) -> None:
+    app, captured = _default_app()
+    _run(app, ["other", "w.yaml"], monkeypatch)
+    assert captured == {"other": True}
+
+
+def test_default_command_without_positionals_is_unchanged(monkeypatch: Any) -> None:
+    app = LiquifyApp(name="t")
+    ran: Dict[str, Any] = {}
+
+    @app.command(name="serve", default=True)
+    def serve() -> None:
+        ran["serve"] = True
+
+    _run(app, ["stray"], monkeypatch)  # runs on defaults; the token is reported by the override parser as before
+    assert ran == {"serve": True}

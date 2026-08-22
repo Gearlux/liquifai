@@ -1973,3 +1973,72 @@ def test_refresh_one_handles_static_and_dependent(iso_cache: Path) -> None:
     # Kind/inputs mismatch → no match.
     assert comp.refresh_one(root, "dataset__download__name", {"name": "x"}) is None
     assert comp.refresh_one(root, "dataset__download__version", {}) is None
+
+
+# --------------- the default command's arguments complete too ---------------
+
+
+def _default_positional_app() -> LiquifyApp:
+    app = LiquifyApp(name="probe")
+
+    @app.command(name="workspace", default=True, positionals=["workspace"])
+    def workspace(workspace: str = "", port: int = 8787) -> None:
+        pass
+
+    @app.command(name="other")
+    def other() -> None:
+        pass
+
+    return app
+
+
+def test_bare_tab_hints_the_default_commands_positional_beside_the_commands() -> None:
+    out = comp.complete(_default_positional_app(), ["probe", ""], cword=1)
+    assert out[0] == "<workspace>"  # the hint leads, as it does after an explicit command name
+    assert "workspace" in out and "other" in out  # the commands are still offered
+    assert "--port" in out and "--config" in out  # ...and the default command's options + globals
+
+
+def test_typing_a_prefix_filters_to_commands_only() -> None:
+    out = comp.complete(_default_positional_app(), ["probe", "ot"], cword=1)
+    assert out == ["other"]
+
+
+def test_after_the_default_positional_the_hint_is_gone_and_flags_remain() -> None:
+    out = comp.complete(_default_positional_app(), ["probe", "w.yaml", ""], cword=2)
+    assert "<workspace>" not in out and "other" not in out
+    assert "--port" in out and "--config" in out
+
+
+def test_after_a_flag_the_default_positional_is_not_hinted() -> None:
+    # `probe --port 1 <TAB>`: dispatch would not bind a positional here, so neither does TAB.
+    out = comp.complete(_default_positional_app(), ["probe", "--port", "1", ""], cword=3)
+    assert "<workspace>" not in out
+
+
+def test_default_without_positionals_keeps_todays_bare_tab() -> None:
+    app = LiquifyApp(name="probe")
+
+    @app.command(name="serve", default=True)
+    def serve() -> None:
+        pass
+
+    assert comp.complete(app, ["probe", ""], cword=1) == ["serve"]
+
+
+def test_script_default_offers_config_files_beside_the_commands(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cfg.yaml").write_text("layers: 5\n")
+    app = LiquifyApp(name="probe")
+
+    @app.script_command(name="run", default=True)
+    def run(layers: int = 1) -> None:
+        pass
+
+    @app.command(name="other")
+    def other() -> None:
+        pass
+
+    out = comp.complete(app, ["probe", ""], cword=1)
+    assert "cfg.yaml" in out and "--layers" in out and "--config" in out
+    assert "run" in out and "other" in out

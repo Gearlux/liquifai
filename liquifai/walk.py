@@ -114,6 +114,10 @@ class Nav(Protocol):
         """Declared positional-argument names for ``cmd``, in order."""
         ...  # pragma: no cover - protocol
 
+    def default_command(self) -> Optional[str]:
+        """Name of the command that runs when no command token is given, or None."""
+        ...  # pragma: no cover - protocol
+
 
 @dataclass
 class Walk:
@@ -121,8 +125,16 @@ class Walk:
 
     #: The node the command tokens descended into.
     nav: Nav
-    #: Matched command token, or None when no command was found.
+    #: Matched command name, or None when no command was found. Also set to the
+    #: DEFAULT command's name when its arguments were bound without a name token
+    #: (``app w.yaml`` for a default command declaring a positional / a script
+    #: default command) — then no token equals it; see :attr:`args_index`.
     cmd_name: Optional[str] = None
+    #: Index of the first token that belongs to the command's ARGUMENTS: right
+    #: after the command name, or — for the default command bound without a
+    #: name token — the first token after the last sub-app descent. Equals
+    #: ``len(tokens)`` when the line ends at the command name.
+    args_index: int = 0
     #: Config path consumed by script-command promotion (already resolved by
     #: the caller's ``resolve_config``), or None.
     config_path: Optional[Path] = None
@@ -179,26 +191,64 @@ def walk_invocation(
                 cur = sub
                 walk.nav = cur
                 i += 1
+                walk.args_index = i
                 continue
             if cur.has_command(tok.text):
                 walk.cmd_name = tok.text
                 i += 1
-                if cur.is_script_command(tok.text) and i < n and not tokens[i].is_flag_like():
-                    resolved = resolve_config(tokens[i].text)
-                    if resolved is not None:
-                        walk.config_path = resolved
-                        walk.config_token = tokens[i].text
-                        walk.consumed_config = True
-                        i += 1
-                walk.positional_names = list(cur.positionals(walk.cmd_name))
-                for _ in walk.positional_names:
-                    if i < n and not tokens[i].stops_positional():
-                        walk.positional_values.append(tokens[i].text)
-                        i += 1
-                    else:
-                        break
+                walk.args_index = i
+                i = _bind_arguments(walk, cur, tokens, i, resolve_config)
                 continue
+        # No command token — but the DEFAULT command may take this token as its
+        # promoted config or first positional, exactly as if its name had been
+        # typed. Only as a LEADING token (``i == args_index``: nothing at this
+        # level was skipped into `remaining` yet), mirroring an explicit
+        # command whose positionals stop binding at the first flag; and only
+        # when the default command has arguments to bind — otherwise the token
+        # stays for the override parser, unchanged. A token that binds NOTHING
+        # (a script default whose config does not resolve) is left alone too.
+        if walk.cmd_name is None and i == walk.args_index:
+            default = cur.default_command()
+            if default is not None and (cur.is_script_command(default) or cur.positionals(default)):
+                walk.cmd_name = default
+                bound = _bind_arguments(walk, cur, tokens, i, resolve_config)
+                if bound > i:
+                    i = bound
+                    continue
+                walk.cmd_name = None
+                walk.positional_names = []
         walk.remaining.append(tok)
         i += 1
 
     return walk
+
+
+def _bind_arguments(
+    walk: Walk,
+    cur: Nav,
+    tokens: Sequence[Token],
+    i: int,
+    resolve_config: Callable[[str], Optional[Path]],
+) -> int:
+    """Consume the command's promoted config (script commands) and its leading positionals.
+
+    ``walk.cmd_name`` is already set; ``i`` indexes the first argument token.
+    Returns the index of the first token NOT consumed.
+    """
+    n = len(tokens)
+    cmd = walk.cmd_name or ""
+    if cur.is_script_command(cmd) and i < n and not tokens[i].is_flag_like():
+        resolved = resolve_config(tokens[i].text)
+        if resolved is not None:
+            walk.config_path = resolved
+            walk.config_token = tokens[i].text
+            walk.consumed_config = True
+            i += 1
+    walk.positional_names = list(cur.positionals(cmd))
+    for _ in walk.positional_names:
+        if i < n and not tokens[i].stops_positional():
+            walk.positional_values.append(tokens[i].text)
+            i += 1
+        else:
+            break
+    return i

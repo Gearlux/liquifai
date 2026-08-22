@@ -8,6 +8,18 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **The default command's arguments bind without its name.** A leading token that
+  names no sub-app or command is the default command's first positional
+  (`app w.yaml` ≡ `app workspace w.yaml`) or — for the new
+  `@script_command(default=True)` — its promoted config (`app experiment` loads
+  `./config/experiment.yaml` through the usual search tiers). Only leading tokens
+  bind, a config token that resolves to no file is not swallowed, and a default
+  command with neither positionals nor promotion behaves as before. `Nav` gains
+  `default_command()`, the serialized completion tree a `"default"` key, and
+  `Walk.args_index` marks where a command's arguments start; TAB at a bare prompt
+  hints the default command's positional / config files / flags beside the command
+  names.
+
 - **`--help` with a config renders a Scope Dimensions block** — one implicit `--KEY <v1|v2>`
   flag per dimension the document's `!scope:KEY=VAL` blocks declare, plus `(default: X)` for a
   dimension the document's `default_scopes:` names (`liquifai.report.show_scope_dimensions`,
