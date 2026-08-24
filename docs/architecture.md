@@ -376,9 +376,9 @@ The same root cause, one layer over and on a different code path. DI resolves a
 synthesized marker's kwargs:
 
 ```python
-instance = confluid.Instance(cls_name)
+instance = confluid.Target(cls_name)
 instance.kwargs.update(config_block)          # <- the block leaves the document
-kwargs[name] = materialize(instance, context=context.config_data)
+kwargs[name] = confluid.load(instance, context=context.config_data)
 ```
 
 For a **class-name** block that copy is what breaks precedence. `Trainer: {lr:
@@ -631,3 +631,149 @@ in v1.0; import it from its owning module instead:
 aliases resolve to the same objects. What must NOT change is the direction: do
 not add a new alias to `_DEPRECATED_ALIASES` (it is a shrinking set), and do
 not silence the warning to make a test suite quiet — migrate the import.
+
+## 8. Host facts reach a config as a scope AND as an injected key
+
+*(2026-08-22)*
+
+**Context.** Configs need the machine they run on. Two different positions want
+that fact and neither substitutes for the other: a *block* that applies only on
+one OS (`!scope:os=darwin`, overriding whole keys), and a *value* read inline
+(`logdir: /runs/${platform.os}`). Scope activation is a load input; interpolation
+reads the document. There is no single place to put a fact that serves both.
+
+The obvious mechanism for the value half — environment variables — was rejected.
+Confluid resolves a bare `${NAME}` through `os.getenv`, so exporting `os=darwin`
+would make `${os}` work verbatim, and it fails on its own terms: the variables
+leak into every child process, and on Windows Python upper-cases env keys, so
+setting `os` clobbers the system `%OS%`. A framework should not have to write to
+the process environment to answer a question about the process.
+
+**Decision.** Detect `os` and `device` once per run (`liquifai/host.py`) and
+publish each one twice:
+
+- **as scope activations**, PREPENDED to the activation list so anything the user
+  typed is later and wins confluid's last-write-wins map;
+- **as one injected document key**, `platform: {os, device}`, merged UNDER the
+  raw document before the interpolation pass, so `${platform.os}` resolves through
+  confluid's ordinary config-key path and the author's own keys win per key.
+
+Both come from the same effective value, so `--scope device=cpu` moves the block
+that fires *and* what `${platform.device}` reads.
+
+The activation is ADVISORY: confluid raises for a value a declared dimension does
+not carry (`No scope block matches os='darwin'`), which is the typo guard a typed
+`--scope` must keep — but a detected fact is not a typo, and a Mac must not fail
+on a document whose only `os` block names linux. So the auto copy is filtered
+against the document's declared values; a value the user typed is not.
+
+**Consequences.**
+
+- Every loaded document gains one top-level key. That is visible in a dumped or
+  logged config — useful provenance, and it means an app must not use `platform`
+  as a top-level key for something else (a non-mapping one is left alone, with a
+  warning).
+- The dotted spelling is mandatory. `${platform.os}` works and a bare `${os}`
+  cannot, because confluid dispatches a placeholder on its name shape.
+- `--os` / `--device` stay ordinary config overrides. Binding them as implicit
+  dimension flags would have been more convenient and would silently swallow a
+  `--device cpu` aimed at a constructor kwarg — measured: adding one
+  `!scope:device=…` block to a document changes `--device cpu` from reaching
+  `Trainer(device=...)` to reaching nothing.
+- Torch is consulted only when installed, and not at all for a dimension the
+  caller forced — `--scope device=cpu` skips the import.
+- Known limit: the filter reads positive declarations only, so a dimension with
+  both a positive block and a `!notscope:` twin drops the auto value and leaves
+  the negation active. The alternative was a second dimension walker here;
+  confluid's own scope module warns that two walkers over the same node kinds is
+  exactly how its earlier drift arose.
+
+**Example.**
+
+```yaml
+# one document, both positions
+workers: 8
+logdir: /runs/${platform.os}
+mac: !scope:os=darwin
+  workers: 0
+```
+
+```
+$ my-app -c cfg.yaml run            # on a Mac: workers=0  logdir=/runs/darwin
+$ my-app -c cfg.yaml run            # on Linux: workers=8  logdir=/runs/linux
+$ my-app -c cfg.yaml --scope os=windows run
+Error: No scope block matches os='windows'. This document declares os with: darwin
+```
+
+**What you may change.** The detectors, and the value set `device` may answer.
+What must NOT change: the auto activations stay PREPENDED (appending would let a
+detected fact beat a typed one), the injected namespace stays merged UNDER the
+document, and the filter applies to the auto copy ONLY — filtering a typed value
+would delete confluid's typo guard.
+
+## 9. A log flag the user did not type is forwarded UNSET
+
+*(2026-08-22)*
+
+**Context.** liquifai owns four log flags — `--level`, `--console-level`,
+`--file-level`, `--log-dir` — and configures the logging engine once, in
+`_bootstrap`, before the config file is read. The engine resolves every setting
+through its own four-layer hierarchy (`argument > LOGGAIR_* environment variable
+> loggair.yaml / pyproject / XDG > built-in default`) and returns on the first
+layer that holds a value.
+
+That last clause is the whole decision. An argument is layer one, so ANY value
+liquifai passes ends the search — including a value liquifai invented because
+the user typed nothing. The bootstrap used to do exactly that:
+
+```python
+console_level = self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+file_level = self.context.file_level or self.context.log_level or "DEBUG"
+```
+
+`"INFO"` and `"DEBUG"` were copies of the engine's own defaults, so a bare run
+behaved correctly and the bug stayed invisible — while `LOGGAIR_CONSOLE_LEVEL`
+and every `console_level:` config key were dead on arrival. The tell that it was
+an accident rather than a policy sat on the next line: `log_dir` was forwarded
+unset, which is why `LOGGAIR_DIR` worked all along.
+
+**Decision.** Forward `None` for every log setting no CLI flag named. liquifai
+contributes the flag layer and nothing else; the engine resolves the rest. The
+defaults are never spelled out here, because a default restated in a second
+place is a default that will drift.
+
+**Consequences.**
+
+- The observable order is `flag > environment variable > config file > default`.
+  The two middle layers reach a liquifai app for the first time.
+- liquifai does not rank the environment against the config file, and must not:
+  deferring means taking the engine's order whole. Re-ranking those two layers
+  is a change to the engine, for every setting at once — not something the CLI
+  may fake for the two it happens to expose.
+- A bare run is bit-identical to before, since the removed literals were the
+  engine's defaults. This is what makes the fix safe to ship without a flag day.
+- `--debug` still raises the console to `DEBUG`, because it IS a typed flag. It
+  yields to `--console-level`, which is more specific.
+- Adding a fifth layer to the engine needs no change here.
+
+**Example.**
+
+```python
+# liquifai/core.py — the flag layer, and only the flag layer
+console_level = self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else None)
+file_level = self.context.file_level or self.context.log_level
+```
+
+```console
+$ my-app run                                              # console INFO    (default)
+$ LOGGAIR_CONSOLE_LEVEL=DEBUG my-app run                  # console DEBUG   (env)
+$ LOGGAIR_CONSOLE_LEVEL=DEBUG my-app --level WARNING run  # console WARNING (flag)
+```
+
+**What you may change.** Which flags exist, and how they fold into one another —
+`--console-level` beating `--level` is liquifai's call, made entirely inside the
+flag layer. What must NOT change: an unset flag stays `None`. Never re-read a
+`LOGGAIR_*` variable here to forward its value as an argument — it type-checks,
+it passes every end-to-end test, and it re-creates this bug the moment the engine
+grows a layer liquifai does not mirror. `tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`
+pins the mechanism directly for that reason.

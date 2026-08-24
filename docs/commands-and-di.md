@@ -72,7 +72,7 @@ are flowed before the command runs:
 - **`"manual"` (default):** injected kwargs are passed unchanged. Nested
   `!class:` stubs stay deferred — domain code is responsible for flowing them.
 - **`"auto"`:** every kwarg is deep-flowed before the call. Attributes annotated
-  with `confluid.Lazy` stay deferred so domain code can still flow them at
+  with `confluid.Partial` stay deferred so domain code can still flow them at
   runtime with extra kwargs (the classic `configure_optimizers` pattern:
   `flow(self.optimizer, params=self.parameters())`). Any non-`Lazy` `Class`
   stub that can't be instantiated raises immediately.

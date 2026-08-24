@@ -91,8 +91,9 @@ A typo'd token is **warned about, never silently dropped**.
 ## The reproducibility loop
 
 `print-config` dumps the merged configuration — file, includes, and CLI
-overrides, with the `!lazy:` optimizer still deferred — as a config the app
-can load again:
+overrides, with the `!lazy:` optimizer still deferred (written back in the
+plain format, as `_target_: GradientDescent` + `_partial_: true`) — as a
+config the app can load again:
 
 ```bash
 linefit print-config linefit.yaml --Trainer.max_epochs 800 > frozen.yaml

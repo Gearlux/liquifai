@@ -11,6 +11,7 @@
 - **Operations → CLI + MCP:** register a pure operation once (`@app.operation`) and surface it as an auto-generated CLI command *and* an MCP tool (`make_mcp_tools`).
 - **SDK Bridge (provisional):** mirror an existing Python SDK as a full CLI/MCP app by decorating its client classes (`liquifai.bridge`).
 - **Shell Completion:** bash/zsh/fish tab completion for commands, options, overrides — and live positional values.
+- **Host Facts:** every run carries the machine's `os` and `device` — as scopes (`!scope:os=darwin`) and as values (`${platform.os}`), with no env vars and nothing typed.
 
 ## Documentation
 
@@ -21,6 +22,7 @@ Each topic has its own guide, and every guide has a runnable companion script in
 | [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion (with `./config/` + XDG search paths and its DEBUG provenance notice), DI block lookup, positional arguments, flow modes | `positionals_app.py`, `promotion_app.py` et al. |
 | [CLI Overrides](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md) | The override grammar (`--key value`, dotted keys, polarity, add/delete) and the dropped-token warning | `overrides_app.py` |
 | [Global Flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md) | Log control (`--level`, `--log-dir`, …), `--scope` / dimension flags, `--debug`, `--docs` | `global_flags_app.py` |
+| [Host Facts](https://github.com/Gearlux/liquifai/blob/main/docs/host-facts.md) | The `os` / `device` scopes and the injected `platform` namespace — `!scope:os=darwin` blocks and `${platform.os}` values | `host_facts_app.py` |
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
 | [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md) | Install, aliases, workspace-local setup, dynamic & dependent positional values | `completion_providers.py` |
 | [Architecture Decisions](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md) | Why liquifai is shaped this way: the hand-rolled parser, out-of-process completion, the shared argv walk, who owns settability | — (records carry inline examples) |
@@ -51,7 +53,11 @@ as a reloadable recipe.
 ### User Experience
 - **Abbreviation Support:** Allow brief aliases for the main executable (e.g. `ma` for `my-app`).
 - **Dynamic Overrides:** Support `--KEY VAL` CLI overrides with broadcast injection into nested configurations.
-- **Observability Overrides:** Provide CLI flags for log control (`--level`, `--console-level`, `--file-level`, `--log-dir`).
+- **Observability Overrides:** Provide CLI flags for log control (`--level`, `--console-level`,
+  `--file-level`, `--log-dir`) as the top layer of a four-step hierarchy — flag, then
+  `LOGGAIR_*` environment variable, then config file, then default. A flag you do not type
+  is left unset rather than defaulted, so the lower layers still apply
+  ([global flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md)).
 
 ### Architecture
 - **Config Promotion:** Automatically look for `<arg>.yaml` if the first argument is not a registered command.

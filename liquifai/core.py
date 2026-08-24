@@ -11,7 +11,7 @@ from loggair import get_logger
 from rich.console import Console
 from rich.markup import escape
 
-from liquifai import completion_cli, di, flags, grammar, overrides, report, router
+from liquifai import completion_cli, di, flags, grammar, host, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
     CommandDefinitionError,
@@ -529,9 +529,9 @@ class LiquifyApp:
         # `final_tokens` so those flags are routed into `scopes` instead of
         # being treated as config overrides.
         #
-        # We use ``load_config_with_paths`` here (instead of plain
-        # ``load_config``) so the resolved tree of YAML files — entrypoint
-        # plus every transitively ``include:``-d file — is captured for
+        # We pass ``return_paths=True`` here so the resolved tree of YAML
+        # files — entrypoint plus every transitively ``include:``-d file —
+        # is captured for
         # downstream consumers (e.g. matrainer's trainer logs them as
         # artifacts to every wired Lightning logger).
         raw_config: Optional[Any] = None
@@ -540,6 +540,14 @@ class LiquifyApp:
             raw_config, included_paths = confluid.load(config_path, until="raw", return_paths=True)
             scopes, final_tokens = flags.bind_dimension_flags(scopes, raw_config, final_tokens)
 
+        # 3c. HOST FACTS — `os` / `device`, detected once and offered twice: as scope
+        # activations here, and as the `platform:` document key `_bootstrap` injects.
+        # PREPENDED, so a value the user typed (`--scope os=linux`, or a `--KEY VAL`
+        # the document's own dimension declaration promoted above) is later in the
+        # list and wins confluid's last-write-wins activation map.
+        facts = host.host_facts(host.forced_values(scopes))
+        scopes = host.auto_scopes(facts, raw_config) + scopes
+
         # 4. INITIALIZE STATE
         self.context = LiquifyContext(
             name=self.name,
@@ -547,6 +555,7 @@ class LiquifyApp:
             scopes=scopes,
             debug=debug,
             included_paths=included_paths,
+            host_facts=facts,
             **log_overrides,
         )
         set_context(self.context)
@@ -643,7 +652,7 @@ class LiquifyApp:
         ``raw_config`` is the pre-loaded raw dict (or Fluid) — passed in from
         the CLI path so we don't re-read the file. Internal callers (the
         public ``liquify`` shortcut) may also pass it; everyone else gets a
-        fresh ``load_config`` here.
+        fresh ``load(..., until="raw")`` here.
         """
         if not self.context:
             return
@@ -652,10 +661,18 @@ class LiquifyApp:
         if self.context.config_path:
             script_name = self.context.config_path.stem
 
+        # `None` when no CLI flag named a level — NOT loggair's default spelled
+        # out again. loggair resolves `args > LOGGAIR_* env > loggair.yaml /
+        # pyproject / XDG > defaults` and returns on the FIRST layer that has a
+        # value (`resolve_settings`), so forwarding a literal here silently
+        # shadows the env var and the config file. That is exactly why
+        # `LOGGAIR_DIR` worked while `LOGGAIR_CONSOLE_LEVEL` did not: `log_dir`
+        # below was already passed through unset. `--debug` stays a CLI flag and
+        # still wins. Pinned by `tests/test_log_levels.py`.
         console_level = (
-            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else None)
         )
-        file_level = self.context.file_level or self.context.log_level or "DEBUG"
+        file_level = self.context.file_level or self.context.log_level
 
         loggair.configure_logging(
             console_level=console_level,
@@ -670,6 +687,10 @@ class LiquifyApp:
             if not self.context.config_path.exists():
                 raise ConfigNotFoundError(f"Configuration file not found: {self.context.config_path}")
             data = raw_config if raw_config is not None else confluid.load(self.context.config_path, until="raw")
+            # Merge the host facts UNDER the document (the author's own keys win) so
+            # `${platform.os}` / `${platform.device}` resolve in the interpolation pass
+            # below — a bare `${os}` cannot, it is an env-var read (confluid/resolver.py:161).
+            data = host.inject_facts(data, self.context.host_facts)
             # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
             # string primitive. Overrides get the same expansion later, in
             # `overrides.apply_overrides`.
@@ -786,7 +807,13 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                ctx.config_data = confluid.load(config_path, until="document", scopes=scopes or None)
+                # Same host facts as a real run — help rendering and graph export must
+                # show the document THIS machine resolves, not an unscoped variant.
+                raw = confluid.load(config_path, until="raw")
+                ctx.host_facts = host.host_facts(host.forced_values(ctx.scopes))
+                ctx.scopes = host.auto_scopes(ctx.host_facts, raw) + ctx.scopes
+                data = host.inject_facts(raw, ctx.host_facts)
+                ctx.config_data = confluid.load(data, until="document", scopes=ctx.scopes or None)
                 ctx.config_data = expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)

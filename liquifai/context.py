@@ -22,6 +22,11 @@ class LiquifyContext:
     # DI materialization in ``confluid.collect_report()`` and warns for every
     # key here the report says matched nothing (``overrides.warn_unused_overrides``).
     cli_overrides: Dict[str, Any] = field(default_factory=dict)
+    # The host facts this run resolved (:mod:`liquifai.host`) — ``{"os": "darwin",
+    # "device": "mps"}``. They reach a config TWICE: as scope activations (already
+    # merged into ``scopes`` above) and as the ``platform:`` key injected into the
+    # document, which is what makes ``${platform.os}`` resolvable.
+    host_facts: Dict[str, str] = field(default_factory=dict)
     # Resolved YAML tree: ``config_path`` plus every transitively
     # ``include:``-d file in load order. Populated by the CLI bootstrap when
     # confluid resolves the include graph; consumers (e.g. matrainer's
