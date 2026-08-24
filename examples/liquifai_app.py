@@ -24,9 +24,8 @@ class Model:
         self._secret = "hidden"
 
     @property
-    @confluid.ignore_config
     def secret(self) -> str:
-        """This attribute will be hidden from the --show-config table."""
+        """Read-only, so it is hidden from the --show-config table."""
         return self._secret
 
     def __repr__(self) -> str:

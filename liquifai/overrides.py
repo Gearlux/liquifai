@@ -14,14 +14,19 @@ with the completion fast path); this module may import confluid freely.
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from confluid import accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
+from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
+from confluid.report import ConfigurationReport
+from loggair import get_logger
 
 from liquifai.grammar import looks_like_arg, looks_like_key
+
+logger = get_logger(__name__)
 
 
 def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], List[str]]:
@@ -127,6 +132,10 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     1. expand ``$VAR`` / ``~`` in the override VALUES (the tree was expanded at
        load time; overrides arrive later and must get the same treatment),
     2. ``deep_merge`` them into the tree and expand dotted keys into nesting,
+       then re-seat every override key's top-level head at the END of the
+       document in typed order, so confluid's document-order precedence sees
+       the CLI keys as appended lines, in the order the user typed them
+       (:func:`_move_cli_keys_last`),
     3. remove each deleted dotted path,
     4. push the overrides down into any ``Fluid`` kwargs via
        :func:`merge_overrides_into_fluids` — the step that reaches values
@@ -145,12 +154,100 @@ def apply_overrides(data: Any, overrides: Dict[str, Any], deletions: List[str]) 
     data = deep_merge(data, parsed)
     if isinstance(data, dict):
         data = expand_dotted_keys(data)
+        _move_cli_keys_last(data, parsed)
 
     for path in deletions:
         delete_dotted_key(data, path)
 
     merge_overrides_into_fluids(data, parsed)
+    # "Did this override reach anything?" is deliberately NOT judged here — this
+    # runs BEFORE materialization, where the question can only be guessed at (the
+    # deleted local heuristic guessed wrong twice: glob heads and multi-hop paths
+    # were reported ignored while the value landed). Confluid answers it
+    # authoritatively after DI materializes: see :func:`warn_unused_overrides`,
+    # called from ``core.run_command`` with the pass's ``ConfigurationReport``.
     return data
+
+
+def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None:
+    """Re-seat every override key's top-level HEAD at the END, in typed order.
+
+    Confluid has ONE precedence rule — document order, last spec wins, with no
+    specificity tiers — so a key's POSITION decides whether it beats a value
+    addressed at a node, and the CLI's only lever is where its keys sit. The
+    honest encoding of "the user typed these after the whole file" is: CLI
+    flags behave exactly as if their keys were APPENDED to the end of the
+    document, in the order typed. ``deep_merge`` alone does not produce that —
+    it replaces a key the document ALREADY declares *in place* (a top-level
+    ``run_name:`` written on line 1 keeps line 1's precedence), and
+    ``expand_dotted_keys`` folds a dotted override into a pre-existing block at
+    the BLOCK's position (an early ``Trainer:`` block plus a late bare ``lr:``
+    silently beat a typed ``--Trainer.lr``, measured 2026-08-13).
+
+    So every override key's head — bare keys and dotted-expanded heads alike —
+    is re-seated at the end, iterating in typed CLI order. This function may
+    NEVER reorder flags relative to each other (the previous version moved
+    only BARE keys, forcing every bare flag after every dotted flag: a
+    ``--lr 0.2 --Trainer.lr 0.1`` pair produced 0.2 on Trainer in BOTH flag
+    orders). A head mentioned twice seats at its LAST mention — the user's
+    final word about that block is where it sits.
+
+    Accepted consequence: re-seating a PRE-EXISTING block moves its unrelated
+    keys' precedence with it (``--Trainer.lr`` re-seats the whole ``Trainer:``
+    block, so its ``layers: 8`` now beats a later bare ``layers: 4`` the
+    document used to win with). The alternative — leaving pre-existing blocks
+    in place — keeps the silent-loss case above, which is worse. Both sides
+    are pinned in ``tests/test_override_broadcast.py`` (the seating group).
+    """
+    for key in overrides:
+        head = key.split(".", 1)[0]
+        if head in data:
+            data[head] = data.pop(head)
+
+
+def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> None:
+    """Warn for each CLI override the materialization REPORT says matched nothing.
+
+    This asks confluid instead of guessing: ``report.unused`` is authoritative
+    across every delivery mechanism (bare cascade, addressed blocks, glob
+    riders, the nested-marker cascade into deferred slots), so the verdicts
+    the deleted pre-materialization heuristic got wrong — a glob head, a
+    multi-hop path, each reported "ignored" while the value landed — are right
+    by construction. It also covers what the heuristic could not see at all: a
+    BARE override no object accepts.
+
+    The report's candidate spelling for an override key: a glob-headed
+    override keeps its full key (a ``'**'`` block registers per leaf as
+    ``**.lr``), a named dotted override is its HEAD block (``--opt.lr``
+    expands to a top-level ``opt:`` mapping), a bare override is the key
+    itself. A command that materializes nothing registers no candidates, so
+    the check degrades to silence rather than to guessing.
+
+    Called from ``core.run_command`` after DI materializes and BEFORE the
+    command body runs — a doomed multi-hour run gets its warning up front.
+    Do NOT downgrade to debug/trace: an override the operator typed and did
+    not get is exactly the actionable condition ``warning`` is reserved for.
+    """
+    unused = set(report.unused)
+    for key in overrides:
+        head, dot, tail = key.partition(".")
+        dotted_at_name = bool(dot) and head not in ("*", "**")
+        candidate = head if dotted_at_name else key
+        if candidate not in unused:
+            continue
+        if dotted_at_name:
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object is named "
+                f"{head!r}, and {head!r} is not a key in the configuration. The dotted form addresses "
+                f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
+                f"('--{tail} <value>') or set it inside that object's config block."
+            )
+        else:
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object accepts "
+                f"{(tail or key)!r}. Check the spelling against the declared parameters "
+                f"(`--help` lists them)."
+            )
 
 
 def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:
@@ -171,6 +268,18 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
       ``NoBroadcast[T]`` is skipped — the same opt-outs a bare top-level YAML
       key obeys. Addressed writes deliberately bypass them.
 
+    A ``**kwargs`` target is DELIBERATELY NOT written here, even though it
+    accepts every key: writing into a marker's own kwargs is the ADDRESSED
+    channel, and confluid hands an addressed key to the CONSTRUCTOR while a bare
+    one becomes a post-init attribute. Claiming a bare ``--run_name`` was
+    addressed to a class that merely cannot refuse it is how run identity ended
+    up as a constructor argument of a metric, which raised ``Unexpected keyword
+    arguments`` from inside a library that never asked for it. Such a key is
+    left alone: ``apply_overrides`` has already merged it into the document, so
+    confluid's own broadcasting delivers it with the right provenance. A class
+    that DECLARES the key is unaffected — it is still written here, so a
+    ``--num_workers 8`` still reaches the constructor that takes it.
+
     A Fluid whose target class cannot be resolved (a ``!class:`` naming a
     module that is not importable yet) has no accept-list to consult, so it
     falls back to "the key is already in the YAML kwargs" — a deferred marker
@@ -178,6 +287,10 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
 
     Cycle-safe via ``id()`` tracking: a ``!ref:``-shared marker graph with a
     back-edge is visited once.
+
+    Whether an override REACHED anything is deliberately not judged here (nor
+    returned): confluid's report answers that after materialization — see
+    :func:`warn_unused_overrides`.
     """
     if _visited is None:
         _visited = set()
@@ -196,12 +309,19 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
         for k, v in overrides.items():
             if fluid_name and "." in k:
                 head, _, tail = k.partition(".")
-                if head == str(fluid_name) and (tail in data.kwargs or accepts_key(cls, tail)):
-                    data.kwargs[tail] = v
-                    continue  # dotted form handled — don't also broadcast-match.
+                if head == str(fluid_name):
+                    # The head names THIS instance. A multi-hop tail (``opt.lr``)
+                    # is confluid's to route (its first segment floats, later
+                    # ones are strict hops); only a single-segment tail this
+                    # target takes is written here.
+                    if tail in data.kwargs or accepts_key(cls, tail):
+                        data.kwargs[tail] = v
+                        continue  # dotted form handled — don't also broadcast-match.
             if cls is None:
                 if k in data.kwargs:
                     data.kwargs[k] = v
+            elif accepts_any_key(cls):
+                continue  # no accept-list to filter with — let it cascade as a BARE key
             elif accepts_broadcast(cls, k):
                 data.kwargs[k] = v
         for v in list(data.kwargs.values()):
@@ -217,14 +337,20 @@ def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: 
 def _resolve_target_class(target: Any) -> Any:
     """Normalize a Fluid ``target`` into the class to ask about, or ``None``.
 
-    ``target`` may be a class, an instance, or the dotted string Confluid uses
-    for deferred resolution (``!class:module.Cls``). ``None`` means "not
-    introspectable" — the caller falls back to the already-in-YAML rule.
+    ``target`` may be a class, a plain callable (a registered builder
+    FUNCTION), an instance, or the dotted string Confluid uses for deferred
+    resolution (``!class:module.Cls``). ``None`` means "not introspectable" —
+    the caller falls back to the already-in-YAML rule. A routine is returned
+    AS-IS: taking ``type(fn)`` (= ``function``, whose ``__init__`` takes
+    ``**kwargs``) would hand the predicates a target that accepts everything —
+    the exact degradation confluid's own target normalizer exists to prevent.
     """
     cls: Any = resolve_class(target) if isinstance(target, str) else target
     if cls is None:
         return None
-    return cls if isinstance(cls, type) else type(cls)
+    if isinstance(cls, type) or inspect.isroutine(cls):
+        return cls
+    return type(cls)
 
 
 def delete_dotted_key(config: Any, path: str) -> None:

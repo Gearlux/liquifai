@@ -17,9 +17,19 @@ class LiquifyContext:
     file_level: Optional[str] = None
     log_dir: Optional[Path] = None
     config_data: Dict[str, Any] = field(default_factory=dict)
+    # CLI overrides parsed in phase 5 (``--lr 0.1`` -> ``{"lr": 0.1}``), kept
+    # for the post-materialization unused-override check: ``run_command`` wraps
+    # DI materialization in ``confluid.collect_report()`` and warns for every
+    # key here the report says matched nothing (``overrides.warn_unused_overrides``).
+    cli_overrides: Dict[str, Any] = field(default_factory=dict)
+    # The host facts this run resolved (:mod:`liquifai.host`) — ``{"os": "darwin",
+    # "device": "mps"}``. They reach a config TWICE: as scope activations (already
+    # merged into ``scopes`` above) and as the ``platform:`` key injected into the
+    # document, which is what makes ``${platform.os}`` resolvable.
+    host_facts: Dict[str, str] = field(default_factory=dict)
     # Resolved YAML tree: ``config_path`` plus every transitively
     # ``include:``-d file in load order. Populated by the CLI bootstrap when
-    # confluid resolves the include graph; consumers (e.g. marainer's
+    # confluid resolves the include graph; consumers (e.g. matrainer's
     # trainer) read this to log the full configuration as a run artifact.
     included_paths: List[Path] = field(default_factory=list)
 

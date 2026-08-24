@@ -64,7 +64,7 @@ def _probe_is_liquifai_app(entry: Path, timeout: float) -> bool:
     Runs ``<entry> --show-completion bash`` and looks for the Liquifai marker
     ``liquifai-complete <name>`` that :func:`render_script` always emits.
     A Liquifai app short-circuits that flag before Confluid bootstrap, but a
-    heavy app still runs its module-import side effects first (e.g. marainer
+    heavy app still runs its module-import side effects first (e.g. matrainer
     pulling in PyTorch Lightning at the top of ``cli.py``), so ``timeout`` is
     sized for the slowest known import chain, not the bare short-circuit cost.
     Click/Typer apps accept ``--show-completion`` too but emit their own

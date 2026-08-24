@@ -62,6 +62,10 @@ class _TreeNav:
     def positionals(self, cmd: str) -> List[str]:
         return list((self.node.get("positionals") or {}).get(cmd, []))
 
+    def default_command(self) -> Optional[str]:
+        default = self.node.get("default")
+        return str(default) if default else None
+
 
 def _peek_config(token: str) -> Optional[Path]:
     """Consume a script-command's promoted config token WITHOUT resolving it.
@@ -171,8 +175,64 @@ def complete_from_tree(
         # shows ``dataset`` not ``dataset``+``ds``.
         aliases = set(cur.get("sub_app_aliases", []))
         sub_names = [n for n in cur["sub_apps"] if n not in aliases]
-        return _filter_prefix(list(cur["commands"]) + sub_names, incomplete)
+        names = _filter_prefix(list(cur["commands"]) + sub_names, incomplete)
+        # Nothing typed at this level yet and the default command takes arguments:
+        # the word may still become a command name OR the default command's first
+        # argument (the walk binds a LEADING token that way), so offer both — its
+        # argument hint / config files / flags first, the names after.
+        default = cur.get("default")
+        takes_args = bool(default) and (default in cur["script_cmds"] or (cur.get("positionals") or {}).get(default))
+        if takes_args and len(parsed) == walk.args_index:
+            own = _command_candidates(
+                cur,
+                str(default),
+                walk.args_index,
+                parsed,
+                prev,
+                incomplete,
+                config_path,
+                consumed_config,
+                app_name,
+                lazy_refresh,
+                force_refresh,
+            )
+            return own + [n for n in names if n not in own]
+        return names
 
+    return _command_candidates(
+        cur,
+        cmd_name,
+        walk.args_index,
+        parsed,
+        prev,
+        incomplete,
+        config_path,
+        consumed_config,
+        app_name,
+        lazy_refresh,
+        force_refresh,
+    )
+
+
+def _command_candidates(
+    cur: Dict[str, Any],
+    cmd_name: str,
+    args_index: int,
+    parsed: List[str],
+    prev: str,
+    incomplete: str,
+    config_path: Optional[Path],
+    consumed_config: bool,
+    app_name: str,
+    lazy_refresh: Optional[Callable[..., None]],
+    force_refresh: bool,
+) -> List[str]:
+    """Candidates once the line is inside a command: its config, positionals, flags.
+
+    ``args_index`` is where the command's arguments start in ``parsed`` (the walk
+    reports it — for a default command bound without a name token no token equals
+    ``cmd_name``, so the old "first token equal to the name" lookup would miss).
+    """
     is_script_cmd = cmd_name in cur["script_cmds"]
     # ``signature_flags``: the command's options already collapsed to
     # shortest-unique ``--flag`` form (baked at serialize time). ``signature_paths``:
@@ -190,27 +250,25 @@ def complete_from_tree(
     # flag-provided positionals in the hint below and (b) drop already-typed
     # flags from the candidates — offering ``--target_version`` again after it
     # was consumed is noise (a repeat parses, but last-write-wins).
-    cmd_idx = next((j for j, t in enumerate(parsed) if t == cmd_name), None)
     used_keys: Set[str] = set()
-    if cmd_idx is not None:
-        for tok in parsed[cmd_idx + 1 :]:
-            if tok.startswith("--"):
-                key = tok[2:].split("=", 1)[0]
-                if key.endswith(("+", "-")):
-                    key = key[:-1]
-                if key:
-                    used_keys.add(key)
-            elif tok.startswith("+"):
-                body = tok[1:]
-                if body.startswith("--"):
-                    body = body[2:]
-                key = body.split("=", 1)[0]
-                if key:
-                    used_keys.add(key)
-            elif "=" in tok and not tok.startswith("="):
-                head = tok.split("=", 1)[0]
-                if looks_like_key(head):
-                    used_keys.add(head)
+    for tok in parsed[args_index:]:
+        if tok.startswith("--"):
+            key = tok[2:].split("=", 1)[0]
+            if key.endswith(("+", "-")):
+                key = key[:-1]
+            if key:
+                used_keys.add(key)
+        elif tok.startswith("+"):
+            body = tok[1:]
+            if body.startswith("--"):
+                body = body[2:]
+            key = body.split("=", 1)[0]
+            if key:
+                used_keys.add(key)
+        elif "=" in tok and not tok.startswith("="):
+            head = tok.split("=", 1)[0]
+            if looks_like_key(head):
+                used_keys.add(head)
 
     def _not_used(flag: str) -> bool:
         # A candidate is "used" when its key was typed exactly, or when a full
@@ -266,14 +324,13 @@ def complete_from_tree(
     cmd_positionals = list((cur.get("positionals") or {}).get(cmd_name, []))
     if cmd_positionals:
         consumed_tokens: List[str] = []
-        if cmd_idx is not None:
-            for tok in parsed[cmd_idx + 1 :]:
-                # Stop at the first flag-like or key=value token — the SAME
-                # classifier core's dispatcher uses (grammar is stdlib-only,
-                # so the fast path may import it).
-                if stops_positional(tok):
-                    break
-                consumed_tokens.append(tok)
+        for tok in parsed[args_index:]:
+            # Stop at the first flag-like or key=value token — the SAME
+            # classifier core's dispatcher uses (grammar is stdlib-only,
+            # so the fast path may import it).
+            if stops_positional(tok):
+                break
+            consumed_tokens.append(tok)
         n_consumed = len(consumed_tokens)
         # A positional supplied in its (still valid) ``--flag`` / ``key=value``
         # spelling counts as filled — the hint moves past it. Positionally
@@ -423,9 +480,9 @@ def _resolve_override_keys(config_path: Path) -> List[str]:
 
     buf_out, buf_err = io.StringIO(), io.StringIO()
     with redirect_stdout(buf_out), redirect_stderr(buf_err):
-        raw = confluid.load_config(config_path)
+        raw = confluid.load(config_path, until="raw")
         dimensions = confluid.discover_dimensions(raw)
-        cfg = confluid.load(raw, flow=False)
+        cfg = confluid.load(raw, until="document")
     keys: List[str] = list(dimensions)
     _walk_keys(cfg, prefix="", out=keys)
     return sorted(set(keys))

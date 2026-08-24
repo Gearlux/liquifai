@@ -13,7 +13,7 @@ whether the consumer later goes through ``materialize`` or directly
 through ``flow()``.
 
 These tests exercise the path end-to-end through a real ``LiquifyApp``
-with a ``script_command(flow_mode="auto")``, matching the marainer
+with a ``script_command(flow_mode="auto")``, matching the matrainer
 ``download`` / ``convert`` / ``process`` shape.
 """
 
@@ -23,7 +23,7 @@ from typing import Any, List, Optional
 
 import pytest
 from confluid import configurable
-from confluid.fluid import Class
+from confluid.fluid import Target
 from confluid.merger import deep_merge, expand_dotted_keys
 
 from liquifai import LiquifyApp
@@ -66,7 +66,7 @@ def test_dotted_override_reaches_fluid_kwargs_via_expand() -> None:
     override INTO the Fluid's kwargs dict so ``flow()`` reads the new
     value.
     """
-    fluid = Class(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
+    fluid = Target(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
     config_data: Any = {"processor": fluid}
     overrides = {"processor.lookback_days": 5, "processor.skip_if_fresh": False}
 
@@ -85,7 +85,7 @@ def test_flow_mode_auto_applies_dotted_overrides_to_processor_fluid(tmp_path: Pa
     """End-to-end through a real LiquifyApp: ``--processor.lookback_days 5``
     must reach the live ``_DownloadFearGreed`` instance.
 
-    This mirrors the marainer ``download`` / ``convert`` / ``process``
+    This mirrors the matrainer ``download`` / ``convert`` / ``process``
     shape: a single ``processor: Any`` parameter with ``flow_mode="auto"``.
     """
     yaml = tmp_path / "smoke.yaml"
@@ -199,7 +199,7 @@ def test_bare_equals_form_dotted_override_reaches_fluid(tmp_path: Path, monkeypa
 
 def test_dotted_override_does_not_disturb_other_fluid_kwargs() -> None:
     """``--processor.lookback_days 5`` must NOT clobber unrelated kwargs."""
-    fluid = Class(
+    fluid = Target(
         _DownloadFearGreed,
         out_root="/tmp/yaml",
         lookback_days=365,
@@ -222,7 +222,7 @@ def test_dotted_override_does_not_disturb_other_fluid_kwargs() -> None:
 
 def test_flow_mode_auto_path_via_deep_flow_directly() -> None:
     """Unit-level: the fix at the precise layer the bug fires from."""
-    fluid = Class(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
+    fluid = Target(_DownloadFearGreed, lookback_days=365, skip_if_fresh=True)
     config: Any = {"processor": fluid}
     overrides = {"processor.lookback_days": 5, "processor.skip_if_fresh": False}
 

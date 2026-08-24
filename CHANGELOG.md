@@ -4,7 +4,191 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-24
+
+### Added
+
+- **Host facts on every run — the `os` / `device` scopes and the `platform` namespace.**
+  `liquifai.host` detects the machine's OS (`darwin` / `linux` / `windows`) and compute
+  device (`cuda` / `mps` / `cpu`, from torch when it is installed) once per invocation, and
+  offers each one in both positions a config can use: a scope activation, so a document can
+  carry `!scope:os=darwin` blocks, and a `platform: {os, device}` key merged under the
+  document, so `logdir: /runs/${platform.os}` resolves. No environment variable is set or
+  read — a bare `${os}` is an env-var read in confluid and stays unresolved by design.
+  The author's own keys win per key (`platform: {device: gpu}` re-spells one fact for a
+  framework that needs another word), `--scope device=cpu` overrides detection and moves
+  both surfaces at once, and a detected value a document cannot use is dropped rather than
+  raised — while a value typed by hand keeps confluid's typo guard. `--os` / `--device`
+  remain ordinary config overrides. See `docs/host-facts.md` and `docs/architecture.md` §8.
+
+- **The default command's arguments bind without its name.** A leading token that
+  names no sub-app or command is the default command's first positional
+  (`app w.yaml` ≡ `app workspace w.yaml`) or — for the new
+  `@script_command(default=True)` — its promoted config (`app experiment` loads
+  `./config/experiment.yaml` through the usual search tiers). Only leading tokens
+  bind, a config token that resolves to no file is not swallowed, and a default
+  command with neither positionals nor promotion behaves as before. `Nav` gains
+  `default_command()`, the serialized completion tree a `"default"` key, and
+  `Walk.args_index` marks where a command's arguments start; TAB at a bare prompt
+  hints the default command's positional / config files / flags beside the command
+  names.
+
+- **`--help` with a config renders a Scope Dimensions block** — one implicit `--KEY <v1|v2>`
+  flag per dimension the document's `!scope:KEY=VAL` blocks declare, plus `(default: X)` for a
+  dimension the document's `default_scopes:` names (`liquifai.report.show_scope_dimensions`,
+  read from the RAW document via `confluid.discover_dimension_values` / `confluid.default_scopes`
+  — the same walk `flags.bind_dimension_flags` binds the flags from). No dimensions, no block.
+
+### Fixed
+
+- **Log-level environment variables and config files are honoured again.** The bootstrap
+  passed a concrete `"INFO"` / `"DEBUG"` to the logging engine even when no flag named a
+  level, which short-circuited the engine's own resolution on its first layer and silently
+  shadowed `LOGGAIR_CONSOLE_LEVEL` / `LOGGAIR_FILE_LEVEL` and every `loggair.yaml` /
+  `pyproject.toml` / XDG `console_level:` key. `--log-dir` was already forwarded unset,
+  which is why `LOGGAIR_DIR` worked while the levels did not. A flag the user did not type
+  is now left unset, giving `flag > env > config file > default`. A run with no flag and no
+  env is unchanged: the literals removed here were the engine's own defaults. See
+  `docs/global-flags.md` and `docs/architecture.md` §9.
+
+- **A bare key written after a class-name block now reaches a
+  dependency-injected parameter.** Config precedence is document order, last spec
+  wins — but DI copied a selected class-name block into the synthesized marker's
+  kwargs, which took it out of the document, and a value with no position cannot
+  lose that contest. `Trainer: {lr: 0.5}` therefore beat a later `lr: 0.9` — and
+  every `--lr` override — unconditionally. The class-name branch no longer
+  hoists: the block is confluid's own addressed-block spelling and is read from
+  the context document where it was written. Param-name blocks
+  (`widget: {size: 7}`) and the flat-config fallback still hoist, neither having
+  a spelling confluid can match on its own. A bare key written *above* the block
+  still loses to it, and `Trainer: {}` / YAML-null `Trainer:` still mean
+  "construct with defaults". Note for existing configs: one that relied on the
+  block outranking a *later* top-level key resolves differently now — move that
+  key above the block to keep the old value.
+
+- **A CLI override now outranks a key the document already declares.** Confluid
+  has one precedence rule — document order, last spec wins — so a bare override
+  left to cascade (see the `**kwargs` fix below) beats a value addressed at a
+  node only by sitting later. `deep_merge` appends a *new* key, but replaces an
+  existing one **in place**, which handed the CLI value that key's original
+  position: with a top-level `run_name: from_yaml` on line 1 and a marker
+  further down setting its own `run_name`, `--run_name from_cli` lost the
+  contest and was discarded. Nothing warned — the key *was* used, just with the
+  file's value; only confluid's DEBUG `override:` line showed it. Every bare
+  override key is now moved to the end of the document after the merge
+  (`_move_cli_keys_last`), which is where the user typed it. Dotted overrides
+  are unaffected: they are written straight into the target's kwargs, where
+  order does not arbitrate.
+
+- **A dotted `--head.key` override that addresses nothing now warns instead of
+  vanishing.** The dotted form targets an instance by its YAML `name:`; aimed at
+  anything else — most often a slot declared in code, `--optimizer.lr 0.001` —
+  the value expanded into a top-level block that matched no node, so it was
+  silently discarded and the run proceeded on the default looking configured.
+  That is the failure the dropped-token warning already guards against, one step
+  further in. The warning names the offending key and the spelling that does
+  work. A head that a marker claims by `name:`, that the document already has as
+  a key, or that names a registered class stays silent — so nothing that
+  previously applied now warns. `merge_overrides_into_fluids` returns the set of
+  dotted keys it claimed (it previously returned `None`); the extra `_matched`
+  parameter is internal recursion state.
+
+- **…and that warning no longer fires on two spellings that DO reach a node.**
+  Confluid's dotted grammar has more legal heads than an instance `name:`: the
+  glob segments (`--**.lr` reaches every accepting descendant, `--*.lr` the
+  direct children) route by shape rather than by naming anything, and a
+  multi-hop path (`--runner.opt.lr`) floats its first segment and then takes
+  strict one-level hops. Both were reported as *"matched nothing and was
+  ignored"* while the value landed — for `--**.lr`, confluid's own report says
+  `applied=[('lr', "… 'opt'", "glob '**'")]`. Glob heads are now skipped, and a
+  head that names a marker counts as addressed even when its tail is not
+  something liquifai can write there (routing a multi-hop tail is confluid's
+  job; a tail the target refuses is a wrong-*key* failure, which confluid
+  reports itself). The motivating `--optimizer.lr` case still warns.
+
+### Changed
+
+- **CLI overrides are appended in the order typed.** `_move_cli_keys_last`
+  now re-seats EVERY override key's top-level head (bare keys and
+  dotted-expanded heads alike) at the end of the document, iterating in typed
+  CLI order — a head mentioned twice seats at its last mention. Previously
+  only BARE keys moved, which forced every bare flag after every dotted flag
+  regardless of what was typed (`--lr 0.2 --Trainer.lr 0.1` produced 0.2 on
+  Trainer in BOTH flag orders) and left a dotted override folded into a
+  pre-existing document block at the BLOCK's early position, where a later
+  bare document key silently beat it (`--Trainer.lr 0.1` against
+  `Trainer: {layers: 8}` + trailing `lr: 0.9` trained at 0.9). Both now
+  answer 0.1. Flag order carries meaning: the CLI behaves exactly as if its
+  keys were appended to the end of the config, in the order typed — last
+  typed wins where flags overlap. Known accepted trade: re-seating a
+  pre-existing block moves its unrelated keys' precedence with it (pinned as
+  documented behaviour in the seating group of
+  `tests/test_override_broadcast.py`). Rationale: `docs/architecture.md` §4
+  → *Amendment: the CLI keys are appended in the order typed*.
+
+- **"Did this override reach anything?" is now answered by confluid's report,
+  not guessed.** When CLI overrides were applied, `run_command` wraps DI
+  materialization in `confluid.collect_report()` and warns — before the
+  command body runs — for every override the report says matched nothing.
+  The pre-materialization heuristic (`_warn_unmatched_dotted_overrides`) is
+  deleted: it re-derived confluid's addressing model and had been wrong twice
+  (glob heads and multi-hop paths were reported "ignored" while the value
+  landed). Two visible changes: a BARE override no object accepts now warns
+  too (`--max_pcaks 3` used to run the job on defaults, silently — the old
+  rule structurally could not see bare keys), and the warning now fires at
+  execution time (phase 6) rather than during override application (phase 5).
+  `merge_overrides_into_fluids` no longer returns the matched-head set
+  (returns `None`); `LiquifyContext` gains a `cli_overrides` field. Requires
+  confluid > 0.3.0's report fix (a cascade-delivered leaf satisfies its
+  glob-registered candidate). A run without CLI overrides does not engage the
+  report machinery at all.
+
+- **`liquifai.bridge`: `columns` is typed `Any`** on `ExposeSpec` / `CustomSpec`
+  and the `@expose` / `@custom` decorators (was `Tuple[Tuple[str, str], ...]`),
+  so a consumer's presenter can accept a richer column shape than a plain
+  pairs-tuple — the same "opaque to the engine" treatment `options` already had.
+  Inside the provisional `liquifai[bridge]` extra, which sits outside the
+  version contract.
+
+- **A bare `--key value` override no longer becomes a constructor argument of a
+  `**kwargs` class.** Writing a key into a marker's own kwargs is confluid's
+  ADDRESSED channel, so what lands there is passed to the **constructor** while a
+  bare cascading key becomes a post-init attribute. `merge_overrides_into_fluids`
+  wrote every accepted key there, which erased that distinction — and for a target
+  with a `**kwargs` constructor the accept-list is "everything", so *any* bare CLI
+  override was delivered as though the user had addressed it at that node. The
+  visible failures were a run-identity flag reaching a metric
+  (`ValueError: Unexpected keyword arguments: run_name`, raised by the metric
+  library from a call site nowhere near the config) and the same flag reaching a
+  dataset loader, where nothing raised at all — it silently became part of a cache
+  key. Note the asymmetry that made this a CLI-only bug: a top-level *YAML* key
+  stays bare and has always landed as an attribute, so a working config broke the
+  moment `--run_name` was added. Such a key is now left in the document for
+  confluid's own broadcasting to deliver with the right provenance (new predicate
+  `confluid.accepts_any_key`, hence the dependency floor). A class that
+  **declares** the key is unaffected and still receives it as a constructor
+  argument, so `--num_workers 8` and friends are unchanged.
+
+- **A flat config's top-level keys now reach a command parameter annotated `Any`.**
+  DI has always built a parameter annotated with a *configurable class* against the
+  loaded document, which is what makes broadcasting work (a top-level YAML key
+  injecting into the same-named constructor parameter). A parameter annotated `Any`
+  took a different route — the raw `Fluid` was deep-flowed in isolation — so every
+  top-level key was dropped, and dropped **silently**: a `dataset:` became `None`, a
+  `max_epochs: 3` quietly reverted to the parameter default and the run looked
+  configured. This is not an edge case: a generic runner (one command that executes
+  a trainer, an evaluator or a converter, whichever the YAML names) cannot annotate a
+  single class, so `Any` is the only honest annotation. `di.deep_flow` now takes an
+  explicit `context=` — the loaded document — and builds document-shaped `Fluid`s with
+  `confluid.materialize` against it. An already-built instance's `Fluid` attributes are
+  deliberately *not* broadcast into; `!lazy:` still stays deferred.
+
+- **Error messages no longer lose bracketed text to Rich markup.** The failure
+  renderer interpolated untrusted exception text into a markup string, so any
+  bracketed run Rich read as a style vanished — an install hint reading
+  `pip install 'myapp[extra]'` printed as `pip install 'myapp'`, a wrong command
+  handed to the user with no sign anything was lost. The message is now escaped;
+  the `Error:` prefix keeps its styling.
 
 ## [0.1.0] — 2026-07-27
 

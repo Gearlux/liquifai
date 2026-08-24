@@ -34,7 +34,7 @@ import random
 from typing import Any, List, Literal, Optional, Tuple
 
 import confluid
-from confluid import Lazy, LazyClass, NoBroadcast, flow
+from confluid import NoBroadcast, Partial, PartialClass, flow
 
 from liquifai import LiquifyApp
 from liquifai.exceptions import LiquifaiError
@@ -168,7 +168,7 @@ class Trainer:
     Args:
         model: The model to fit (``!class:LinearModel()`` in YAML).
         data: The dataset (``!class:SyntheticData()``).
-        optimizer: DEFERRED — annotated ``Lazy``, so ``flow_mode="auto"``
+        optimizer: DEFERRED — annotated ``Partial``, so ``flow_mode="auto"``
             leaves it unbuilt and ``fit()`` flows it with the model's params.
         max_epochs: Training length.
         tolerance: Early-stop when the loss improves less than this.
@@ -179,7 +179,7 @@ class Trainer:
         self,
         model: Optional[LinearModel] = None,
         data: Optional[SyntheticData] = None,
-        optimizer: Optional[Lazy[GradientDescent]] = None,
+        optimizer: Optional[Partial[GradientDescent]] = None,
         max_epochs: int = 400,
         tolerance: float = 1.0e-9,
         log_every: int = 100,
@@ -201,7 +201,7 @@ class Trainer:
         model, data = self._require()
         # The canonical runtime injection: the !lazy: optimizer finally gets
         # the one argument only the run can supply — the live model.
-        opt = flow(self.optimizer if self.optimizer is not None else LazyClass(GradientDescent), model=model)
+        opt = flow(self.optimizer if self.optimizer is not None else PartialClass(GradientDescent), model=model)
         assert isinstance(opt, GradientDescent)
         train = data.split("train")
         previous = float("inf")

@@ -72,12 +72,38 @@ are flowed before the command runs:
 - **`"manual"` (default):** injected kwargs are passed unchanged. Nested
   `!class:` stubs stay deferred — domain code is responsible for flowing them.
 - **`"auto"`:** every kwarg is deep-flowed before the call. Attributes annotated
-  with `confluid.Lazy` stay deferred so domain code can still flow them at
+  with `confluid.Partial` stay deferred so domain code can still flow them at
   runtime with extra kwargs (the classic `configure_optimizers` pattern:
   `flow(self.optimizer, params=self.parameters())`). Any non-`Lazy` `Class`
   stub that can't be instantiated raises immediately.
 
 An invalid mode raises `CommandDefinitionError` at decoration time.
+
+### Flat configs and `Any`-annotated parameters
+
+Under `flow_mode="auto"`, an injected object is built **against the loaded
+document**, so the config can be *flat*: a top-level key injects into the
+constructor parameter of the same name, with no nesting and no `!ref:`.
+
+```yaml
+runnable: !class:mypkg.Trainer
+  model: !lazy:mypkg.Backbone { name: resnet18 }
+
+dataset: !class:mypkg.Dataset { path: ./data }
+max_epochs: 3          # -> Trainer(max_epochs=3)
+```
+
+This works whether the parameter is annotated with a configurable class
+(`def train(trainer: MyTrainer)`) or with `Any` (`def run(runnable: Any)`). The
+`Any` form matters for a **generic runner** — one command that executes a
+trainer, an evaluator or a converter, whichever the YAML names — where no single
+class can be named in the signature.
+
+> **Fixed in 0.1.1.** Before that release the `Any` form built the object in
+> isolation, so every top-level key was dropped *silently*: `dataset:` became
+> `None`, `max_epochs: 3` reverted to the parameter default, and the run looked
+> configured. If you call `liquifai.di.deep_flow` yourself, pass the document as
+> `context=` — without it you get the old, silent behaviour.
 
 ## Positional arguments (`positionals=[...]`)
 
@@ -152,8 +178,33 @@ as required.
 ## Default command redirection
 
 `@app.command(default=True)` marks the command that runs when no command token
-is given — `my-app --lr 0.1` then routes straight to it (and, combined with
-promotion, `my-app experiment.yaml` too).
+is given — `my-app --lr 0.1` routes straight to it. Its **arguments bind without
+the name too**: a leading token that names no command is the default command's
+first positional, or its promoted config for a `@script_command(default=True)`:
+
+```python
+@app.command(name="workspace", default=True, positionals=["workspace"])
+def workspace(workspace: str = "") -> None:
+    ...
+
+@app.script_command(name="run", default=True)
+def run(threshold: float = 0.5) -> None:
+    ...
+```
+
+```bash
+my-app w.yaml                 # workspace="w.yaml"  — same as `my-app workspace w.yaml`
+my-app --workspace w.yaml     # the flag form still works
+my-app other                  # a real command name always wins over the positional
+my-app experiment             # script default: promotes ./config/experiment.yaml (any search tier)
+```
+
+Binding follows the explicit-command rules exactly: only *leading* tokens bind
+(`my-app --lr 0.1 w.yaml` leaves `w.yaml` to the override parser, as `cmd --lr
+0.1 w.yaml` would), a token that resolves to no config file is not swallowed,
+and a default command that declares no positionals and is not a script command
+behaves as before. TAB completion hints the positional at a bare prompt
+(`my-app <TAB>` → `<workspace>` beside the command names).
 
 ## Runnable examples
 

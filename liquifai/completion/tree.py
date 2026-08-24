@@ -122,6 +122,9 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "name": app.name,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
+        # The default command by name (None when the app has none): the walk binds
+        # its arguments without a name token, and TAB hints them at a bare prompt.
+        "default": next((n for n, f in app._commands.items() if f is app._default_cmd), None),
         # All resolvable sub-app names (canonical + aliases) — kept for descent.
         # The path threaded into a sub-app uses its CANONICAL name (aliases map
         # back) so a sub-app and its alias share one value-cache key namespace.

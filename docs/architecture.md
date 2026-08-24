@@ -158,6 +158,11 @@ forked loop.
   that was going to parse the YAML anyway.
 - `Invocation.remaining_tokens` carries `Token`s rather than strings, so later
   phases can still distinguish an option from a post-`--` literal.
+- The default command is one more `Nav` question (`default_command()`), so
+  `app w.yaml` binds the positional for dispatch AND hints it for TAB from the
+  same branch. Because no token equals the command's name in that case, the
+  walk reports where the arguments start (`Walk.args_index`) instead of letting
+  completion search the line for the name.
 
 **Example.** The adapter is the whole cost of joining the walk:
 
@@ -244,6 +249,235 @@ mode) — but each one must be classified as addressed or bare and routed to the
 matching predicate. Never reintroduce a local accept list, and never read a
 `__confluid_*__` marker directly from here; if a new gate is needed, it belongs
 in confluid next to the ones it joins.
+
+### Amendment: asking is not the same as delivering
+
+*2026-08-03*
+
+The consequence above — *"`**kwargs` targets became CLI-overridable, because they
+always were YAML-overridable"* — was right about **settability** and wrong about
+**delivery**, and the gap took a year's worth of confusing failures to surface.
+
+YAML delivers a bare key to a `**kwargs` class as a post-init **attribute**.
+liquifai delivered it by writing into `Fluid.kwargs`, which is confluid's
+*addressed* channel — so it arrived as a **constructor argument**. Deferring the
+question to confluid while re-implementing the answer's delivery put the two back
+out of step, in the one place the predicates cannot warn about: for a target with
+no accept list, `accepts_broadcast` says yes to **every key in the document**, so
+every bare override was handed to somebody else's constructor.
+
+What that looked like in practice: `--run_name x` reached a metric's constructor
+and the metric library raised `Unexpected keyword arguments`, from a call site
+nowhere near the config; the same flag reached a dataset loader, where nothing
+raised at all and it silently became part of a cache key. The tell that this was
+liquifai's bug rather than the engine's: a top-level *YAML* `run_name:` had always
+been fine, so a working config broke the moment the flag was added.
+
+**Decision.** confluid gained a third predicate, `accepts_any_key(target)` — not
+"may this key land?" but "does this target discriminate between keys at all?" —
+and the bare branch checks it **first**. A target that answers `True` is skipped
+rather than written; `apply_overrides` has already merged the key into the
+document, so confluid's own broadcasting delivers it with the right provenance.
+A class that *declares* the key is untouched and still receives it as a
+constructor argument.
+
+```python
+if accepts_any_key(cls):
+    continue                      # no accept-list -> let it cascade as a BARE key
+elif accepts_broadcast(cls, k):
+    data.kwargs[k] = v            # declared -> an argument is what was meant
+```
+
+**Consequences.**
+
+- Delivery now follows the same split as settability: liquifai chooses the
+  *channel* from the same predicate family confluid uses internally, instead of
+  writing into the addressed channel unconditionally.
+- Nothing is dropped. A `**kwargs` target still receives the key, as an attribute
+   — verified end to end rather than argued: the metric builds *and*
+  `metric.run_name` is set.
+- The rejected alternative was to catch the constructor's `ValueError`, parse the
+  offending keys out of its message, and retry without them. It fails on all
+  three counts that matter: it only catches libraries that **validate** (the
+  dataset-loader case raised nothing, and that is the more dangerous half), it
+  couples liquifai to every upstream library's error-message spelling, and it
+  re-runs a constructor that may already have had side effects.
+
+**What you may change.** The narrowing is deliberately minimal — it moves only
+the targets that have no accept list. Removing the bare-key write *entirely* (and
+letting confluid broadcast every override) is the tidier end state and is on the
+backlog, blocked on proving the coverage first: a marker never materialized
+against the document would silently stop seeing overrides.
+
+### Amendment: delivering is not the same as winning
+
+*2026-08-04*
+
+Handing a key to confluid's broadcast, as the amendment above decided, makes its
+delivery subject to confluid's precedence rule — and confluid has exactly one:
+**document order, last spec wins, no specificity tiers**. So a cascading override
+does not beat a value addressed at a node by being an override. It beats it by
+sitting *later in the document*.
+
+`deep_merge` gives that away for free only when the key is new — a fresh
+top-level key is appended, i.e. last. When the document *already declares* the
+key, merge replaces it **in place**, and the CLI value inherits that key's
+original position:
+
+```yaml
+run_name: from_yaml          # line 1 — and the CLI value lands here
+runnable:
+  metric: !class:SomeMetric  # a **kwargs target
+    run_name: addressed_in_yaml
+```
+
+`--run_name from_cli` was silently discarded: the marker's own key sits later, so
+it won. Nothing warned, because from the engine's side nothing was wrong — the
+key *was* used, with the file's value. Only confluid's DEBUG `override:` line
+showed the CLI value losing the contest.
+
+**Decision.** Every bare override key is moved to the END of the top-level
+mapping after the merge (`overrides._move_cli_keys_last`). The user typed it
+after the whole file; document-last is the honest encoding of that.
+
+```python
+data = deep_merge(data, parsed)
+data = expand_dotted_keys(data)
+for key in parsed:                    # the CLI spoke last -> it sits last
+    if "." not in key and key in data:
+        data[key] = data.pop(key)
+```
+
+**Consequences.**
+
+- Precedence stays confluid's single rule. The rejected alternative was to ask
+  for a CLI *tier* that outranks document order — which is the specificity
+  ladder confluid deliberately does not have, and adding one for a single
+  front-end would make "why did my knob not take?" un-answerable from the
+  document alone.
+- Only **bare** keys move. A dotted `--<name>.<key>` is written straight into the
+  target's kwargs, where order does not arbitrate; and moving its expanded block
+  would reorder YAML content the user never overrode.
+- Positionals are unaffected: they land in `config_data` before overrides, so an
+  explicit `--name` still wins over the positional slot.
+
+**What you may change.** If the bare-key write is ever removed entirely (see
+above), this repositioning becomes the *only* thing that makes a CLI override
+win, not just the thing that makes a cascading one win — so it must be kept and
+its pin (`test_flat_override_beats_a_key_the_document_already_declares`) treated
+as load-bearing rather than incidental.
+
+### Amendment: a hoisted block has no position
+
+*2026-08-04*
+
+The same root cause, one layer over and on a different code path. DI resolves a
+`@configurable` parameter by selecting a config block and copying it into a
+synthesized marker's kwargs:
+
+```python
+instance = confluid.Target(cls_name)
+instance.kwargs.update(config_block)          # <- the block leaves the document
+kwargs[name] = confluid.load(instance, context=context.config_data)
+```
+
+For a **class-name** block that copy is what breaks precedence. `Trainer: {lr:
+0.5}` is confluid's own addressed-block spelling — it reads it out of the context
+document, at the position the author wrote it. Hoisted into the marker, it is no
+longer *at* any position, and a value with no position cannot lose the one contest
+confluid runs. Measured on `{lr: 0.1, Trainer: {lr: 0.5}}` with `--lr 0.9`, after
+the repositioning above has correctly produced `['Trainer', 'lr']`:
+
+```
+materialize(Instance(Trainer, **block), context=doc)  ->  0.5   # hoisted
+materialize(Instance(Trainer),          context=doc)  ->  0.9   # left in place
+```
+
+**Decision.** The class-name branch does not hoist. The other two selections keep
+copying, because neither has a spelling confluid recognises on its own: a
+param-name block (`widget: {size: 7}`) matches by class name or instance `name:`,
+and a synthesized marker has neither; the flat-config fallback is the whole
+document, which is already the context.
+
+**Consequences.**
+
+- One rule now governs every spelling reaching a DI-injected parameter, so a CLI
+  override wins over a class-name block and a bare key written *above* one still
+  loses to it. Both directions are pinned — a fix that simply made the bare key
+  win would be a specificity tier by another name.
+- Behaviour changes for existing configs: a bare key written *after* a class-name
+  block now reaches the injected instance where the block previously always won.
+  A config that relied on the block winning must move the key above it.
+- The empty-block contract is untouched. `Trainer: {}` and YAML-null `Trainer:`
+  still mean "construct with defaults" — confluid applies an empty block to
+  nothing, which is what the hoist did too.
+
+**What you may change.** The param-name and flat-fallback branches are the
+remaining hoists, and they have the same latent shape. Removing them needs a
+spelling confluid can match — giving the synthesized marker a `name:` would make
+the param-name block addressable — and is only worth doing together with the
+`Fluid.kwargs` removal already on the backlog.
+
+### Amendment: the CLI keys are appended in the order typed
+
+*2026-08-13 (supersedes "only bare keys move" above)*
+
+The 2026-08-04 repositioning moved **only bare** override keys to the end. That
+forced every bare flag after every dotted flag regardless of what the user
+typed, and left a dotted override's expanded block wherever the document put
+it. Two measured consequences:
+
+```bash
+myapp run c.yaml --lr 0.2 --Trainer.lr 0.1     # doc: two markers
+# -> Trainer.lr = 0.2 in BOTH flag orders — the bare key always seated last,
+#    so "override all lr, except Trainer's" was unreachable from the CLI.
+```
+
+```yaml
+Trainer:            # doc line 1
+  layers: 8
+t: {_target_: Trainer}
+lr: 0.9             # doc last line
+```
+```bash
+myapp run c.yaml --Trainer.lr 0.1
+# -> Trainer.lr = 0.9. expand_dotted_keys folded the override into the
+#    EXISTING block at line 1, so the doc's later bare key silently beat the
+#    value the operator typed. With no pre-existing block the same flag WON
+#    (the head was appended, i.e. last) — one flag, two outcomes, decided by
+#    whether the file happened to declare a block.
+```
+
+**Decision.** `_move_cli_keys_last` re-seats **every** override key's top-level
+head — bare and dotted-expanded alike — at the end of the mapping, iterating in
+typed CLI order; a head mentioned twice seats at its last mention. The CLI's
+contract becomes one sentence: *flags behave exactly as if their keys were
+appended to the end of the document, in the order typed.* Both cases above now
+answer 0.1, and flag order arbitrates where flags overlap (last typed wins) —
+which is the shell convention, and the first time the relative order of CLI
+flags has meant anything rather than being forged by the mechanism.
+
+**Consequences.**
+
+- Re-seating a PRE-EXISTING block drags its unrelated keys' precedence with it:
+  on the doc above plus a trailing `layers: 4`, typing `--Trainer.lr 0.1` moves
+  the whole block last, so `layers: 8` beats the bare `layers: 4` the document
+  used to win with. Accepted: the alternative (leave pre-existing blocks in
+  place) keeps the silent-loss case, which is worse. Both directions are pinned
+  in the seating group of `tests/test_override_broadcast.py`.
+- Structural dotted overrides (`--run.name pilot` editing a plain `run:`
+  mapping) are unaffected — a plain value has no position contest, and the edit
+  happens before the re-seat.
+- The 2026-08-04 rationale stands unchanged one level up: this is still
+  position-encoding, not a "CLI beats YAML" tier, and precedence remains
+  answerable from the (effective) document alone.
+
+**What you may change.** Not the no-reorder property: the mechanism may never
+change the relative order of the CLI keys again — that is the defect this
+amendment removes. The known residual is that order-*independence* (specificity
+arbitration: the longest pattern wins regardless of flag order) is not
+expressible by seating at all; if that is ever wanted, it is a confluid-side
+override channel, not a cleverer seat order.
 
 ---
 
@@ -397,3 +631,149 @@ in v1.0; import it from its owning module instead:
 aliases resolve to the same objects. What must NOT change is the direction: do
 not add a new alias to `_DEPRECATED_ALIASES` (it is a shrinking set), and do
 not silence the warning to make a test suite quiet — migrate the import.
+
+## 8. Host facts reach a config as a scope AND as an injected key
+
+*(2026-08-22)*
+
+**Context.** Configs need the machine they run on. Two different positions want
+that fact and neither substitutes for the other: a *block* that applies only on
+one OS (`!scope:os=darwin`, overriding whole keys), and a *value* read inline
+(`logdir: /runs/${platform.os}`). Scope activation is a load input; interpolation
+reads the document. There is no single place to put a fact that serves both.
+
+The obvious mechanism for the value half — environment variables — was rejected.
+Confluid resolves a bare `${NAME}` through `os.getenv`, so exporting `os=darwin`
+would make `${os}` work verbatim, and it fails on its own terms: the variables
+leak into every child process, and on Windows Python upper-cases env keys, so
+setting `os` clobbers the system `%OS%`. A framework should not have to write to
+the process environment to answer a question about the process.
+
+**Decision.** Detect `os` and `device` once per run (`liquifai/host.py`) and
+publish each one twice:
+
+- **as scope activations**, PREPENDED to the activation list so anything the user
+  typed is later and wins confluid's last-write-wins map;
+- **as one injected document key**, `platform: {os, device}`, merged UNDER the
+  raw document before the interpolation pass, so `${platform.os}` resolves through
+  confluid's ordinary config-key path and the author's own keys win per key.
+
+Both come from the same effective value, so `--scope device=cpu` moves the block
+that fires *and* what `${platform.device}` reads.
+
+The activation is ADVISORY: confluid raises for a value a declared dimension does
+not carry (`No scope block matches os='darwin'`), which is the typo guard a typed
+`--scope` must keep — but a detected fact is not a typo, and a Mac must not fail
+on a document whose only `os` block names linux. So the auto copy is filtered
+against the document's declared values; a value the user typed is not.
+
+**Consequences.**
+
+- Every loaded document gains one top-level key. That is visible in a dumped or
+  logged config — useful provenance, and it means an app must not use `platform`
+  as a top-level key for something else (a non-mapping one is left alone, with a
+  warning).
+- The dotted spelling is mandatory. `${platform.os}` works and a bare `${os}`
+  cannot, because confluid dispatches a placeholder on its name shape.
+- `--os` / `--device` stay ordinary config overrides. Binding them as implicit
+  dimension flags would have been more convenient and would silently swallow a
+  `--device cpu` aimed at a constructor kwarg — measured: adding one
+  `!scope:device=…` block to a document changes `--device cpu` from reaching
+  `Trainer(device=...)` to reaching nothing.
+- Torch is consulted only when installed, and not at all for a dimension the
+  caller forced — `--scope device=cpu` skips the import.
+- Known limit: the filter reads positive declarations only, so a dimension with
+  both a positive block and a `!notscope:` twin drops the auto value and leaves
+  the negation active. The alternative was a second dimension walker here;
+  confluid's own scope module warns that two walkers over the same node kinds is
+  exactly how its earlier drift arose.
+
+**Example.**
+
+```yaml
+# one document, both positions
+workers: 8
+logdir: /runs/${platform.os}
+mac: !scope:os=darwin
+  workers: 0
+```
+
+```
+$ my-app -c cfg.yaml run            # on a Mac: workers=0  logdir=/runs/darwin
+$ my-app -c cfg.yaml run            # on Linux: workers=8  logdir=/runs/linux
+$ my-app -c cfg.yaml --scope os=windows run
+Error: No scope block matches os='windows'. This document declares os with: darwin
+```
+
+**What you may change.** The detectors, and the value set `device` may answer.
+What must NOT change: the auto activations stay PREPENDED (appending would let a
+detected fact beat a typed one), the injected namespace stays merged UNDER the
+document, and the filter applies to the auto copy ONLY — filtering a typed value
+would delete confluid's typo guard.
+
+## 9. A log flag the user did not type is forwarded UNSET
+
+*(2026-08-22)*
+
+**Context.** liquifai owns four log flags — `--level`, `--console-level`,
+`--file-level`, `--log-dir` — and configures the logging engine once, in
+`_bootstrap`, before the config file is read. The engine resolves every setting
+through its own four-layer hierarchy (`argument > LOGGAIR_* environment variable
+> loggair.yaml / pyproject / XDG > built-in default`) and returns on the first
+layer that holds a value.
+
+That last clause is the whole decision. An argument is layer one, so ANY value
+liquifai passes ends the search — including a value liquifai invented because
+the user typed nothing. The bootstrap used to do exactly that:
+
+```python
+console_level = self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+file_level = self.context.file_level or self.context.log_level or "DEBUG"
+```
+
+`"INFO"` and `"DEBUG"` were copies of the engine's own defaults, so a bare run
+behaved correctly and the bug stayed invisible — while `LOGGAIR_CONSOLE_LEVEL`
+and every `console_level:` config key were dead on arrival. The tell that it was
+an accident rather than a policy sat on the next line: `log_dir` was forwarded
+unset, which is why `LOGGAIR_DIR` worked all along.
+
+**Decision.** Forward `None` for every log setting no CLI flag named. liquifai
+contributes the flag layer and nothing else; the engine resolves the rest. The
+defaults are never spelled out here, because a default restated in a second
+place is a default that will drift.
+
+**Consequences.**
+
+- The observable order is `flag > environment variable > config file > default`.
+  The two middle layers reach a liquifai app for the first time.
+- liquifai does not rank the environment against the config file, and must not:
+  deferring means taking the engine's order whole. Re-ranking those two layers
+  is a change to the engine, for every setting at once — not something the CLI
+  may fake for the two it happens to expose.
+- A bare run is bit-identical to before, since the removed literals were the
+  engine's defaults. This is what makes the fix safe to ship without a flag day.
+- `--debug` still raises the console to `DEBUG`, because it IS a typed flag. It
+  yields to `--console-level`, which is more specific.
+- Adding a fifth layer to the engine needs no change here.
+
+**Example.**
+
+```python
+# liquifai/core.py — the flag layer, and only the flag layer
+console_level = self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else None)
+file_level = self.context.file_level or self.context.log_level
+```
+
+```console
+$ my-app run                                              # console INFO    (default)
+$ LOGGAIR_CONSOLE_LEVEL=DEBUG my-app run                  # console DEBUG   (env)
+$ LOGGAIR_CONSOLE_LEVEL=DEBUG my-app --level WARNING run  # console WARNING (flag)
+```
+
+**What you may change.** Which flags exist, and how they fold into one another —
+`--console-level` beating `--level` is liquifai's call, made entirely inside the
+flag layer. What must NOT change: an unset flag stays `None`. Never re-read a
+`LOGGAIR_*` variable here to forward its value as an argument — it type-checks,
+it passes every end-to-end test, and it re-creates this bug the moment the engine
+grows a layer liquifai does not mirror. `tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`
+pins the mechanism directly for that reason.

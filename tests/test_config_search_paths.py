@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterator
 import confluid
 import pytest
 
-from liquifai import LiquifyApp
+from liquifai import LiquifyApp, host
 from liquifai.context import set_context
 
 
@@ -38,10 +38,19 @@ def _capture_app() -> "tuple[LiquifyApp, Dict[str, Any]]":
 
     @app.script_command()
     def process() -> None:
-        seen["config"] = app.context.config_data if app.context else None
+        seen["config"] = _without_host_facts(app.context.config_data) if app.context else None
         seen["path"] = app.context.config_path if app.context else None
 
     return app, seen
+
+
+def _without_host_facts(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the ``platform:`` key liquifai injects into every document (:mod:`liquifai.host`).
+
+    These tests are about WHICH file was found, so they assert on the whole document to
+    catch anything else leaking in — and the host facts are the one key that is expected
+    to be there, whatever the file said."""
+    return {k: v for k, v in config.items() if k != host.NAMESPACE}
 
 
 def test_promoted_token_found_in_cwd_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

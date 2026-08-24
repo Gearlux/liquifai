@@ -82,8 +82,10 @@ class ExposeSpec:
     presentation: Presentation = "status"
     sdk_method: str = ""  # filled from the decorated function name
     policy: str = "auto"  # "auto" routes on presentation; else an explicit policy key
-    # presentation metadata forwarded to @operation
-    columns: Tuple[Tuple[str, str], ...] = ()
+    # presentation metadata forwarded to @operation, opaque to the engine (like `options`
+    # below) — a consumer's presenter may accept a richer shape than a plain column tuple
+    # (e.g. sairen's ColumnSpec, a lean/wide pair selected by a presentation-toggle flag)
+    columns: Any = ()
     title: str = ""
     empty: str = "No results"
     # call mapping
@@ -111,7 +113,7 @@ class CustomSpec:
 
     verb: str
     presentation: Presentation = "status"
-    columns: Tuple[Tuple[str, str], ...] = ()
+    columns: Any = ()
     title: str = ""
     empty: str = "No results"
     completions: Optional[Dict[str, Callable[..., Any]]] = None
@@ -122,7 +124,7 @@ def expose(
     verb: str,
     presentation: Presentation = "status",
     policy: str = "auto",
-    columns: Tuple[Tuple[str, str], ...] = (),
+    columns: Any = (),
     title: str = "",
     empty: str = "No results",
     params: Optional[List[P]] = None,
@@ -181,7 +183,7 @@ def custom(
     *,
     verb: str,
     presentation: Presentation = "status",
-    columns: Tuple[Tuple[str, str], ...] = (),
+    columns: Any = (),
     title: str = "",
     empty: str = "No results",
     completions: Optional[Dict[str, Callable[..., Any]]] = None,
