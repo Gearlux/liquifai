@@ -4,7 +4,7 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-24
 
 ### Added
 
@@ -50,50 +50,6 @@ All notable changes to liquifai are documented here. The format follows
   is now left unset, giving `flag > env > config file > default`. A run with no flag and no
   env is unchanged: the literals removed here were the engine's own defaults. See
   `docs/global-flags.md` and `docs/architecture.md` §9.
-
-### Changed (behavior)
-
-- **CLI overrides are appended in the order typed.** `_move_cli_keys_last`
-  now re-seats EVERY override key's top-level head (bare keys and
-  dotted-expanded heads alike) at the end of the document, iterating in typed
-  CLI order — a head mentioned twice seats at its last mention. Previously
-  only BARE keys moved, which forced every bare flag after every dotted flag
-  regardless of what was typed (`--lr 0.2 --Trainer.lr 0.1` produced 0.2 on
-  Trainer in BOTH flag orders) and left a dotted override folded into a
-  pre-existing document block at the BLOCK's early position, where a later
-  bare document key silently beat it (`--Trainer.lr 0.1` against
-  `Trainer: {layers: 8}` + trailing `lr: 0.9` trained at 0.9). Both now
-  answer 0.1. Flag order carries meaning: the CLI behaves exactly as if its
-  keys were appended to the end of the config, in the order typed — last
-  typed wins where flags overlap. Known accepted trade: re-seating a
-  pre-existing block moves its unrelated keys' precedence with it (pinned as
-  documented behaviour in the seating group of
-  `tests/test_override_broadcast.py`). Rationale: `docs/architecture.md` §4
-  → *Amendment: the CLI keys are appended in the order typed*.
-
-- **"Did this override reach anything?" is now answered by confluid's report,
-  not guessed.** When CLI overrides were applied, `run_command` wraps DI
-  materialization in `confluid.collect_report()` and warns — before the
-  command body runs — for every override the report says matched nothing.
-  The pre-materialization heuristic (`_warn_unmatched_dotted_overrides`) is
-  deleted: it re-derived confluid's addressing model and had been wrong twice
-  (glob heads and multi-hop paths were reported "ignored" while the value
-  landed). Two visible changes: a BARE override no object accepts now warns
-  too (`--max_pcaks 3` used to run the job on defaults, silently — the old
-  rule structurally could not see bare keys), and the warning now fires at
-  execution time (phase 6) rather than during override application (phase 5).
-  `merge_overrides_into_fluids` no longer returns the matched-head set
-  (returns `None`); `LiquifyContext` gains a `cli_overrides` field. Requires
-  confluid > 0.3.0's report fix (a cascade-delivered leaf satisfies its
-  glob-registered candidate). A run without CLI overrides does not engage the
-  report machinery at all.
-
-## [0.1.1] — unreleased
-
-_Patch release: seven bug fixes, no core API changes (one provisional-extra type
-widening, below). Requires `confluid>=0.3.0`. Stamp the date when tagging._
-
-### Fixed
 
 - **A bare key written after a class-name block now reaches a
   dependency-injected parameter.** Config precedence is document order, last spec
@@ -151,6 +107,41 @@ widening, below). Requires `confluid>=0.3.0`. Stamp the date when tagging._
   reports itself). The motivating `--optimizer.lr` case still warns.
 
 ### Changed
+
+- **CLI overrides are appended in the order typed.** `_move_cli_keys_last`
+  now re-seats EVERY override key's top-level head (bare keys and
+  dotted-expanded heads alike) at the end of the document, iterating in typed
+  CLI order — a head mentioned twice seats at its last mention. Previously
+  only BARE keys moved, which forced every bare flag after every dotted flag
+  regardless of what was typed (`--lr 0.2 --Trainer.lr 0.1` produced 0.2 on
+  Trainer in BOTH flag orders) and left a dotted override folded into a
+  pre-existing document block at the BLOCK's early position, where a later
+  bare document key silently beat it (`--Trainer.lr 0.1` against
+  `Trainer: {layers: 8}` + trailing `lr: 0.9` trained at 0.9). Both now
+  answer 0.1. Flag order carries meaning: the CLI behaves exactly as if its
+  keys were appended to the end of the config, in the order typed — last
+  typed wins where flags overlap. Known accepted trade: re-seating a
+  pre-existing block moves its unrelated keys' precedence with it (pinned as
+  documented behaviour in the seating group of
+  `tests/test_override_broadcast.py`). Rationale: `docs/architecture.md` §4
+  → *Amendment: the CLI keys are appended in the order typed*.
+
+- **"Did this override reach anything?" is now answered by confluid's report,
+  not guessed.** When CLI overrides were applied, `run_command` wraps DI
+  materialization in `confluid.collect_report()` and warns — before the
+  command body runs — for every override the report says matched nothing.
+  The pre-materialization heuristic (`_warn_unmatched_dotted_overrides`) is
+  deleted: it re-derived confluid's addressing model and had been wrong twice
+  (glob heads and multi-hop paths were reported "ignored" while the value
+  landed). Two visible changes: a BARE override no object accepts now warns
+  too (`--max_pcaks 3` used to run the job on defaults, silently — the old
+  rule structurally could not see bare keys), and the warning now fires at
+  execution time (phase 6) rather than during override application (phase 5).
+  `merge_overrides_into_fluids` no longer returns the matched-head set
+  (returns `None`); `LiquifyContext` gains a `cli_overrides` field. Requires
+  confluid > 0.3.0's report fix (a cascade-delivered leaf satisfies its
+  glob-registered candidate). A run without CLI overrides does not engage the
+  report machinery at all.
 
 - **`liquifai.bridge`: `columns` is typed `Any`** on `ExposeSpec` / `CustomSpec`
   and the `@expose` / `@custom` decorators (was `Tuple[Tuple[str, str], ...]`),
