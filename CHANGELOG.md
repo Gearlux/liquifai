@@ -8,6 +8,19 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **Host facts on every run — the `os` / `device` scopes and the `platform` namespace.**
+  `liquifai.host` detects the machine's OS (`darwin` / `linux` / `windows`) and compute
+  device (`cuda` / `mps` / `cpu`, from torch when it is installed) once per invocation, and
+  offers each one in both positions a config can use: a scope activation, so a document can
+  carry `!scope:os=darwin` blocks, and a `platform: {os, device}` key merged under the
+  document, so `logdir: /runs/${platform.os}` resolves. No environment variable is set or
+  read — a bare `${os}` is an env-var read in confluid and stays unresolved by design.
+  The author's own keys win per key (`platform: {device: gpu}` re-spells one fact for a
+  framework that needs another word), `--scope device=cpu` overrides detection and moves
+  both surfaces at once, and a detected value a document cannot use is dropped rather than
+  raised — while a value typed by hand keeps confluid's typo guard. `--os` / `--device`
+  remain ordinary config overrides. See `docs/host-facts.md` and `docs/architecture.md` §8.
+
 - **The default command's arguments bind without its name.** A leading token that
   names no sub-app or command is the default command's first positional
   (`app w.yaml` ≡ `app workspace w.yaml`) or — for the new
@@ -25,6 +38,18 @@ All notable changes to liquifai are documented here. The format follows
   dimension the document's `default_scopes:` names (`liquifai.report.show_scope_dimensions`,
   read from the RAW document via `confluid.discover_dimension_values` / `confluid.default_scopes`
   — the same walk `flags.bind_dimension_flags` binds the flags from). No dimensions, no block.
+
+### Fixed
+
+- **Log-level environment variables and config files are honoured again.** The bootstrap
+  passed a concrete `"INFO"` / `"DEBUG"` to the logging engine even when no flag named a
+  level, which short-circuited the engine's own resolution on its first layer and silently
+  shadowed `LOGGAIR_CONSOLE_LEVEL` / `LOGGAIR_FILE_LEVEL` and every `loggair.yaml` /
+  `pyproject.toml` / XDG `console_level:` key. `--log-dir` was already forwarded unset,
+  which is why `LOGGAIR_DIR` worked while the levels did not. A flag the user did not type
+  is now left unset, giving `flag > env > config file > default`. A run with no flag and no
+  env is unchanged: the literals removed here were the engine's own defaults. See
+  `docs/global-flags.md` and `docs/architecture.md` §9.
 
 ### Changed (behavior)
 
