@@ -76,7 +76,10 @@ def demo() -> None:
                 text=True,
                 check=True,
                 cwd=workdir,
-                env={**os.environ, **env},
+                # NO_COLOR: loguru colorizes under CI env vars, and ANSI codes between
+                # "|" and "DEBUG" would defeat the substring count below (the AGENTS
+                # example-parses-log-output mandate; same fix as the first loop).
+                env={**os.environ, "NO_COLOR": "1", **env},
             )
             shown = len([ln for ln in (proc.stdout + proc.stderr).splitlines() if "| DEBUG" in ln])
             resolved.append(shown)
