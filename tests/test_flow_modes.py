@@ -1,4 +1,4 @@
-"""Tests for ``script_command(flow_mode=...)`` — manual / auto + ``Lazy[T]``."""
+"""Tests for ``script_command(flow_mode=...)`` — manual / auto + ``Partial[T]``."""
 
 import sys
 from pathlib import Path
@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import confluid
 import pytest
-from confluid import Lazy
+from confluid import Partial
 
 from liquifai import LiquifyApp
 from liquifai.context import set_context
@@ -38,9 +38,9 @@ class _NeedsRuntimeKwarg:
 
 @confluid.configurable
 class _ContainerWithLazy:
-    """Holds a ``_NeedsRuntimeKwarg`` declared ``Lazy[Any]``."""
+    """Holds a ``_NeedsRuntimeKwarg`` declared ``Partial[Any]``."""
 
-    def __init__(self, name: str, optimizer: Lazy[Any] = None, model: Any = None) -> None:
+    def __init__(self, name: str, optimizer: Partial[Any] = None, model: Any = None) -> None:
         self.name = name
         self.optimizer = optimizer  # stays a Class stub under flow_mode="auto"
         self.model = model  # eagerly flowed
@@ -48,7 +48,7 @@ class _ContainerWithLazy:
 
 @confluid.configurable
 class _ContainerEager:
-    """Same shape as ``_ContainerWithLazy`` but no Lazy annotation — auto must fail."""
+    """Same shape as ``_ContainerWithLazy`` but no Partial annotation — auto must fail."""
 
     def __init__(self, name: str, optimizer: Any = None) -> None:
         self.name = name
@@ -61,10 +61,24 @@ def _run(app: LiquifyApp, argv: List[str], monkeypatch: Any) -> None:
     app.run()
 
 
-def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
-    """Default ``manual`` mode preserves nested Class stubs as Fluids."""
+def test_manual_mode_keeps_a_partial_nested_slot_deferred(tmp_path: Path, monkeypatch: Any) -> None:
+    """Default ``manual`` mode preserves a DEFERRED nested slot as a Fluid.
+
+    The trigger changed 2026-08-11: confluid merged its eager and deferred markers, so a
+    parens-less ``!class:X`` builds like any other target and deferral is asked for
+    explicitly. What manual mode promises is unchanged — it does not deep-flow what the
+    config said to leave unbuilt.
+    """
     config = tmp_path / "manual.yaml"
-    config.write_text("exporter: !class:_Exporter\n" "  name: m1\n" "  store: !class:_Store\n" "    path: /tmp/x\n")
+    config.write_text(
+        "exporter:\n"
+        "  _target_: _Exporter\n"
+        "  name: m1\n"
+        "  store:\n"
+        "    _target_: _Store\n"
+        "    _partial_: true\n"
+        "    path: /tmp/x\n"
+    )
     app = LiquifyApp(name="manual-app")
     captured: Dict[str, Any] = {}
 
@@ -79,7 +93,7 @@ def test_manual_mode_keeps_nested_class_stub(tmp_path: Path, monkeypatch: Any) -
     exporter = captured["exporter"]
     assert isinstance(exporter, _Exporter)
     assert exporter.name == "m1"
-    assert isinstance(exporter.store, Fluid), "manual mode must leave nested Class as a Fluid"
+    assert isinstance(exporter.store, Fluid), "manual mode must leave a partial slot deferred"
 
 
 def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> None:
@@ -102,7 +116,7 @@ def test_auto_mode_flows_nested_class_stub(tmp_path: Path, monkeypatch: Any) -> 
 
 
 def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -> None:
-    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Lazy.
+    """``auto`` mode surfaces flow failures loudly when an attr is NOT marked Partial.
 
     The flow failure is a ConfluidError, so the CLI failure contract renders
     it as a clean error + exit 1 (see ``test_failure_contract.py``); with
@@ -128,7 +142,7 @@ def test_auto_mode_raises_on_unflowable_stub(tmp_path: Path, monkeypatch: Any) -
 
 
 def test_auto_mode_honors_lazy_annotation(tmp_path: Path, monkeypatch: Any) -> None:
-    """Attributes declared ``Lazy[T]`` stay as Class stubs; non-Lazy ones flow."""
+    """Attributes declared ``Partial[T]`` stay as Class stubs; non-Partial ones flow."""
     config = tmp_path / "lazy.yaml"
     config.write_text(
         "container: !class:_ContainerWithLazy\n"
@@ -151,10 +165,10 @@ def test_auto_mode_honors_lazy_annotation(tmp_path: Path, monkeypatch: Any) -> N
 
     container = captured["container"]
     assert isinstance(container, _ContainerWithLazy)
-    # Lazy[Any]-marked param: stays deferred so domain code can flow it with
+    # Partial[Any]-marked param: stays deferred so domain code can flow it with
     # runtime kwargs (e.g. params=self.parameters()).
     assert isinstance(container.optimizer, Fluid)
-    # Non-Lazy attr: eagerly flowed.
+    # Non-Partial attr: eagerly flowed.
     assert isinstance(container.model, _Store)
     assert container.model.path == "/tmp/lazy-model"
 

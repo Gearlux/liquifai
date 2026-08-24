@@ -328,14 +328,14 @@ def _installed_version(package: str) -> str:
 def _build_client() -> PyPI:
     """Build the injected ``conn`` from the active liquifai context.
 
-    ``materialize`` with the loaded config as context means confluid
+    ``load`` with the loaded config as context means confluid
     BROADCASTS matching top-level keys into the constructor — so a YAML
     ``timeout: 3`` or a CLI override ``--timeout 3`` / ``--dry_run+``
     configures the client with no plumbing here.
     """
     ctx = get_context()
     cfg = ctx.config_data if ctx is not None and isinstance(ctx.config_data, dict) else {}
-    client = confluid.materialize(confluid.Instance("PyPI"), context=cfg)
+    client = confluid.load(confluid.Target("PyPI"), context=cfg)
     assert isinstance(client, PyPI)
     return client
 

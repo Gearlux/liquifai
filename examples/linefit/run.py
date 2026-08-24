@@ -44,7 +44,10 @@ def main() -> None:
     # 4. print-config dumps the MERGED config (file + CLI overrides), reloadable.
     out = run("print-config", "linefit.yaml", "--Trainer.max_epochs", "7")
     assert "max_epochs: 7" in out, f"override missing from the dump:\n{out}"
-    assert "!lazy:GradientDescent" in out, "the deferred optimizer must survive in the recipe"
+    # `dump()` emits the plain format, so the deferred optimizer round-trips as
+    # `_target_: GradientDescent` + `_partial_: true` rather than a `!lazy:` tag.
+    assert "_target_: GradientDescent" in out, "the optimizer must survive in the recipe"
+    assert "_partial_: true" in out, "the optimizer must survive DEFERRED in the recipe"
     frozen = APP_DIR / "frozen_ci.yaml"
     frozen.write_text(out[out.index("Trainer:") :])
     try:

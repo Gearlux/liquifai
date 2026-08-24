@@ -30,6 +30,10 @@ Arguments" block. The flag and `key=value` spellings still **parse** at
 runtime (positional, `key=value`, and `--flag` forms interoperate) — they just
 aren't advertised. A positional supplied via its flag spelling counts as
 filled: the `<placeholder>` hint moves past it.
+The default command's positional is hinted at a *bare* prompt too — `my-app
+<TAB>` lists `<workspace>` (or a script default's config files) beside the
+command names, because a leading token binds to the default command without
+its name (see [Default command redirection](commands-and-di.md#default-command-redirection)).
 
 **Completion is type- and state-aware at flag positions.**
 

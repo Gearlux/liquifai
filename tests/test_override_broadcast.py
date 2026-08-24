@@ -11,13 +11,15 @@ looser :func:`confluid.accepts_key`, bypassing those opt-outs.
 Other Fluids are left alone — no typo broadcasting.
 """
 
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
+import confluid
 import pytest
 from confluid import NoBroadcast, accepts_broadcast, accepts_key, configurable
-from confluid.fluid import Class
+from confluid.fluid import Target
 
-from liquifai.overrides import merge_overrides_into_fluids
+from liquifai.overrides import apply_overrides, merge_overrides_into_fluids
 
 
 @configurable
@@ -78,34 +80,34 @@ def test_accepted_keys_for_non_configurable_is_ctor_only() -> None:
 
 def test_merge_applies_ctor_kwarg_even_when_missing_from_yaml() -> None:
     """Override for `max_packs` must land even though YAML doesn't set it."""
-    fluid = Class(_WithDefaultKwarg, root="/data")
+    fluid = Target(_WithDefaultKwarg, root="/data")
     merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs.get("max_packs") == 1
 
 
 def test_merge_applies_property_kwarg_for_configurable() -> None:
-    fluid = Class(_WithProperty, x=0)
+    fluid = Target(_WithProperty, x=0)
     merge_overrides_into_fluids({"obj": fluid}, {"threshold": 42})
     assert fluid.kwargs.get("threshold") == 42
 
 
 def test_merge_skips_unknown_kwarg_on_non_configurable() -> None:
-    fluid = Class(_NotConfigurable, a=1)
+    fluid = Target(_NotConfigurable, a=1)
     merge_overrides_into_fluids({"obj": fluid}, {"typo": 99})
     assert "typo" not in fluid.kwargs
 
 
 def test_merge_preserves_existing_kwarg_override_path() -> None:
     """The legacy "already in kwargs" path still wins — post-construction toggles stay overridable."""
-    fluid = Class(_WithDefaultKwarg, root="/data", max_packs=7)
+    fluid = Target(_WithDefaultKwarg, root="/data", max_packs=7)
     merge_overrides_into_fluids({"src": fluid}, {"max_packs": 1})
     assert fluid.kwargs["max_packs"] == 1
 
 
 def test_dotted_override_targets_instance_by_name() -> None:
     """`--overlay.visualize true` lands only on the Fluid whose `name: overlay`."""
-    overlay = Class(_WithDefaultKwarg, root="/a", name="overlay")
-    ls = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    overlay = Target(_WithDefaultKwarg, root="/a", name="overlay")
+    ls = Target(_WithDefaultKwarg, root="/b", name="labelstudio")
     merge_overrides_into_fluids(
         {"o": overlay, "l": ls},
         {"overlay.max_packs": 1},
@@ -117,8 +119,8 @@ def test_dotted_override_targets_instance_by_name() -> None:
 
 def test_flat_override_still_broadcasts_to_named_instances() -> None:
     """Plain `--max_packs 1` continues to broadcast (legacy behaviour preserved)."""
-    a = Class(_WithDefaultKwarg, root="/a", name="overlay")
-    b = Class(_WithDefaultKwarg, root="/b", name="labelstudio")
+    a = Target(_WithDefaultKwarg, root="/a", name="overlay")
+    b = Target(_WithDefaultKwarg, root="/b", name="labelstudio")
     merge_overrides_into_fluids(
         {"a": a, "b": b},
         {"max_packs": 5},
@@ -129,7 +131,7 @@ def test_flat_override_still_broadcasts_to_named_instances() -> None:
 
 def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
     """Unknown names don't fall back to broadcast — avoid surprise matches."""
-    fluid = Class(_WithDefaultKwarg, root="/a", name="overlay")
+    fluid = Target(_WithDefaultKwarg, root="/a", name="overlay")
     merge_overrides_into_fluids(
         {"o": fluid},
         {"wrong_name.max_packs": 99},
@@ -141,7 +143,7 @@ def test_dotted_override_ignored_when_head_doesnt_match_name() -> None:
 
 def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
     """Without a YAML `name`, dotted keys can't target the instance."""
-    fluid = Class(_WithDefaultKwarg, root="/a")  # no name
+    fluid = Target(_WithDefaultKwarg, root="/a")  # no name
     merge_overrides_into_fluids(
         {"o": fluid},
         {"overlay.max_packs": 1},
@@ -150,8 +152,8 @@ def test_dotted_override_on_unnamed_fluid_is_noop() -> None:
 
 
 def test_merge_broadcasts_to_nested_fluids() -> None:
-    inner = Class(_WithDefaultKwarg, root="/inner")
-    outer = Class(_WithDefaultKwarg, root="/outer", sub=inner)
+    inner = Target(_WithDefaultKwarg, root="/inner")
+    outer = Target(_WithDefaultKwarg, root="/outer", sub=inner)
     merge_overrides_into_fluids({"s": outer}, {"max_packs": 5})
     # Both Fluids had `max_packs` in their ctor → both get the override.
     assert outer.kwargs["max_packs"] == 5
@@ -186,35 +188,83 @@ class _KwargsTarget:
 
 
 def test_flat_override_skips_class_that_opted_out_of_broadcast() -> None:
-    fluid = Class(_OptedOutOfBroadcast, lr=0.001)
+    fluid = Target(_OptedOutOfBroadcast, lr=0.001)
     merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9})
     assert fluid.kwargs["lr"] == 0.001  # bare key must not land
 
 
 def test_dotted_override_still_reaches_broadcast_opted_out_class() -> None:
     """The opt-out gates BARE keys only — an addressed write is still allowed."""
-    fluid = Class(_OptedOutOfBroadcast, lr=0.001, name="model")
+    fluid = Target(_OptedOutOfBroadcast, lr=0.001, name="model")
     merge_overrides_into_fluids({"m": fluid}, {"model.lr": 0.9})
     assert fluid.kwargs["lr"] == 0.9
 
 
 def test_flat_override_skips_no_broadcast_param_but_not_its_siblings() -> None:
-    fluid = Class(_WithNoBroadcastParam, lr=0.1, tag="x")
+    fluid = Target(_WithNoBroadcastParam, lr=0.1, tag="x")
     merge_overrides_into_fluids({"m": fluid}, {"tag": "y", "lr": 0.5})
     assert fluid.kwargs["tag"] == "x"  # NoBroadcast[str] slot untouched
     assert fluid.kwargs["lr"] == 0.5  # ordinary slot still broadcasts
 
 
-def test_flat_override_reaches_kwargs_constructor() -> None:
-    """A `**kwargs` target accepts everything in confluid — so must the CLI."""
-    fluid = Class(_KwargsTarget)
+def test_flat_override_is_not_written_into_a_kwargs_targets_own_kwargs() -> None:
+    """A `**kwargs` target cannot REFUSE a key, which is not the same as declaring it.
+
+    A marker's own kwargs are confluid's ADDRESSED channel — what lands there
+    becomes a CONSTRUCTOR ARGUMENT. Writing a bare key there claims the user aimed
+    it at this node, and for a target with no accept-list that claim is never
+    justified: every key in the document fits through a `**kwargs` signature. The
+    key is left to cascade instead (see the end-to-end test below).
+    """
+    fluid = Target(_KwargsTarget)
     merge_overrides_into_fluids({"m": fluid}, {"anything": 7})
-    assert fluid.kwargs["anything"] == 7
+    assert "anything" not in fluid.kwargs
+
+
+def test_flat_override_still_reaches_a_kwargs_target_as_an_attribute() -> None:
+    """Not written as an ARGUMENT is not the same as dropped — it still lands.
+
+    The end-to-end guarantee the test above only tells half of: `apply_overrides`
+    has already merged the key into the document, so confluid's own broadcasting
+    delivers it with BARE provenance — a post-init attribute rather than a
+    constructor argument.
+    """
+    doc = confluid.load(apply_overrides({"m": Target(_KwargsTarget)}, {"anything": 7}, []))
+    assert doc["m"].kw == {}  # the constructor was NOT called with it ...
+    assert doc["m"].anything == 7  # ... and it landed anyway
+
+
+def test_flat_override_beats_a_key_the_document_already_declares() -> None:
+    """A cascading override must not lose the position contest to the file.
+
+    The other half of leaving a bare key to cascade: delivery is then decided by
+    confluid's ONE precedence rule (document order, last spec wins), and
+    ``deep_merge`` replaces a key the document ALREADY has *in place* — so the
+    CLI value inherits line 1's position and a marker addressing the same key
+    further down wins. Nothing warns, because the key IS used; it just carries
+    the file's value. ``_move_cli_keys_last`` re-seats it at the end, which is
+    where the user typed it.
+    """
+    doc = {"anything": "from_yaml", "m": Target(_KwargsTarget, anything="addressed_in_yaml")}
+    built = confluid.load(apply_overrides(doc, {"anything": "from_cli"}, []))
+    assert built["m"].kw == {}  # still not a constructor argument ...
+    assert built["m"].anything == "from_cli"  # ... and the CLI value is the one that lands
+
+
+def test_flat_override_still_reaches_a_class_that_declares_the_key() -> None:
+    """The narrowing is scoped to targets with NO accept-list — nothing else moves.
+
+    A class that DECLARES the key keeps taking it as a constructor argument, which
+    is what every `--num_workers` / `--max_epochs` style override relies on.
+    """
+    fluid = Target(_WithDefaultKwarg)
+    merge_overrides_into_fluids({"m": fluid}, {"root": "/data"})
+    assert fluid.kwargs["root"] == "/data"
 
 
 def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
     """A `!class:` naming an unimportable module has no accept-list to consult."""
-    fluid = Class("not.importable.Anywhere", lr=0.001)
+    fluid = Target("not.importable.Anywhere", lr=0.001)
     merge_overrides_into_fluids({"m": fluid}, {"lr": 0.9, "unknown": 1})
     assert fluid.kwargs["lr"] == 0.9  # present in YAML -> overridable
     assert "unknown" not in fluid.kwargs  # absent -> not invented
@@ -222,12 +272,125 @@ def test_unresolvable_target_falls_back_to_keys_already_in_yaml() -> None:
 
 def test_merge_is_cycle_safe() -> None:
     """A marker graph with a back-edge is visited once, not until stack exhaustion."""
-    a = Class(_WithDefaultKwarg, root="/a")
-    b = Class(_WithDefaultKwarg, root="/b", sub=a)
+    a = Target(_WithDefaultKwarg, root="/a")
+    b = Target(_WithDefaultKwarg, root="/b", sub=a)
     a.kwargs["sub"] = b  # cycle
     merge_overrides_into_fluids({"a": a}, {"max_packs": 3})
     assert a.kwargs["max_packs"] == 3
     assert b.kwargs["max_packs"] == 3
+
+
+@configurable
+class _ReportRunner:
+    """End-to-end fixture: a runnable with one declared knob and no `optimizer`."""
+
+    def __init__(self, max_packs: int = 0, name: str = "") -> None:
+        self.max_packs, self.name = max_packs, name
+
+    def run(self) -> None:
+        pass
+
+
+def _warnings_from(config: object, argv_overrides: dict, monkeypatch: pytest.MonkeyPatch) -> list:
+    """Collect the post-materialization unused-override warnings — loggair does not reach caplog.
+
+    Mirrors ``core.run_command``'s ordering exactly: overrides applied first,
+    DI materialization inside ``confluid.collect_report()``, then
+    ``warn_unused_overrides`` judged from the report. The pre-materialization
+    heuristic this replaced could only guess (and guessed wrong on glob heads
+    and multi-hop paths); the report is confluid's own delivery ledger.
+    """
+    from liquifai import di
+    from liquifai import overrides as overrides_module
+
+    collected: list = []
+    monkeypatch.setattr(overrides_module.logger, "warning", lambda msg, *a, **k: collected.append(str(msg)))
+    cfg = apply_overrides(config, argv_overrides, [])
+    with confluid.collect_report() as rep:
+        with di.confluid_active_context(cfg):
+            for key, value in cfg.items():
+                di.deep_flow(value, context=cfg)
+    overrides_module.warn_unused_overrides(argv_overrides, rep)
+    return collected
+
+
+def test_a_dotted_override_that_addresses_nothing_is_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--optimizer.lr` against a code-declared slot used to be a SILENT no-op.
+
+    The dotted form addresses an instance by its YAML `name:`. Aimed anywhere else it
+    expands into a top-level block matching no node, so the value vanished and the run
+    proceeded on the default looking configured — the same failure class the
+    dropped-token warning exists to prevent, one step further in.
+    """
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"optimizer.lr": 0.5}, monkeypatch)
+    assert any("'optimizer.lr'" in w and "matched nothing" in w for w in warned)
+    assert any("--lr" in w for w in warned)  # names the spelling that does work
+
+
+def test_a_dotted_override_that_names_a_real_instance_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    fluid = Target(_WithDefaultKwarg, name="overlay")
+    warned = _warnings_from({"m": fluid}, {"overlay.max_packs": 3}, monkeypatch)
+    assert warned == [] and fluid.kwargs["max_packs"] == 3
+
+
+def test_a_dotted_override_onto_an_existing_config_key_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The head names a real document key, so the expanded block lands on real content."""
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"runnable.max_packs": 3}, monkeypatch)
+    assert warned == []
+
+
+def test_a_glob_headed_override_is_not_warned_about(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--**.lr` routes by SHAPE, not by naming a node — and it lands.
+
+    Confluid's dotted grammar has more legal heads than an instance `name:`:
+    `**` reaches every accepting descendant, `*` the direct children. Warning
+    that such a key "matched nothing and was ignored" states the opposite of
+    what confluid's own report says (`applied=[('lr', "… 'opt'", "glob '**'")]`).
+    """
+    fluid = Target(_WithDefaultKwarg, name="opt")
+    for head in ("**", "*"):
+        assert _warnings_from({"m": fluid}, {f"{head}.max_packs": 3}, monkeypatch) == []
+
+
+def test_a_multi_hop_dotted_override_at_a_named_instance_is_not_warned_about(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A head that names a real marker is addressed, however long the tail is.
+
+    `--runner.opt.lr` is confluid's strict-hop form: the head floats to the node
+    named `runner`, later segments are one-level hops. liquifai can only write a
+    single-segment tail, but "I could not write it here" is not "it addressed
+    nothing" — the previous rule warned that no object is named `runner` while
+    the marker named `runner` was the one being walked.
+    """
+    inner = Target(_WithDefaultKwarg, name="opt")
+    outer = Target(_WithDefaultKwarg, name="runner", sub=inner)
+    assert _warnings_from({"m": outer}, {"runner.opt.max_packs": 3}, monkeypatch) == []
+
+
+def test_a_dotted_override_at_an_unknown_head_is_still_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The narrowing must not swallow the case the warning was written for."""
+    inner = Target(_WithDefaultKwarg, name="opt")
+    warned = _warnings_from({"m": inner}, {"optimizer.max_packs": 3}, monkeypatch)
+    assert any("'optimizer.max_packs'" in w and "matched nothing" in w for w in warned)
+
+
+def test_a_bare_override_some_node_accepts_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare key that cascades into ANY accepting node is used — no warning."""
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"max_packs": 3}, monkeypatch)
+    assert warned == []
+
+
+def test_a_bare_override_nothing_accepts_is_warned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """NEW coverage the pre-materialization heuristic could never provide.
+
+    A bare key is a document-wide cascade, so "did it land?" is unknowable
+    before materialization — the old rule simply never warned about bare keys,
+    and a typo'd ``--max_pcaks 3`` ran the job on defaults, silently. The
+    report knows: a registered candidate no node accepted reports unused.
+    """
+    warned = _warnings_from({"runnable": Target(_WithDefaultKwarg)}, {"max_pcaks": 3}, monkeypatch)
+    assert any("'max_pcaks'" in w and "matched nothing" in w for w in warned)
 
 
 def test_broadcast_predicates_agree_with_the_merge() -> None:
@@ -237,5 +400,170 @@ def test_broadcast_predicates_agree_with_the_merge() -> None:
     assert accepts_broadcast(_WithDefaultKwarg, "max_packs")
 
 
+# --------------------------------------------------------------------------
+# CLI seating order — `_move_cli_keys_last` (2026-08-13)
+#
+# The rule these pin: CLI flags behave exactly as if their keys were APPENDED
+# to the end of the document, in the order typed. `_move_cli_keys_last`
+# re-seats every override key's top-level HEAD at the end — bare keys and
+# dotted-expanded heads alike — iterating in typed order, so the mechanism can
+# never reorder flags relative to each other. (The previous version moved only
+# BARE keys, which forced every bare flag after every dotted flag: a
+# `--lr 0.2 --Trainer.lr 0.1` pair produced 0.2 on Trainer in BOTH flag
+# orders, and a dotted override whose block pre-existed in the document kept
+# the block's early position and silently lost to a later bare document key.)
+#
+# The override dicts below are written in typed CLI order — that is what
+# `parse_override_args` produces and what the seat order is derived from.
+# --------------------------------------------------------------------------
+
+
+@configurable
+class _SeatTrainer:
+    def __init__(self, lr: float = 0.0, layers: int = 1) -> None:
+        self.lr = lr
+        self.layers = layers
+
+
+@configurable
+class _SeatOther:
+    def __init__(self, lr: float = 0.0) -> None:
+        self.lr = lr
+
+
+def test_a_specific_flag_typed_after_a_bare_flag_wins_on_its_class() -> None:
+    """`--lr 0.2 --Trainer.lr 0.1`: the class flag was typed LAST, so it wins on Trainer.
+
+    The previous seating made this outcome unreachable in ANY flag order: the
+    bare key was always forced to the very end, beating the class block it was
+    typed before.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"lr": 0.2, "_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["o"].lr == 0.2
+
+
+def test_a_bare_flag_typed_after_a_specific_flag_wins_everywhere() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2`: the bare flag was typed LAST, so it wins everywhere.
+
+    Flag order carries meaning now — last typed wins, the plain append model.
+    Together with the test above this pins that the two orders DISAGREE.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2}, []))
+    assert built["t"].lr == 0.2
+    assert built["o"].lr == 0.2
+
+
+def test_a_dotted_override_wins_even_when_its_block_preexists_in_the_document() -> None:
+    """The silent-loss case: an early class block + a late bare document key.
+
+    `deep_merge` folds `--_SeatTrainer.lr 0.1` into the document's EXISTING
+    `_SeatTrainer:` block, which used to keep the block's early position — so
+    the document's later `lr: 0.9` beat the value the operator typed, with no
+    warning. Re-seating the HEAD at the end puts the override where the user
+    typed it. The block's other keys ride along (see the drag pin below).
+    """
+    doc = {"_SeatTrainer": {"layers": 8}, "t": Target(_SeatTrainer), "lr": 0.9}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 8  # untouched sibling key still applies
+
+
+def test_distinct_dotted_heads_seat_at_their_own_typed_positions() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2 --Other.lr 0.3`: each head seats where typed.
+
+    Trainer's flag came before the bare one -> the bare wins on Trainer (0.2);
+    Other's flag came after it -> Other keeps 0.3. Distinct heads get distinct
+    seats, so a flag typed last cannot lose to a flag typed earlier.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatOther.lr": 0.3}, []))
+    assert built["t"].lr == 0.2
+    assert built["o"].lr == 0.3
+
+
+def test_a_head_mentioned_twice_seats_at_its_last_mention() -> None:
+    """`--Trainer.lr 0.1 --lr 0.2 --Trainer.layers 4`: the block re-seats at flag 3.
+
+    A head's seat is its LAST mention — the user's final word about Trainer
+    came after the bare flag, so the whole block (both its keys) sits last and
+    `lr: 0.1` beats the bare 0.2 on Trainer.
+    """
+    doc = {"t": Target(_SeatTrainer), "o": Target(_SeatOther)}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1, "lr": 0.2, "_SeatTrainer.layers": 4}, []))
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 4
+    assert built["o"].lr == 0.2
+
+
+def test_reseating_a_preexisting_block_drags_its_unrelated_keys() -> None:
+    """DOCUMENTED CONSEQUENCE, not a defect: a moved block moves ALL its keys.
+
+    The document says `layers: 4` last, so without the CLI it wins over the
+    early block's `layers: 8`. Typing `--_SeatTrainer.lr 0.1` re-seats the
+    whole block at the end — `layers: 8` now sits after the bare key and wins,
+    changed by a flag that never mentioned layers. Accepted trade (2026-08-13):
+    the alternative — not moving pre-existing blocks — keeps the silent-loss
+    case above, which is worse. If this pin breaks because the drag was fixed
+    WITHOUT regressing the silent-loss pin, delete it happily.
+    """
+    doc = {"_SeatTrainer": {"layers": 8}, "t": Target(_SeatTrainer), "layers": 4}
+    built = confluid.load(apply_overrides(doc, {"_SeatTrainer.lr": 0.1}, []))
+    assert built["t"].lr == 0.1
+    assert built["t"].layers == 8
+
+
+def test_a_structural_dotted_override_still_edits_a_plain_document_value() -> None:
+    """`--run.name pilot` edits the plain `run:` mapping commands read — unchanged.
+
+    The head is re-seated like any other, which is harmless for a plain value
+    (nothing contests it by position); the edit itself must keep working.
+    """
+    doc = {"run": {"name": "baseline"}, "t": Target(_SeatTrainer)}
+    tree = apply_overrides(doc, {"run.name": "pilot"}, [])
+    assert tree["run"]["name"] == "pilot"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_end_to_end_a_doomed_override_warns_from_the_real_run(
+    tmp_path: "Path", monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The full CLI path: run_command wraps DI in collect_report and warns pre-execution.
+
+    One doomed override (`--optimizer.lr` — no object named `optimizer`) and one
+    good one (`--max_packs`) through a real ``app.run()``: exactly the doomed key
+    is warned about, the good one lands, and the command still executes.
+    """
+    import sys
+
+    from liquifai import LiquifyApp
+    from liquifai import overrides as overrides_module
+    from liquifai.context import set_context
+
+    collected: list = []
+    monkeypatch.setattr(overrides_module.logger, "warning", lambda msg, *a, **k: collected.append(str(msg)))
+
+    seen: list = []
+    app = LiquifyApp(name="report-app")
+
+    @app.script_command(flow_mode="auto")
+    def go(runnable: Any) -> None:
+        seen.append(runnable)
+
+    config = tmp_path / "cfg.yaml"
+    config.write_text("runnable: !class:_ReportRunner\n")
+    monkeypatch.setattr(sys, "argv", ["report-app", "go", str(config), "--optimizer.lr", "0.5", "--max_packs", "3"])
+    set_context(None)
+
+    app.run()
+
+    (runner,) = seen
+    assert runner.max_packs == 3  # the good override landed
+    doomed = [w for w in collected if "'optimizer.lr'" in w and "matched nothing" in w]
+    assert doomed, collected
+    assert not any("max_packs" in w for w in collected)  # the good one is not warned about

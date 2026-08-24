@@ -102,3 +102,63 @@ def test_context_is_contextvar_isolated() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+# --------------------------------------------------------------------------- #
+# The rendered message is TEXT, not markup
+# --------------------------------------------------------------------------- #
+# `console.print(f"[red]Error:[/red] {exc}")` interpolates untrusted exception text
+# into a Rich MARKUP string, so any bracketed run Rich reads as a style is silently
+# eaten. The real-world casualty: an install hint naming a pip extra —
+# `pip install 'myapp[extra]'` rendered as `pip install 'myapp'`, a WRONG command
+# handed to the user with nothing to indicate anything was lost.
+
+
+def _raising_app(name: str, message: str) -> LiquifyApp:
+    from liquifai.exceptions import LiquifaiError
+
+    app = LiquifyApp(name=name)
+
+    @app.command()
+    def boom() -> None:
+        raise LiquifaiError(message)
+
+    return app
+
+
+def test_a_pip_extra_survives_the_error_renderer(monkeypatch: Any, capsys: Any) -> None:
+    app = _raising_app("markup-app", "Install it: pip install 'myapp[extra]'")
+    monkeypatch.setattr(sys, "argv", ["markup-app", "boom"])
+    set_context(None)
+
+    with pytest.raises(SystemExit) as exit_info:
+        app.run()
+
+    out = capsys.readouterr().out
+    assert exit_info.value.code == 1
+    assert "myapp[extra]" in out, f"Rich ate the extra — the printed command is wrong: {out!r}"
+
+
+def test_other_bracketed_text_is_not_swallowed(monkeypatch: Any, capsys: Any) -> None:
+    """Any bracketed run, not just pip extras — e.g. an index in a diagnostic."""
+    app = _raising_app("markup-app2", "index [0] out of range for [bold] rows")
+    monkeypatch.setattr(sys, "argv", ["markup-app2", "boom"])
+    set_context(None)
+
+    with pytest.raises(SystemExit):
+        app.run()
+
+    out = capsys.readouterr().out
+    assert "[0]" in out and "[bold]" in out
+
+
+def test_the_error_prefix_is_still_styled(monkeypatch: Any, capsys: Any) -> None:
+    """Escaping the MESSAGE must not disarm the renderer's own markup."""
+    app = _raising_app("markup-app3", "plain failure")
+    monkeypatch.setattr(sys, "argv", ["markup-app3", "boom"])
+    set_context(None)
+
+    with pytest.raises(SystemExit):
+        app.run()
+
+    out = capsys.readouterr().out
+    assert "Error:" in out and "[red]" not in out, "the style tag must be consumed, not printed"

@@ -9,8 +9,9 @@ import confluid
 import loggair
 from loggair import get_logger
 from rich.console import Console
+from rich.markup import escape
 
-from liquifai import completion_cli, di, flags, grammar, overrides, report, router
+from liquifai import completion_cli, di, flags, grammar, host, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
     CommandDefinitionError,
@@ -256,12 +257,16 @@ class LiquifyApp:
         name: Optional[str] = None,
         flow_mode: FlowMode = "manual",
         positionals: Optional[List[str]] = None,
+        default: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command that supports config-promotion.
 
         Args:
             name: Override the CLI name. Defaults to the function name with
                 underscores replaced by hyphens.
+            default: Run this command when no command token is given (see
+                :meth:`command`). A script default command promotes a leading
+                config token too — ``app experiment.yaml`` loads the file.
             flow_mode: How aggressively to flow injected objects before the
                 command runs.
 
@@ -269,10 +274,10 @@ class LiquifyApp:
                   ``!class:`` stubs stay deferred — domain code is responsible
                   for flowing them.
                 * ``"auto"``: deep-flow every kwarg before calling the command.
-                  Attributes annotated with :class:`confluid.Lazy` stay deferred
+                  Attributes annotated with :class:`confluid.Partial` stay deferred
                   so domain code can still flow them at runtime with extra
-                  kwargs (the marainer ``configure_optimizers`` pattern). Any
-                  non-``Lazy`` Class stub that can't be instantiated raises
+                  kwargs (the matrainer ``configure_optimizers`` pattern). Any
+                  non-``Partial`` Class stub that can't be instantiated raises
                   immediately.
             positionals: Ordered positional-argument names (see
                 :meth:`command`). The config-file promotion peek runs first, so
@@ -288,7 +293,7 @@ class LiquifyApp:
             # Store the mode on the function itself; run_command looks it up
             # via getattr, no per-app registry needed.
             setattr(f, "__liquifai_flow_mode__", flow_mode)
-            return self.command(name=cmd_name, positionals=positionals)(f)
+            return self.command(name=cmd_name, positionals=positionals, default=default)(f)
 
         return decorator
 
@@ -486,7 +491,11 @@ class LiquifyApp:
 
             log = self.context.logger if self.context is not None and self.context.logger is not None else logger
             log.debug(f"CLI failure traceback:\n{traceback.format_exc()}")
-            console.print(f"[red]Error:[/red] {exc}")
+            # `escape`: the message is untrusted text interpolated into a Rich MARKUP
+            # string, so any bracketed run that parses as a style is silently eaten —
+            # a hint like `pip install 'myapp[extra]'` would render as `pip install
+            # 'myapp'`, i.e. a WRONG instruction handed to the user.
+            console.print(f"[red]Error:[/red] {escape(str(exc))}")
             sys.exit(1)
 
     def _route(self, argv: List[str]) -> "Invocation":
@@ -520,16 +529,24 @@ class LiquifyApp:
         # `final_tokens` so those flags are routed into `scopes` instead of
         # being treated as config overrides.
         #
-        # We use ``load_config_with_paths`` here (instead of plain
-        # ``load_config``) so the resolved tree of YAML files — entrypoint
-        # plus every transitively ``include:``-d file — is captured for
-        # downstream consumers (e.g. marainer's trainer logs them as
+        # We pass ``return_paths=True`` here so the resolved tree of YAML
+        # files — entrypoint plus every transitively ``include:``-d file —
+        # is captured for
+        # downstream consumers (e.g. matrainer's trainer logs them as
         # artifacts to every wired Lightning logger).
         raw_config: Optional[Any] = None
         included_paths: List[Path] = []
         if config_path is not None and config_path.exists():
-            raw_config, included_paths = confluid.load_config_with_paths(config_path)
+            raw_config, included_paths = confluid.load(config_path, until="raw", return_paths=True)
             scopes, final_tokens = flags.bind_dimension_flags(scopes, raw_config, final_tokens)
+
+        # 3c. HOST FACTS — `os` / `device`, detected once and offered twice: as scope
+        # activations here, and as the `platform:` document key `_bootstrap` injects.
+        # PREPENDED, so a value the user typed (`--scope os=linux`, or a `--KEY VAL`
+        # the document's own dimension declaration promoted above) is later in the
+        # list and wins confluid's last-write-wins activation map.
+        facts = host.host_facts(host.forced_values(scopes))
+        scopes = host.auto_scopes(facts, raw_config) + scopes
 
         # 4. INITIALIZE STATE
         self.context = LiquifyContext(
@@ -538,6 +555,7 @@ class LiquifyApp:
             scopes=scopes,
             debug=debug,
             included_paths=included_paths,
+            host_facts=facts,
             **log_overrides,
         )
         set_context(self.context)
@@ -634,7 +652,7 @@ class LiquifyApp:
         ``raw_config`` is the pre-loaded raw dict (or Fluid) — passed in from
         the CLI path so we don't re-read the file. Internal callers (the
         public ``liquify`` shortcut) may also pass it; everyone else gets a
-        fresh ``load_config`` here.
+        fresh ``load(..., until="raw")`` here.
         """
         if not self.context:
             return
@@ -643,10 +661,18 @@ class LiquifyApp:
         if self.context.config_path:
             script_name = self.context.config_path.stem
 
+        # `None` when no CLI flag named a level — NOT loggair's default spelled
+        # out again. loggair resolves `args > LOGGAIR_* env > loggair.yaml /
+        # pyproject / XDG > defaults` and returns on the FIRST layer that has a
+        # value (`resolve_settings`), so forwarding a literal here silently
+        # shadows the env var and the config file. That is exactly why
+        # `LOGGAIR_DIR` worked while `LOGGAIR_CONSOLE_LEVEL` did not: `log_dir`
+        # below was already passed through unset. `--debug` stays a CLI flag and
+        # still wins. Pinned by `tests/test_log_levels.py`.
         console_level = (
-            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else "INFO")
+            self.context.console_level or self.context.log_level or ("DEBUG" if self.context.debug else None)
         )
-        file_level = self.context.file_level or self.context.log_level or "DEBUG"
+        file_level = self.context.file_level or self.context.log_level
 
         loggair.configure_logging(
             console_level=console_level,
@@ -660,11 +686,15 @@ class LiquifyApp:
         if self.context.config_path:
             if not self.context.config_path.exists():
                 raise ConfigNotFoundError(f"Configuration file not found: {self.context.config_path}")
-            data = raw_config if raw_config is not None else confluid.load_config(self.context.config_path)
+            data = raw_config if raw_config is not None else confluid.load(self.context.config_path, until="raw")
+            # Merge the host facts UNDER the document (the author's own keys win) so
+            # `${platform.os}` / `${platform.device}` resolve in the interpolation pass
+            # below — a bare `${os}` cannot, it is an env-var read (confluid/resolver.py:161).
+            data = host.inject_facts(data, self.context.host_facts)
             # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
             # string primitive. Overrides get the same expansion later, in
             # `overrides.apply_overrides`.
-            loaded = confluid.load(data, flow=False, scopes=self.context.scopes or None)
+            loaded = confluid.load(data, until="document", scopes=self.context.scopes or None)
             self.context.config_data = expand_strings(loaded)
             self.context.logger.info(f"Loaded configuration from: {self.context.config_path}")
             self.context.logger.trace(f"BOOTSTRAP CONFIG STATE: {self.context.config_data}")
@@ -692,19 +722,48 @@ class LiquifyApp:
         if not parsed_overrides and not deletions:
             return
 
+        # Kept for the post-materialization unused-override check in
+        # ``run_command`` — confluid's report says which of these matched nothing.
+        self.context.cli_overrides = dict(parsed_overrides)
+
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
         self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
     def run_command(self, func: Callable[..., Any]) -> Any:
-        """Execute with Dependency Injection."""
+        """Execute with Dependency Injection.
+
+        When CLI overrides were applied, the DI materialization runs inside
+        ``confluid.collect_report()`` and every override the report says
+        matched NOTHING is warned about BEFORE the command body runs
+        (:func:`liquifai.overrides.warn_unused_overrides`) — confluid is the
+        authority on delivery, so this replaces the deleted pre-materialization
+        heuristic that had to guess (and guessed wrong on glob heads and
+        multi-hop paths). Without overrides the report machinery is not
+        engaged at all — the default path stays zero-cost.
+        """
         if not self.context:
             return func()
-        kwargs = self._resolve_kwargs(func)
-        flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
-        if flow_mode == "auto":
-            with di.confluid_active_context(self.context.config_data):
-                kwargs = {k: di.deep_flow(v) for k, v in kwargs.items()}
+        context = self.context
+
+        def _materialize_kwargs() -> Dict[str, Any]:
+            kwargs = self._resolve_kwargs(func)
+            flow_mode: FlowMode = getattr(func, "__liquifai_flow_mode__", "manual")
+            if flow_mode == "auto":
+                # `context=` is what makes the flat-config contract work: a Fluid that came
+                # from the document is built AGAINST it, so top-level keys broadcast into
+                # same-named constructor params. Without it every one of them is dropped
+                # silently — see `di.deep_flow`.
+                with di.confluid_active_context(context.config_data):
+                    kwargs = {k: di.deep_flow(v, context=context.config_data) for k, v in kwargs.items()}
+            return kwargs
+
+        if context.cli_overrides:
+            with confluid.collect_report() as report:
+                kwargs = _materialize_kwargs()
+            overrides.warn_unused_overrides(context.cli_overrides, report)
+        else:
+            kwargs = _materialize_kwargs()
         return func(**kwargs)
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
@@ -748,7 +807,13 @@ class LiquifyApp:
             )
             ctx.logger = get_logger(self.name)
             if config_path is not None:
-                ctx.config_data = confluid.load(config_path, flow=False, scopes=scopes or None)
+                # Same host facts as a real run — help rendering and graph export must
+                # show the document THIS machine resolves, not an unscoped variant.
+                raw = confluid.load(config_path, until="raw")
+                ctx.host_facts = host.host_facts(host.forced_values(ctx.scopes))
+                ctx.scopes = host.auto_scopes(ctx.host_facts, raw) + ctx.scopes
+                data = host.inject_facts(raw, ctx.host_facts)
+                ctx.config_data = confluid.load(data, until="document", scopes=ctx.scopes or None)
                 ctx.config_data = expand_strings(ctx.config_data)
             self.context = ctx
             set_context(self.context)
@@ -758,7 +823,7 @@ class LiquifyApp:
         # kwargs deferred (they flow lazily in production), but the liquify
         # contract is "fully flowed graph" — introspection tools need every
         # attribute resolved.
-        return {k: di.deep_flow(v) for k, v in kwargs.items()}
+        return {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
 
     def _show_help(
         self,
@@ -816,6 +881,17 @@ class LiquifyApp:
                 )
         else:
             report.show_command_index(app, console)
+
+        # What THIS config's `!scope:KEY=VAL` blocks offer per dimension, and the value
+        # its `default_scopes:` names for a bare run — rendered from the RAW document,
+        # the same walk `flags.bind_dimension_flags` binds the `--KEY VAL` flags from.
+        if config_path is not None:
+            try:
+                raw = confluid.load(config_path, until="raw")
+            except Exception as exc:  # a malformed config: help still renders, the reason is shown
+                console.print(f"[dim]Scope dimensions unavailable: {exc}[/dim]")
+            else:
+                report.show_scope_dimensions(raw, console=console, source=config_path.name)
 
         # The Global Options block is rendered from the ONE flag declaration
         # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion

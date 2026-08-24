@@ -255,3 +255,110 @@ def test_completion_falls_back_to_signature_flags_when_no_config_resolves(_isola
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ---------------------------------------------------------------------------
+# The default command binds its arguments without a name token (both walkers)
+# ---------------------------------------------------------------------------
+
+
+def _default_app() -> LiquifyApp:
+    app = LiquifyApp("t")
+
+    @app.command(name="ws", default=True, positionals=["workspace"])
+    def ws(workspace: str = "") -> None:
+        """Default."""
+
+    @app.command(name="other")
+    def other() -> None:
+        """Other."""
+
+    return app
+
+
+def test_both_navs_name_the_default_command() -> None:
+    for nav in _nav_pair(_default_app()):
+        assert nav.default_command() == "ws"
+    plain = LiquifyApp("p")
+
+    @plain.command(name="only")
+    def only() -> None:
+        """Only."""
+
+    for nav in _nav_pair(plain):
+        assert nav.default_command() is None
+
+
+def test_both_walkers_bind_the_default_commands_positional_without_a_name_token() -> None:
+    app = _default_app()
+    routed = router.route(app, ["w.yaml"])
+    walked = walk_invocation(tokenize(["w.yaml"]), _TreeNav(serialize_app(app)), lambda _t: None)
+    assert walked.cmd_name == "ws" and walked.args_index == 0
+    assert walked.positional_values == routed.positional_values == ["w.yaml"]
+    assert routed.target_func is app._default_cmd and routed.remaining_tokens == []
+
+
+def test_a_real_command_name_still_wins_over_the_default_positional() -> None:
+    app = _default_app()
+    for argv in (["other"], ["other", "w.yaml"]):
+        routed = router.route(app, argv)
+        assert routed.target_func is app._commands["other"] and routed.positional_values == []
+
+
+def test_a_default_command_without_arguments_leaves_the_token_for_the_override_parser() -> None:
+    app = LiquifyApp("t")
+
+    @app.command(name="serve", default=True)
+    def serve() -> None:
+        """Serve."""
+
+    walked = walk_invocation(tokenize(["stray"]), _AppNav(app), lambda _t: None)
+    assert walked.cmd_name is None and [t.text for t in walked.remaining] == ["stray"]
+
+
+def test_default_positionals_bind_only_as_leading_tokens() -> None:
+    # `t --lr 0.1 w.yaml`: like an explicit command, binding stops at the first flag —
+    # a token after a flag is never the default command's positional.
+    walked = walk_invocation(tokenize(["--lr", "0.1", "w.yaml"]), _AppNav(_default_app()), lambda _t: None)
+    assert walked.cmd_name is None and walked.positional_values == []
+    assert [t.text for t in walked.remaining] == ["--lr", "0.1", "w.yaml"]
+
+
+def test_a_literal_binds_as_the_default_commands_positional() -> None:
+    walked = walk_invocation(tokenize(["--", "-5"]), _AppNav(_default_app()), lambda _t: None)
+    assert walked.cmd_name == "ws" and walked.positional_values == ["-5"]
+
+
+def test_args_index_marks_where_a_commands_arguments_start() -> None:
+    app = _default_app()
+    sub = LiquifyApp("group")
+
+    @sub.command(name="inner", positionals=["a"])
+    def inner(a: str = "") -> None:
+        """Inner."""
+
+    app.add_app(sub, "group")
+    assert walk_invocation(tokenize(["other"]), _AppNav(app), lambda _t: None).args_index == 1
+    assert walk_invocation(tokenize(["group", "inner", "x"]), _AppNav(app), lambda _t: None).args_index == 2
+    assert walk_invocation(tokenize([]), _AppNav(app), lambda _t: None).args_index == 0
+
+
+def test_a_script_default_command_promotes_its_config_without_a_name_token(_isolated_config_dir: Path) -> None:
+    app = LiquifyApp("demo")
+
+    @app.script_command(name="run", default=True)
+    def run(threshold: float = 0.5) -> None:
+        """Run."""
+
+    expected = (_isolated_config_dir / "config" / "demo.yaml").resolve()
+    for argv in (["demo"], ["run", "demo"]):
+        routed = router.route(app, argv)
+        assert routed.target_func is app._default_cmd
+        assert routed.config_path is not None and routed.config_path.resolve() == expected
+        assert routed.config_token == "demo"
+    # completion's walker agrees (its resolver peeks the same tiers)
+    walked = walk_invocation(tokenize(["demo"]), _TreeNav(serialize_app(app)), router._resolve_promoted_config)
+    assert walked.cmd_name == "run" and walked.consumed_config
+    # a token that resolves to no file is NOT swallowed: it stays for the override parser
+    missed = router.route(app, ["missing"])
+    assert missed.config_path is None and [t.text for t in missed.remaining_tokens] == ["missing"]
