@@ -181,6 +181,31 @@ def test_default_command(monkeypatch: Any) -> None:
     assert called is True
 
 
+def test_bare_help_lists_the_commands_even_when_a_default_command_answers_it(capsys: Any, monkeypatch: Any) -> None:
+    """An app with a DEFAULT command still has to be discoverable.
+
+    ``app --help`` routes to the default command, so rendering only that command's
+    options hid every sibling: the only way to learn ``app kill`` existed was to
+    already know its name.
+    """
+    app = LiquifyApp(name="test-app")
+
+    @app.command(default=True)
+    def serve() -> None:
+        """Serve the thing."""
+
+    @app.command()
+    def kill() -> None:
+        """Stop the running thing."""
+
+    monkeypatch.setattr(sys, "argv", ["test-app", "--help"])
+    app.run()
+
+    out = capsys.readouterr().out
+    assert "kill" in out and "Stop the running thing." in out
+    assert "Command: serve" in out, "the default command's own options still render"
+
+
 def test_subgroup_without_command_shows_help(monkeypatch: Any, capsys: Any) -> None:
     app = LiquifyApp(name="test-app", description="Root app.")
     sub = LiquifyApp(name="sub", description="Sub group.")

@@ -105,6 +105,65 @@ A token that matches **none** of these forms is not applied and liquifai logs a
 …`). Previously such tokens were dropped silently — a typo'd `lr 0.1` instead
 of `--lr 0.1` would run the whole job on defaults without a trace.
 
+**Hyphens and underscores are the same key.** `--custom-node URL` and `--custom_node URL`
+both address the parameter `custom_node`, and a dotted key normalises per segment
+(`--my-opt.learning-rate` → `my_opt.learning_rate`). This is safe rather than a guess: a
+hyphen cannot appear in a Python identifier, so a hyphenated key could not have addressed
+a parameter under any spelling. Only **keys** are normalised — a URL or a negative number
+keeps its hyphens, and the polarity suffix is read first, so `--default-nodes-` still means
+*false* rather than a key ending in a separator.
+
+### Short options
+
+A command may declare single-letter aliases. They are **declared**, never derived from the
+parameter's first letter — deriving would silently shadow the global shorts (`-c`, `-s`, `-d`,
+`-h` are already config / scope / debug / help):
+
+```python
+@app.command(short={"p": "port", "b": "background"})
+def restart(port: int = 8188, background: bool = False):
+    ...
+```
+
+```
+$ myapp restart -b                 # == --background
+$ myapp restart -p 9000            # == --port 9000   (-p=9000 also works)
+
+$ myapp restart --help
+ Option (Shortest Unique)  Type  Current/Default Value  Documentation
+ -b, --background          bool  False                  Start detached.
+ --port                    int   8188                   Port to use.
+```
+
+A letter that is reserved by a global, declared twice, longer than one character, or names no
+parameter of the command raises `CommandDefinitionError` at **decoration** time — an author's
+startup error rather than a user's wrong action. A short is pure sugar: it is expanded to the long
+spelling before parsing, so everything downstream sees only `--parameter`, and an **undeclared**
+`-x` still reaches the unrecognised-token path.
+
+### Strict flags
+
+By default an override that reaches nothing falls through to the config document, which is
+a legitimate pattern for a config-driven app. An app whose commands take **plain values**
+has no such fall-through — there, a flag that reaches nothing is indistinguishable from one
+that worked. Such an app opts in:
+
+```python
+app = LiquifyApp(name="myapp", description="…", strict_flags=True)
+```
+
+```
+$ myapp launch --custom-nod URL
+Error: myapp: unknown option 'custom_nod' — it names no parameter of the 'launch' command
+and no key in the configuration. Did you mean 'custom_node'? Declared parameters: …
+```
+
+The check is narrow on purpose: only a **bare** key is judged, against the command's own
+parameters plus the top-level config keys. A **dotted** key (`--opt.lr`) addresses a nested
+object, and whether it was delivered is something only confluid's materialization report
+knows — that path keeps its existing post-materialization warning, which sees delivery this
+check cannot.
+
 The single source of truth for the global-flag vocabulary and token
 classification is `liquifai/grammar.py` (stdlib-only); the parser, `--help`,
 and shell completion all derive from it, so they cannot drift apart. Override

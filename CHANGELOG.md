@@ -4,6 +4,41 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
+## [Unreleased]
+
+### Added
+
+- **`short=` on a command declares single-letter options** — `@app.command(short={"b":
+  "background"})` makes `-b` mean `--background`, and `--help` renders it as `-b, --background`.
+  Declared rather than derived: the first letter of `config` / `scope` / `debug` would shadow the
+  globals that already own `-c` / `-s` / `-d`. A reserved, repeated, multi-character or
+  unknown-parameter letter raises `CommandDefinitionError` at decoration time.
+- **`strict_flags=True`** makes an app refuse a bare CLI flag that names no parameter of the
+  command it was given to, instead of letting it fall through to the config. The existing
+  report-based warning only speaks when something was materialized, so a CLI of plain-value
+  commands had no check at all. It also refuses an unrecognised token (`-x`), which the
+  permissive path only warns about. Off by default — pass-through stays legitimate.
+
+### Fixed
+
+- **`-h` shows help instead of RUNNING the command.** Only `--help` was declared, and a
+  single-dash token matches no override form, so `-h` fell through as an unrecognised token and
+  execution continued — `<app> restart -h` restarted the server. The help short-circuit now
+  derives its spellings from `GLOBAL_FLAG_SPECS` rather than hard-coding one.
+
+- **`--kebab-case` reaches the `snake_case` parameter it means.** `--custom-node URL` parsed
+  to a key `custom-node`, matched the parameter `custom_node` never, and did nothing — with
+  no error, because a well-formed `--key value` token is not "dropped". Keys now normalise
+  hyphens to underscores (per dotted segment); values are untouched, and the `--key-` / `--key+`
+  polarity suffix is read before normalising.
+
+- **`app --help` lists the commands even when a default command answers it.** An app with
+  a `default=True` command routed bare `--help` to that command and rendered only its
+  options, so every sibling command was undiscoverable — the only way to learn one existed
+  was to already know its name. The command index now renders first, followed by the
+  default command's own block. Apps without a default command are unaffected, and
+  `app <cmd> --help` still shows just that command.
+
 ## [0.2.0] - 2026-08-24
 
 ### Added

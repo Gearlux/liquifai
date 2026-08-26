@@ -1,9 +1,10 @@
+import difflib
 import inspect
 import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, get_args
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, Tuple, get_args
 
 import confluid
 import loggair
@@ -18,8 +19,10 @@ from liquifai.exceptions import (
     ConfigNotFoundError,
     LiquifaiError,
     UnknownCommandError,
+    UnknownFlagError,
     UnknownOperationError,
 )
+from liquifai.grammar import GLOBAL_FLAG_SPECS, HELP_FLAGS
 from liquifai.introspection import graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
@@ -70,12 +73,87 @@ class Invocation:
     remaining_tokens: List[Token]
 
 
+#: Single-dash spellings the global grammar already owns. A command short may not take one:
+#: ``-d`` means ``--debug`` everywhere, and a command that redefined it would change what a
+#: user's muscle memory does depending on which command they typed.
+RESERVED_SHORTS: FrozenSet[str] = frozenset(
+    f.lstrip("-") for spec in GLOBAL_FLAG_SPECS for f in spec.flags if not f.startswith("--")
+)
+
+
+def _validated_shorts(func: Callable[..., Any], cmd_name: str, short: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Check a command's ``short=`` map at DECORATION time; return ``{letter: parameter}``.
+
+    Every failure here is an author mistake that would otherwise become a user-facing one: a
+    reserved letter silently shadows a global, a repeated letter makes one of two options
+    unreachable, and a letter naming no parameter is a flag that does nothing.
+    """
+    if not short:
+        return {}
+    try:
+        params = set(inspect.signature(func).parameters)
+    except (ValueError, TypeError):  # pragma: no cover - defensive: unintrospectable callable
+        params = set()
+    validated: Dict[str, str] = {}
+    for raw_letter, param in short.items():
+        letter = str(raw_letter).strip().lstrip("-")
+        if len(letter) != 1 or not letter.isalnum():
+            raise CommandDefinitionError(
+                f"{cmd_name}: short option {raw_letter!r} must be a single alphanumeric character "
+                f"(a multi-character short is ambiguous with a cluster of single-letter ones)."
+            )
+        if letter in RESERVED_SHORTS:
+            raise CommandDefinitionError(
+                f"{cmd_name}: short option '-{letter}' is reserved by a global flag "
+                f"({', '.join('-' + r for r in sorted(RESERVED_SHORTS))}); pick another letter."
+            )
+        if letter in validated:
+            raise CommandDefinitionError(
+                f"{cmd_name}: short option '-{letter}' is declared twice " f"({validated[letter]!r} and {param!r})."
+            )
+        if params and param not in params:
+            raise CommandDefinitionError(
+                f"{cmd_name}: short option '-{letter}' names {param!r}, which is not a parameter of "
+                f"the command. Declared parameters: {', '.join(sorted(params)) or '(none)'}."
+            )
+        validated[letter] = param
+    return validated
+
+
+def expand_shorts(texts: List[str], shorts: Dict[str, str]) -> List[str]:
+    """Rewrite declared ``-x`` tokens to their long ``--parameter`` form, in place of nothing else.
+
+    Pure sugar: the expansion happens BEFORE override parsing, so every downstream stage — parsing,
+    strictness, the config merge — sees exactly the long spelling and needs no knowledge of shorts.
+    An UNdeclared single-dash token is left alone, so it still reaches the unrecognised-token path
+    rather than being quietly accepted.
+    """
+    if not shorts:
+        return texts
+    out: List[str] = []
+    for text in texts:
+        body = text[1:] if text.startswith("-") and not text.startswith("--") else None
+        if body:
+            letter, sep, value = body.partition("=")
+            if letter in shorts:
+                out.append(f"--{shorts[letter]}={value}" if sep else f"--{shorts[letter]}")
+                continue
+        out.append(text)
+    return out
+
+
 class LiquifyApp:
     """Pure Python CLI Framework without Typer/Click baggage."""
 
-    def __init__(self, name: str, description: str = "") -> None:
+    def __init__(self, name: str, description: str = "", strict_flags: bool = False) -> None:
         self.name = name
         self.description = description
+        #: Refuse a bare CLI flag that names no parameter of the command it was given to, instead
+        #: of letting it fall through to the config document (see :meth:`_check_strict_flags`).
+        #: OFF by default: pass-through is a legitimate pattern for a config-driven app, and an app
+        #: that relies on it must keep working. ON for an app whose commands take plain values,
+        #: where a flag that reaches nothing is indistinguishable from one that worked.
+        self.strict_flags = strict_flags
         self.context: Optional[LiquifyContext] = None
         self._commands: Dict[str, Callable[..., Any]] = {}
         self._sub_apps: Dict[str, "LiquifyApp"] = {}
@@ -92,6 +170,8 @@ class LiquifyApp:
         self._context_factory: Optional[Callable[[], Any]] = None
         self._mcp_context_factory: Optional[Callable[..., Any]] = None
         self._presenter: Optional[Callable[..., None]] = None
+        #: The command `_apply_overrides` is expanding shorts for (set in `_prepare`).
+        self._active_func: Optional[Callable[..., Any]] = None
 
     def add_app(self, app: "LiquifyApp", name: Optional[str] = None, aliases: Optional[List[str]] = None) -> None:
         """Mount a sub-application to support nested command groups (infinitely sub-appable).
@@ -210,6 +290,7 @@ class LiquifyApp:
         default: bool = False,
         positionals: Optional[List[str]] = None,
         completions: Optional[Dict[str, Callable[..., Any]]] = None,
+        short: Optional[Dict[str, str]] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command: the decorated function is the full CLI handler.
 
@@ -235,6 +316,14 @@ class LiquifyApp:
                 command that needs another type coerces in its body.
             completions: ``{positional: provider}`` value providers (Q2 dynamic
                 completion) attached to the handler.
+            short: ``{letter: parameter}`` single-letter aliases — ``{"b": "background"}``
+                makes ``-b`` mean ``--background``. DECLARED rather than derived from the
+                parameter's first letter, because deriving would silently shadow the global
+                shorts (``-c``/``-s``/``-d``/``-h`` are already config/scope/debug/help) and
+                the clash would only surface when a user typed it. A letter that is reserved,
+                repeated, longer than one character, or names no parameter of the decorated
+                function raises :class:`~liquifai.exceptions.CommandDefinitionError` at
+                DECORATION time — an author's startup error, never a user's wrong action.
         """
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -246,6 +335,7 @@ class LiquifyApp:
             # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
             # completion). Read by completion.serialize_app / iter_completion_providers.
             setattr(f, "__liquifai_completions__", dict(completions or {}))
+            setattr(f, "__liquifai_short__", _validated_shorts(f, cmd_name, short))
             if default:
                 self._default_cmd = f
             return f
@@ -459,7 +549,7 @@ class LiquifyApp:
         # documentation one option per line (greppable / pipe-friendly) instead of
         # a Rich table.
         wants_docs = "--docs" in flags
-        if "--help" in flags or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
+        if flags & HELP_FLAGS or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
             self._show_help(
                 inv.target_app,
                 inv.target_func,
@@ -575,7 +665,8 @@ class LiquifyApp:
             self.context.config_data.update(bound)
             self.context.logger.debug(f"Bound positionals: {bound}")
 
-        # 5. APPLY OVERRIDES
+        # 5. APPLY OVERRIDES (the command is known here, so its `short=` map can be expanded)
+        self._active_func = inv.target_func
         self._apply_overrides(final_tokens)
         self._warn_unbound_literals(inv)
 
@@ -708,11 +799,20 @@ class LiquifyApp:
         if not self.context or not tokens:
             return
 
-        parsed_overrides, deletions, dropped = parse_override_args(option_texts(tokens))
+        shorts: Dict[str, str] = getattr(self._active_func, "__liquifai_short__", {}) or {}
+        parsed_overrides, deletions, dropped = parse_override_args(expand_shorts(option_texts(tokens), shorts))
 
         # A dropped token is almost always a typo'd override (``lr 0.1``
         # instead of ``--lr 0.1``) — silently ignoring one can cost an entire
-        # training run on defaults, so each is surfaced as a warning.
+        # training run on defaults, so each is surfaced as a warning. Under
+        # ``strict_flags`` it is an ERROR instead: this is the same hole ``-h``
+        # fell through (a single-dash token matches no override form), and for a
+        # command that DOES something, continuing past it is the trap.
+        if dropped and self.strict_flags:
+            raise UnknownFlagError(
+                f"{self.name}: unrecognized argument {dropped[0]!r} — expected one of: "
+                f"`--key value`, `--key=value`, `key=value`, `+key[=value]`, `~key`."
+            )
         for token in dropped:
             self.context.logger.warning(
                 f"Ignoring unrecognized CLI token {token!r} — expected one of: "
@@ -730,6 +830,47 @@ class LiquifyApp:
         self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
 
+    def _check_strict_flags(self, func: Callable[..., Any]) -> None:
+        """Under ``strict_flags``, refuse a bare override that names no parameter of ``func``.
+
+        Deliberately NARROW, because a broad version would be wrong more often than it is right:
+
+        * only a BARE key is judged. A DOTTED key (``--opt.lr``) addresses a nested object by name,
+          and whether it was delivered is something only confluid's materialization report knows —
+          that path keeps :func:`liquifai.overrides.warn_unused_overrides`.
+        * a key that IS a top-level config key passes. The document is a legitimate target; the
+          command signature is not the only thing an override may address.
+
+        What remains is the case this exists for: an app whose commands take plain values, where a
+        flag matching neither the signature nor the document reached nothing at all — and where the
+        report-based check stays silent because nothing was materialized.
+        """
+        if not self.strict_flags or not self.context:
+            return
+        overrides_applied = getattr(self.context, "cli_overrides", None)
+        if not overrides_applied:
+            return
+        try:
+            accepted = set(inspect.signature(func).parameters)
+        except (ValueError, TypeError):  # pragma: no cover - defensive: unintrospectable callable
+            return
+        # The overrides were already merged INTO config_data by `_apply_overrides`, so a key is
+        # evidence of a legitimate config target only if it was there BEFORE — otherwise every
+        # unknown flag would vouch for itself.
+        config = self.context.config_data
+        if isinstance(config, dict):
+            accepted |= set(config) - set(overrides_applied)
+        for key in overrides_applied:
+            if "." in key or key in accepted:
+                continue
+            close = difflib.get_close_matches(key, sorted(accepted), n=1)
+            hint = f" Did you mean {close[0]!r}?" if close else ""
+            raise UnknownFlagError(
+                f"{self.name}: unknown option {key!r} — it names no parameter of the "
+                f"{getattr(func, '__name__', 'command')!r} command and no key in the configuration."
+                f"{hint} Declared parameters: {', '.join(sorted(accepted)) or '(none)'}."
+            )
+
     def run_command(self, func: Callable[..., Any]) -> Any:
         """Execute with Dependency Injection.
 
@@ -745,6 +886,7 @@ class LiquifyApp:
         if not self.context:
             return func()
         context = self.context
+        self._check_strict_flags(func)
 
         def _materialize_kwargs() -> Dict[str, Any]:
             kwargs = self._resolve_kwargs(func)
@@ -848,6 +990,12 @@ class LiquifyApp:
             console.print(f"[dim]{app.description}[/dim]")
 
         if target_func:
+            # A DEFAULT command answers the app's bare ``--help``, so rendering only ITS
+            # options would hide every sibling: ``app --help`` is how a user discovers that
+            # ``app kill`` exists at all, and without the index those commands are reachable
+            # only by already knowing their names. Show the index first, then the command.
+            if target_func is app._default_cmd and (app._commands or app._sub_apps):
+                report.show_command_index(app, console)
             desc = target_func.__doc__ or "No description."
             positionals = getattr(target_func, "__liquifai_positionals__", [])
             usage = target_func.__name__.replace("_", "-") + "".join(f" <{p}>" for p in positionals)
@@ -874,10 +1022,15 @@ class LiquifyApp:
                     title=f"Command Configuration (flowed from {config_path.name})",
                     layout=layout,
                     positionals=positionals,
+                    shorts=getattr(target_func, "__liquifai_short__", None),
                 )
             else:
                 show_configuration(
-                    target_func, title="Command Configuration Options", layout=layout, positionals=positionals
+                    target_func,
+                    title="Command Configuration Options",
+                    layout=layout,
+                    positionals=positionals,
+                    shorts=getattr(target_func, "__liquifai_short__", None),
                 )
         else:
             report.show_command_index(app, console)
