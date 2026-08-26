@@ -29,12 +29,31 @@ from liquifai.grammar import looks_like_arg, looks_like_key
 logger = get_logger(__name__)
 
 
+def _normalize_key(key: str) -> str:
+    """``--custom-node`` addresses the parameter ``custom_node``.
+
+    Every CLI spells a multi-word option with hyphens; Python spells the parameter it binds to with
+    underscores. Normalising is safe rather than a guess: a hyphen CANNOT appear in a Python
+    identifier, so a hyphenated override key could not have been addressing a parameter under any
+    spelling — there is nothing for this to shadow. Dotted keys normalise per segment, so
+    ``--my-opt.learning-rate`` reaches ``my_opt.learning_rate``.
+
+    Callers MUST read the polarity suffix (``--key-`` / ``--key+``) before calling this: the
+    trailing hyphen that means "false" is a value, not a word separator.
+    """
+    return key.replace("-", "_")
+
+
 def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Tokenize ``args`` into an ``(overrides, deletions, dropped)`` triple.
 
     Supported forms (order-independent; longest match wins per token):
 
     * ``--key value``           — legacy space-separated form (still primary).
+
+    A key may be spelled with hyphens OR underscores — ``--custom-node`` and
+    ``--custom_node`` are the same key (:func:`_normalize_key`). VALUES are never
+    touched, so a URL or a negative number keeps its hyphens.
     * ``--key=value``           — equals form.
     * ``key=value``             — bare equals form, no ``--`` prefix.
     * ``--key+`` / ``--key-``   — polarity (True / False).
@@ -61,7 +80,7 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
             if key.startswith("--"):
                 key = key[2:]
             if key:
-                deletions.append(key)
+                deletions.append(_normalize_key(key))
             i += 1
             continue
 
@@ -72,12 +91,12 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
             if "=" in body:
                 k, v = body.split("=", 1)
                 if k:
-                    overrides[k] = parse_value(v)
+                    overrides[_normalize_key(k)] = parse_value(v)
             elif body and i + 1 < len(args) and not looks_like_arg(args[i + 1]):
-                overrides[body] = parse_value(args[i + 1])
+                overrides[_normalize_key(body)] = parse_value(args[i + 1])
                 i += 1
             elif body:
-                overrides[body] = True
+                overrides[_normalize_key(body)] = True
             i += 1
             continue
 
@@ -86,22 +105,23 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
             if "=" in key:
                 k, v = key.split("=", 1)
                 if k:
-                    overrides[k] = parse_value(v)
+                    overrides[_normalize_key(k)] = parse_value(v)
                 i += 1
                 continue
+            # Polarity is read FIRST: the trailing ``-`` means False, it is not a word separator.
             if key.endswith("+"):
-                overrides[key[:-1]] = True
+                overrides[_normalize_key(key[:-1])] = True
                 i += 1
                 continue
             if key.endswith("-"):
-                overrides[key[:-1]] = False
+                overrides[_normalize_key(key[:-1])] = False
                 i += 1
                 continue
             if i + 1 < len(args) and not looks_like_arg(args[i + 1]):
-                overrides[key] = parse_value(args[i + 1])
+                overrides[_normalize_key(key)] = parse_value(args[i + 1])
                 i += 2
                 continue
-            overrides[key] = True
+            overrides[_normalize_key(key)] = True
             i += 1
             continue
 
@@ -112,7 +132,7 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
         if "=" in arg and not arg.startswith("="):
             k, v = arg.split("=", 1)
             if k and looks_like_key(k):
-                overrides[k] = parse_value(v)
+                overrides[_normalize_key(k)] = parse_value(v)
                 i += 1
                 continue
 

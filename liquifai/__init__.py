@@ -20,6 +20,7 @@ __all__ = [
     "CommandDefinitionError",
     "ConfigNotFoundError",
     "UnknownCommandError",
+    "UnknownFlagError",
     "UnknownOperationError",
     "UnsupportedShellError",
 ]
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
         ConfigNotFoundError,
         LiquifaiError,
         UnknownCommandError,
+        UnknownFlagError,
         UnknownOperationError,
         UnsupportedShellError,
     )
@@ -60,6 +62,7 @@ def __getattr__(name: str) -> Any:
         "CommandDefinitionError",
         "ConfigNotFoundError",
         "UnknownCommandError",
+        "UnknownFlagError",
         "UnknownOperationError",
         "UnsupportedShellError",
     ):
