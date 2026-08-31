@@ -24,7 +24,7 @@ from liquifai.exceptions import (
 )
 from liquifai.grammar import GLOBAL_FLAG_SPECS, HELP_FLAGS
 from liquifai.introspection import graft_signature, split_context_param
-from liquifai.overrides import expand_strings, parse_override_args
+from liquifai.overrides import expand_strings, parse_override_args, str_param_names
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
 
 FlowMode = Literal["manual", "auto"]
@@ -800,7 +800,15 @@ class LiquifyApp:
             return
 
         shorts: Dict[str, str] = getattr(self._active_func, "__liquifai_short__", {}) or {}
-        parsed_overrides, deletions, dropped = parse_override_args(expand_shorts(option_texts(tokens), shorts))
+        # A value bound to a parameter the command declares as `str` is taken exactly as
+        # typed. `parse_value` ends in `yaml.safe_load`, which is right for an untyped
+        # config override (`+trainer.lr=0.01` -> float) and destructive for declared text:
+        # it folds a multi-line value onto one line, reads `#…` as a comment, `3:30` as
+        # sexagesimal, `012` as octal, `yes` as True.
+        verbatim = str_param_names(self._active_func)
+        parsed_overrides, deletions, dropped = parse_override_args(
+            expand_shorts(option_texts(tokens), shorts), verbatim_keys=verbatim
+        )
 
         # A dropped token is almost always a typo'd override (``lr 0.1``
         # instead of ``--lr 0.1``) — silently ignoring one can cost an entire

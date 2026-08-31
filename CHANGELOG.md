@@ -21,6 +21,16 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **A value bound to a `str` parameter reaches the command exactly as typed.** Every override
+  value is read as YAML, which is right for an untyped config key (`--trainer.lr 0.001` is a
+  float) and destructive for declared text: a multi-line value was folded onto one line,
+  `#1 priority` read as a comment and became `None`, `3:30` became `210` (YAML 1.1
+  sexagesimal), `012` became `10`, `yes` became `True`, and surrounding whitespace was
+  stripped. When the command annotates the parameter `str` (or `Optional[str]`), the text is
+  now passed through untouched. Everything else keeps YAML typing — a parameter annotated
+  `int`/`bool`/`list`, any key the command does not declare, and every dotted key (which
+  addresses a nested config object, not the signature). Reported as a multi-line
+  `--description` silently losing its newline.
 - **`-h` shows help instead of RUNNING the command.** Only `--help` was declared, and a
   single-dash token matches no override form, so `-h` fell through as an unrecognised token and
   execution continued — `<app> restart -h` restarted the server. The help short-circuit now

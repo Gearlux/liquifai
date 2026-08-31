@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import os
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import AbstractSet, Any, Dict, List, Optional, Set, Tuple
 
 from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
 from confluid.fluid import Fluid
@@ -44,7 +44,40 @@ def _normalize_key(key: str) -> str:
     return key.replace("-", "_")
 
 
-def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], List[str]]:
+def str_param_names(func: Any) -> Set[str]:
+    """Parameter names ``func`` annotates as ``str`` (or ``Optional[str]``).
+
+    Their CLI values bypass :func:`confluid.parse_value`: the command has already said
+    it wants text, so YAML typing can only corrupt it — folding a multi-line value onto
+    one line, reading ``#…`` as a comment, ``3:30`` as sexagesimal, ``012`` as octal,
+    ``yes`` as True. Anything NOT annotated ``str`` still coerces, which is what makes
+    ``--limit 5`` an int and ``+trainer.lr=0.01`` a float.
+
+    Best-effort: an unintrospectable callable yields an empty set, so the caller simply
+    keeps the historical behaviour.
+    """
+    if func is None:
+        return set()
+    try:
+        params = inspect.signature(func).parameters
+    except (ValueError, TypeError):  # pragma: no cover - defensive
+        return set()
+    names: Set[str] = set()
+    for name, param in params.items():
+        annotation = param.annotation
+        if annotation is str or annotation == "str":
+            names.add(name)
+            continue
+        # ``Optional[str]`` / ``Union[str, None]`` — a declared-text parameter either way.
+        args = getattr(annotation, "__args__", ())
+        if args and all(a is str or a is type(None) for a in args) and str in args:
+            names.add(name)
+    return names
+
+
+def parse_override_args(
+    args: List[str], verbatim_keys: AbstractSet[str] = frozenset()
+) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Tokenize ``args`` into an ``(overrides, deletions, dropped)`` triple.
 
     Supported forms (order-independent; longest match wins per token):
@@ -62,6 +95,12 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
       same semantics as a normal override; future: fail if key exists).
     * ``~key`` / ``~--key``     — delete the dotted key from the config.
 
+    ``verbatim_keys`` names the parameters the active command declares as ``str``
+    (see :func:`str_param_names`). A value landing on one of those BARE keys is taken
+    exactly as typed instead of being coerced through ``confluid.parse_value`` — YAML
+    typing is right for an untyped config override and wrong for declared text. A DOTTED
+    key is never verbatim: it addresses a nested config object, not the signature.
+
     Any token that doesn't match a recognised form is collected into
     ``dropped`` (it is NOT applied). Callers surface these — a typo'd
     override that silently vanishes can cost an entire training run, so
@@ -69,6 +108,13 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
     dropped token.
     """
     overrides: Dict[str, Any] = {}
+
+    def _coerce(key: str, raw: str) -> Any:
+        """Verbatim for a declared-``str`` bare key; YAML-typed otherwise."""
+        if "." not in key and key in verbatim_keys:
+            return raw
+        return parse_value(raw)
+
     deletions: List[str] = []
     dropped: List[str] = []
     i = 0
@@ -91,9 +137,9 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
             if "=" in body:
                 k, v = body.split("=", 1)
                 if k:
-                    overrides[_normalize_key(k)] = parse_value(v)
+                    overrides[_normalize_key(k)] = _coerce(_normalize_key(k), v)
             elif body and i + 1 < len(args) and not looks_like_arg(args[i + 1]):
-                overrides[_normalize_key(body)] = parse_value(args[i + 1])
+                overrides[_normalize_key(body)] = _coerce(_normalize_key(body), args[i + 1])
                 i += 1
             elif body:
                 overrides[_normalize_key(body)] = True
@@ -105,7 +151,7 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
             if "=" in key:
                 k, v = key.split("=", 1)
                 if k:
-                    overrides[_normalize_key(k)] = parse_value(v)
+                    overrides[_normalize_key(k)] = _coerce(_normalize_key(k), v)
                 i += 1
                 continue
             # Polarity is read FIRST: the trailing ``-`` means False, it is not a word separator.
@@ -118,7 +164,7 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
                 i += 1
                 continue
             if i + 1 < len(args) and not looks_like_arg(args[i + 1]):
-                overrides[_normalize_key(key)] = parse_value(args[i + 1])
+                overrides[_normalize_key(key)] = _coerce(_normalize_key(key), args[i + 1])
                 i += 2
                 continue
             overrides[_normalize_key(key)] = True
@@ -132,7 +178,7 @@ def parse_override_args(args: List[str]) -> Tuple[Dict[str, Any], List[str], Lis
         if "=" in arg and not arg.startswith("="):
             k, v = arg.split("=", 1)
             if k and looks_like_key(k):
-                overrides[_normalize_key(k)] = parse_value(v)
+                overrides[_normalize_key(k)] = _coerce(_normalize_key(k), v)
                 i += 1
                 continue
 

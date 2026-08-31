@@ -18,6 +18,37 @@ A token that matches **none** of these forms is not applied and liquifai logs a
 …`). Previously such tokens were dropped silently — a typo'd `lr 0.1` instead
 of `--lr 0.1` would run the whole job on defaults without a trace.
 
+## How a value is typed
+
+An override value is read as YAML, so it arrives as the type it looks like:
+`--max_epochs 10` is an int, `--trainer.lr 0.001` a float, `--tags "[a, b]"` a
+list. That is what makes a CLI override and a config key mean the same thing.
+
+**Except when the command already declared the parameter as `str`.** Then the
+value is taken exactly as you typed it, because YAML typing can only corrupt
+text that was never meant to be parsed:
+
+| You type | `str` parameter | untyped config key |
+|---|---|---|
+| `--note $'a\nb'` | `'a\nb'` | `'a b'` — YAML folds a multi-line plain scalar |
+| `--note "#1 priority"` | `'#1 priority'` | `None` — read as a comment |
+| `--note 3:30` | `'3:30'` | `210` — YAML 1.1 sexagesimal |
+| `--note 012` | `'012'` | `10` — octal |
+| `--note yes` | `'yes'` | `True` |
+| `--note "  padded  "` | `'  padded  '` | `'padded'` — stripped |
+
+`Optional[str]` counts as `str`. Everything else keeps YAML typing: a parameter
+annotated `int`/`bool`/`list`, any key the command does not declare, and every
+**dotted** key — `--opt.note` addresses a nested config object, not the command
+signature, so the signature cannot vouch for it.
+
+If you need a multi-line value for a key that is *not* a declared `str`
+parameter, YAML's block scalar still works:
+
+```bash
+mycli run --note $'|-\n  first line\n  second line'
+```
+
 ## `--` ends option parsing
 
 Everything after a bare `--` is a **literal value**: never an option, never an
