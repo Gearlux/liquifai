@@ -21,6 +21,7 @@ from liquifai.exceptions import (
     CommandDefinitionError,
     ConfigNotFoundError,
     LiquifaiError,
+    MissingArgumentError,
     UnknownCommandError,
     UnknownOperationError,
     UnsupportedShellError,
@@ -30,6 +31,7 @@ HIERARCHY = [
     (CommandDefinitionError, ValueError),
     (UnknownOperationError, KeyError),
     (UnknownCommandError, ValueError),
+    (MissingArgumentError, TypeError),
     (ConfigNotFoundError, FileNotFoundError),
     (UnsupportedShellError, ValueError),
 ]
@@ -47,6 +49,7 @@ def test_dual_inheritance(exc_cls: Type[Exception], builtin: Type[Exception]) ->
         "LiquifaiError",
         "CommandDefinitionError",
         "ConfigNotFoundError",
+        "MissingArgumentError",
         "UnknownCommandError",
         "UnknownOperationError",
         "UnsupportedShellError",
