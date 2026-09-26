@@ -7,6 +7,7 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 | `CommandDefinitionError` | `ValueError` | a `@command` / `@script_command` / `@operation` declaration is invalid (bad `presentation` / `flow_mode`) |
 | `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
 | `UnknownCommandError` | `ValueError` | the argv tokens resolved to no command, and the group has no default |
+| `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
 | `ConfigNotFoundError` | `FileNotFoundError` | the configuration file named on the CLI does not exist |
 | `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
 
@@ -40,6 +41,7 @@ When a command runs via `app.run()`:
 | Same, with `--debug` on the line | The exception **propagates** — full traceback on the console | (Python default) |
 | Missing `--config` file | `ConfigNotFoundError` -> dedicated `Configuration file not found` message | 1 |
 | Unknown command/group | `UnknownCommandError` -> `Unknown command or group` (or help when no default command exists) | 1 |
+| Missing required argument | `MissingArgumentError` -> ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
 | Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
 
 ## Runnable example

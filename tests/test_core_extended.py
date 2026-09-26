@@ -181,6 +181,80 @@ def test_default_command(monkeypatch: Any) -> None:
     assert called is True
 
 
+def test_bare_help_lists_the_commands_even_when_a_default_command_answers_it(capsys: Any, monkeypatch: Any) -> None:
+    """An app with a DEFAULT command still has to be discoverable.
+
+    ``app --help`` routes to the default command, so rendering only that command's
+    options hid every sibling: the only way to learn ``app kill`` existed was to
+    already know its name.
+    """
+    app = LiquifyApp(name="test-app")
+
+    @app.command(default=True)
+    def serve() -> None:
+        """Serve the thing."""
+
+    @app.command()
+    def kill() -> None:
+        """Stop the running thing."""
+
+    monkeypatch.setattr(sys, "argv", ["test-app", "--help"])
+    app.run()
+
+    out = capsys.readouterr().out
+    assert "kill" in out and "Stop the running thing." in out
+    assert "Command: serve" in out, "the default command's own options still render"
+
+
+def _usage_line(out: str) -> str:
+    return next(line for line in out.splitlines() if line.startswith("Command:"))
+
+
+def test_help_names_a_generated_command_as_it_is_typed(capsys: Any, monkeypatch: Any) -> None:
+    """``pypeek versions --help`` printed ``Command: pypeek-versions-cmd <package>`` — the name of the
+    handler ``build_commands`` generates, which no user can type. The line names the REGISTERED verb."""
+    app = LiquifyApp(name="peek")
+
+    @app.operation()
+    def peek_versions(conn: Any, *, package: str) -> Dict[str, Any]:
+        """List a package's versions."""
+        return {}
+
+    app.set_context_factory(lambda: object())
+    app.build_commands()
+
+    monkeypatch.setattr(sys, "argv", ["peek", "versions", "--help"])
+    app.run()
+    assert _usage_line(capsys.readouterr().out) == "Command: versions <package>"
+
+
+def test_help_names_a_command_by_its_declared_name_not_its_function(capsys: Any, monkeypatch: Any) -> None:
+    """``@app.command("token-info")`` on ``def auth_token_info_cmd`` is typed ``token-info``."""
+    app = LiquifyApp(name="auth")
+
+    @app.command("token-info")
+    def auth_token_info_cmd() -> None:
+        """Show the token."""
+
+    monkeypatch.setattr(sys, "argv", ["auth", "token-info", "--help"])
+    app.run()
+    assert _usage_line(capsys.readouterr().out) == "Command: token-info"
+
+
+def test_help_names_a_grouped_command_by_its_name_within_the_group(capsys: Any, monkeypatch: Any) -> None:
+    """The header already names the group (``DATASET``); the usage line keeps its one-command shape."""
+    root, group = LiquifyApp(name="root"), LiquifyApp(name="dataset")
+
+    @group.command("pull", positionals=["name"])
+    def pull_dataset(name: str) -> None:
+        """Pull one dataset."""
+
+    root.add_app(group, aliases=["ds"])
+    monkeypatch.setattr(sys, "argv", ["root", "ds", "pull", "--help"])
+    root.run()
+    assert _usage_line(capsys.readouterr().out) == "Command: pull <name>"
+
+
 def test_subgroup_without_command_shows_help(monkeypatch: Any, capsys: Any) -> None:
     app = LiquifyApp(name="test-app", description="Root app.")
     sub = LiquifyApp(name="sub", description="Sub group.")

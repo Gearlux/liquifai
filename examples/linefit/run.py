@@ -2,7 +2,7 @@
 
 Drives ``python linefit.py <verb> ...`` as subprocesses — no installation, no
 network — and asserts on the output. The ``examples/*/run.py`` glob in CI
-executes this file; pypeek (network-dependent) deliberately ships no run.py.
+executes this file; pypeek's run.py does the same over its offline modes.
 """
 
 import subprocess

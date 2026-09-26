@@ -1,7 +1,8 @@
 # pypeek — the installable liquifai demo app (see README.md).
 #
 # Lives in a SUBDIRECTORY of examples/ deliberately: CI executes every flat
-# examples/*.py script, and pypeek needs the network; being an installable
+# examples/*.py script, and pypeek needs the network (CI runs run.py instead,
+# which sticks to pypeek's offline modes); being an installable
 # project (console script on PATH) is also exactly what the completion-cache
 # machinery keys off (the self-heal spawner runs `pypeek ...` by name).
 

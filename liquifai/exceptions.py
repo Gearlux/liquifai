@@ -28,6 +28,24 @@ class UnknownCommandError(LiquifaiError, ValueError):
     """The argv tokens did not resolve to a command or group with a default."""
 
 
+class UnknownFlagError(LiquifaiError, ValueError):
+    """A CLI flag named no parameter of the command it was given to.
+
+    Raised only by an app built with ``strict_flags=True``. The permissive default lets an override
+    fall through to the config document, which is a legitimate pattern; an app whose commands take
+    plain values has no such fall-through, and for it a silently-ignored flag is indistinguishable
+    from a flag that worked.
+    """
+
+
+class MissingArgumentError(LiquifaiError, TypeError):
+    """A command parameter without a default received no value from the CLI, the config, or DI.
+
+    Dual-inherits ``TypeError`` because that is what calling the command without it raised before
+    the check existed, so an ``except TypeError`` around an in-process dispatch keeps working.
+    """
+
+
 class ConfigNotFoundError(LiquifaiError, FileNotFoundError):
     """The requested configuration file does not exist.
 

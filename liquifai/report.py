@@ -17,6 +17,7 @@ def show_configuration(
     title: str = "Available Configuration Options",
     layout: HelpLayout = "table",
     positionals: Optional[List[str]] = None,
+    shorts: Optional[Dict[str, str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
@@ -39,6 +40,10 @@ def show_configuration(
     * ``"lines"``: one option per physical line (``--flag  type  = value  doc``),
       aligned and greppable / pipe-friendly — the ``--docs`` rendering. The
       extracted documentation is identical; only the presentation differs.
+
+    ``shorts`` (``{letter: parameter}``, from the command's ``short=``) is rendered beside the
+    long spelling — ``-b, --background``. An option the user cannot see is an option they cannot
+    use, which is the whole reason this column exists.
 
     ``positionals`` (the command's declared positional names, in order) are
     rendered as their own "Positional Arguments" block and EXCLUDED from the
@@ -79,6 +84,7 @@ def show_configuration(
     table.add_column("Documentation", style="dim white")
 
     sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
+    by_param = {param: letter for letter, param in (shorts or {}).items()}
 
     for path in sorted_paths:
         short_path = display_map[path]
@@ -88,7 +94,9 @@ def show_configuration(
         val_str = str(display_val)
         if len(val_str) > 50:
             val_str = val_str[:47] + "..."
-        table.add_row(f"--{short_path}", type_str, val_str, doc)
+        letter = by_param.get(short_path)
+        spelling = f"-{letter}, --{short_path}" if letter else f"--{short_path}"
+        table.add_row(spelling, type_str, val_str, doc)
     console.print(table)
 
 
