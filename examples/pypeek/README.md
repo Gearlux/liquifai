@@ -11,7 +11,9 @@ lazy self-heal cache, the **CLI failure contract**, and `liquifai.apps`
 It lives in a subdirectory (not a flat `examples/*.py` script) on purpose:
 CI executes the flat example scripts, and the completion machinery needs a
 real console script on `PATH` — the detached self-heal helper literally runs
-`pypeek --refresh-completion-value …` by name.
+`pypeek --refresh-completion-value …` by name. CI runs [run.py](run.py)
+instead, which drives pypeek through its offline modes (`list`, `--local`,
+`--dry_run+`) and its failure paths without touching the network.
 
 ## Install & set up
 

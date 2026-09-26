@@ -100,7 +100,11 @@ GLOBAL_FLAG_SPECS: Tuple[GlobalFlag, ...] = (
         value_kind="path",
         metavar="PATH",
     ),
-    GlobalFlag(("--help",), "help", "Show this help."),
+    # ``-h`` is the universal convention, and its absence was not a smaller vocabulary but a TRAP:
+    # a single-dash token is no override form, so ``-h`` fell through to the parser's dropped list
+    # (a warning) and execution CONTINUED into the command. Measured 2026-08-26 on a live CLI:
+    # `streamstudio restart -h` restarted the server instead of describing it.
+    GlobalFlag(("--help", "-h"), "help", "Show this help."),
     GlobalFlag(("--docs",), "docs", "Render the same option docs as --help, one per line (greppable)."),
     GlobalFlag(
         ("--install-completion",),
@@ -141,6 +145,11 @@ GLOBAL_FLAG_SPECS: Tuple[GlobalFlag, ...] = (
 
 #: Every visible flag spelling, in display order (TAB candidate list).
 GLOBAL_FLAGS: List[str] = [f for spec in GLOBAL_FLAG_SPECS if not spec.hidden for f in spec.flags]
+
+#: Every spelling that asks for help — DERIVED, so the short-circuit in ``core.run`` can never
+#: drift from the table that ``--help`` and completion render. A hard-coded ``"--help"`` there
+#: is what let ``-h`` fall through into the command.
+HELP_FLAGS: frozenset = frozenset(f for spec in GLOBAL_FLAG_SPECS if spec.dest == "help" for f in spec.flags)
 
 #: Flags whose value is a filesystem path (completion offers files/dirs).
 PATH_VALUE_FLAGS: Set[str] = {
