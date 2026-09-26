@@ -285,6 +285,13 @@ Released on [PyPI](https://pypi.org/project/liquifai/):
 pip install liquifai
 ```
 
+The installed version (read from the package metadata):
+
+```python
+import liquifai
+print(liquifai.__version__)  # e.g. 0.3.0
+```
+
 ### Optional extras
 
 | Extra | What it opts into |

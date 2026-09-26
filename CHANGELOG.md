@@ -8,6 +8,10 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **`liquifai.__version__`** reports the installed version, read from the package metadata
+  (`importlib.metadata.version("liquifai")`), so it always matches `pyproject.toml`; an uninstalled
+  source tree reports `0.0.0.dev0`. It is read on first access, so
+  `import liquifai` (which every shell TAB runs) does not pay for the metadata read.
 - **`short=` on a command declares single-letter options** — `@app.command(short={"b":
   "background"})` makes `-b` mean `--background`, and `--help` renders it as `-b, --background`.
   Declared rather than derived: the first letter of `config` / `scope` / `debug` would shadow the

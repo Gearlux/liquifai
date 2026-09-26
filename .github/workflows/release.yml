@@ -86,6 +86,14 @@ jobs:
         # (as liquifai-complete does) must not have pulled in the heavy deps
         # in a fresh interpreter — checked structurally in the test suite;
         # here we just prove the wheel's entry surface is intact.
+        # `__version__` is the RELEASED number: read from the wheel's own metadata, which the
+        # tag guard above matched to pyproject.toml. Missing or typed-in-and-stale fails here,
+        # before anything reaches PyPI.
+        import os
+        import liquifai
+
+        tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+        assert liquifai.__version__ == version("liquifai") == tag, (liquifai.__version__, version("liquifai"), tag)
         print("wheel smoke-test OK, version:", version("liquifai"))
         EOF
     - uses: actions/upload-artifact@v4
