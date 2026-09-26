@@ -178,6 +178,7 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 |---|---|---|
 | `CommandDefinitionError` | `ValueError` | a `@script_command` / `@operation` / bridge declaration is invalid (bad `flow_mode` / `presentation`, or an `SdkBridge` group naming an unregistered policy / adapter) |
 | `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
+| `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
 | `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
 
 Configuration-loading failures propagate Confluid's own hierarchy (`confluid.ConfluidError` and subclasses) — `LiquifaiError` covers CLI-definition errors only.
@@ -192,6 +193,7 @@ When a command runs via `app.run()`:
 | Same, with `--debug` on the line | The exception **propagates** — full traceback on the console | (Python default) |
 | Missing `--config` file | Dedicated `Configuration file not found` message | 1 |
 | Unknown command/group | `Unknown command or group` (or help when no default command exists) | 1 |
+| Missing required argument | ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
 | Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
 
 ## Operations, MCP Tools, and the SDK Bridge

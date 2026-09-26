@@ -18,6 +18,7 @@ from liquifai.exceptions import (
     CommandDefinitionError,
     ConfigNotFoundError,
     LiquifaiError,
+    MissingArgumentError,
     UnknownCommandError,
     UnknownFlagError,
     UnknownOperationError,
@@ -914,7 +915,59 @@ class LiquifyApp:
             overrides.warn_unused_overrides(context.cli_overrides, report)
         else:
             kwargs = _materialize_kwargs()
+        self._check_missing_arguments(func, kwargs)
         return func(**kwargs)
+
+    def _check_missing_arguments(self, func: Callable[..., Any], kwargs: Dict[str, Any]) -> None:
+        """Refuse a parameter without a default that nothing supplied, naming where the value goes.
+
+        Runs on the RESOLVED kwargs, i.e. after DI: a value from the command line, from a config key
+        of the same name, or an injected ``@configurable`` instance all count as supplied. What is
+        left would otherwise reach ``func(**kwargs)`` and surface as a bare ``TypeError`` traceback —
+        a user mistake rendered as a bug.
+        """
+        missing = [
+            p.name
+            for p in inspect.signature(func).parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            and p.name not in kwargs
+        ]
+        if not missing:
+            return
+        command = " ".join(self._command_path(func)) or f"{self.name} {func.__name__}"
+        positionals: List[str] = getattr(func, "__liquifai_positionals__", [])
+        missing_flags = [name for name in missing if name not in positionals]
+        forms = []
+        if len(missing_flags) < len(missing):
+            # At least one missing value can be typed positionally: show the command's full usage,
+            # plus a flag for each missing value that has no positional slot.
+            usage = [command, *(f"<{p}>" for p in positionals), *(f"--{name} <value>" for name in missing_flags)]
+            forms.append(" ".join(usage))
+        forms.append(" ".join(f"--{name} <value>" for name in missing))
+        noun, pronoun = ("argument", "it") if len(missing) == 1 else ("arguments", "them")
+        raise MissingArgumentError(
+            f"{command}: missing required {noun} {', '.join(repr(n) for n in missing)} — "
+            f"pass {pronoun} as {' or '.join(f'`{form}`' for form in forms)}."
+        )
+
+    def _command_path(self, func: Callable[..., Any]) -> List[str]:
+        """The tokens that select ``func`` from this app — ``["root", "dataset", "pull"]``.
+
+        Searches the mounted groups by their CANONICAL names (an alias is skipped), so a message
+        names the command as ``--help`` lists it however the user reached it. Empty when ``func`` is
+        not registered here.
+        """
+        for cmd_name, registered in self._commands.items():
+            if registered is func:
+                return [self.name, cmd_name]
+        for group_name, sub in self._sub_apps.items():
+            if group_name in self._sub_app_aliases:
+                continue
+            path = sub._command_path(func)
+            if path:
+                return [self.name, group_name, *path[1:]]
+        return []
 
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
         """DI-resolve ``func``'s parameters against ``self.context.config_data``.
@@ -1006,7 +1059,10 @@ class LiquifyApp:
                 report.show_command_index(app, console)
             desc = target_func.__doc__ or "No description."
             positionals = getattr(target_func, "__liquifai_positionals__", [])
-            usage = target_func.__name__.replace("_", "-") + "".join(f" <{p}>" for p in positionals)
+            # The REGISTERED name, never the function's: a generated operation handler is called
+            # `<op>_cmd`, and `@app.command("token-info")` may decorate any function name at all.
+            cmd_name = app._command_path(target_func)[-1:] or [target_func.__name__.replace("_", "-")]
+            usage = cmd_name[0] + "".join(f" <{p}>" for p in positionals)
             console.print(f"\n[bold]Command:[/bold] {usage}")
             console.print(f"[dim]{desc.strip()}[/dim]")
 

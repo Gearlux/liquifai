@@ -21,6 +21,19 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **A missing required argument is one `Error:` line and exit 1, not a traceback.** A command
+  parameter without a default that neither the command line, the config nor dependency injection
+  supplied reached the function call and crashed with a bare `TypeError` — `pypeek versions`
+  printed `pypeek_versions() missing 1 required keyword-only argument: 'package'` under a full
+  traceback. It now raises `MissingArgumentError` (a `LiquifaiError` and a `TypeError`), which
+  prints one line naming the command and both ways to pass the value:
+  ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.``
+  Under `--debug` it propagates as usual.
+  A config key of the same name or an injected `@configurable` still counts as supplied.
+- **`--help` names a command the way it is typed.** Its `Command:` line was built from the handler's
+  function name, so `pypeek versions --help` printed `Command: pypeek-versions-cmd <package>`, and
+  `@app.command("token-info")` on `def auth_token_info_cmd` printed `Command: auth-token-info-cmd`.
+  It now prints the registered name: `Command: versions <package>`, `Command: token-info`.
 - **A value bound to a `str` parameter reaches the command exactly as typed.** Every override
   value is read as YAML, which is right for an untyped config key (`--trainer.lr 0.001` is a
   float) and destructive for declared text: a multi-line value was folded onto one line,

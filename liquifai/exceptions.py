@@ -38,6 +38,14 @@ class UnknownFlagError(LiquifaiError, ValueError):
     """
 
 
+class MissingArgumentError(LiquifaiError, TypeError):
+    """A command parameter without a default received no value from the CLI, the config, or DI.
+
+    Dual-inherits ``TypeError`` because that is what calling the command without it raised before
+    the check existed, so an ``except TypeError`` around an in-process dispatch keeps working.
+    """
+
+
 class ConfigNotFoundError(LiquifaiError, FileNotFoundError):
     """The requested configuration file does not exist.
 
