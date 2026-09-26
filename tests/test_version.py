@@ -9,6 +9,7 @@ imports the ``liquifai`` package; reading the metadata costs ~15 ms (measured 20
 ~11 ms for the whole ``liquifai.completion`` import, so an eager read would more than double it.
 """
 
+import os
 import subprocess
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -29,9 +30,16 @@ def test_the_from_import_spelling_works_too() -> None:
 
 
 def test_importing_liquifai_does_not_read_the_metadata() -> None:
-    """A fresh interpreter: `import liquifai` must leave `importlib.metadata` unimported."""
+    """A fresh interpreter: `import liquifai` must leave `importlib.metadata` unimported.
+
+    The probe runs WITHOUT the coverage tool's environment: under `pytest --cov`, pytest-cov
+    exports `COV_CORE_*` so its `.pth` hook starts coverage in every child interpreter, and
+    coverage imports `importlib.metadata` itself — the test then measured the tool, not liquifai
+    (it failed only in CI, which runs with `--cov`).
+    """
     probe = "import sys, liquifai; print('importlib.metadata' in sys.modules)"
-    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("COV_CORE_", "COVERAGE_"))}
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True, env=env).stdout
     assert out.strip() == "False"
 
 
