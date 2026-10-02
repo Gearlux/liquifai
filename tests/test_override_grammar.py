@@ -265,8 +265,6 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 # apply_overrides — the whole "parsed tokens -> changed config tree" step
 # ---------------------------------------------------------------------------
-# Formerly the chainable ``ConfigPipeline`` class (removed 2026-07-26): three
-# methods, two call sites, no state worth an object.
 
 
 def test_apply_overrides_sets_flat_and_dotted_keys() -> None:

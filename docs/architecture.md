@@ -121,8 +121,10 @@ complete_from_tree(read_cache("myapp"), words, cword)
 
 **What you may change.** The cache format is versioned — bump `CACHE_VERSION`
 and stale caches are rewritten rather than misread. What you may NOT change is
-the stdlib-only rule for `liquifai/completion/**`; there is a test that fails
-if a submodule grows a heavy import.
+the stdlib-only rule for `liquifai/completion/**`. A test pins it for `grammar.py`
+(`tests/test_grammar.py::test_grammar_module_is_stdlib_only`); the rest of the fast
+path (`completion/**`, `walk.py`, `exceptions.py`, `_fast_complete.py`) is held to it
+by review.
 
 ---
 

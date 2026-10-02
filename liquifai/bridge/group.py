@@ -20,7 +20,7 @@ THIS bridge instance — registration is per-bridge, never a module global, so
 two bridged apps in one process cannot collide.
 
 NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
-annotation objects are required by liquifai/confluid/FastMCP introspection.
+annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
 import inspect

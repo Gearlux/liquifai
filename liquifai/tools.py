@@ -1,7 +1,7 @@
 """Generic MCP tool builder for :class:`~liquifai.LiquifyApp` operations.
 
-NOTE: do not add ``from __future__ import annotations`` — FastMCP and pydantic-ai
-introspect live annotation objects on tool parameters.
+NOTE: do not add ``from __future__ import annotations`` — the MCP SDK's ``MCPServer`` and
+pydantic-ai introspect live annotation objects on tool parameters.
 """
 
 import functools
@@ -49,7 +49,7 @@ def make_mcp_tools(
 
     * has ``__name__`` == the operation function name (e.g. ``"dataset_list"``).
     * advertises the factory params + the operation's own params in its
-      ``__signature__`` / ``__annotations__`` so FastMCP generates correct JSON Schema.
+      ``__signature__`` / ``__annotations__`` so ``MCPServer`` generates correct JSON Schema.
     * catches all exceptions and returns ``{"error": str(exc)}`` so a single tool
       failure cannot break an MCP session.
 

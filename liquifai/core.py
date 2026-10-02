@@ -518,10 +518,9 @@ class LiquifyApp:
         :meth:`_execute` (phase 6).
         """
         # 0. SHELL COMPLETION — must short-circuit before any bootstrap so
-        # tab completion stays fast and side-effect-free. (The old in-process
-        # ``_<APP>_COMPLETE`` env-var protocol was removed: every installed
-        # shell wrapper calls the standalone ``liquifai-complete`` binary, so
-        # the in-app path was dead code in production.)
+        # tab completion stays fast and side-effect-free. Every installed shell
+        # wrapper calls the standalone ``liquifai-complete`` binary; only the
+        # install and refresh requests are handled in-app.
         if self._maybe_handle_completion_install(sys.argv[1:]):
             return None
         if self._maybe_handle_refresh_completion_value(sys.argv[1:]):

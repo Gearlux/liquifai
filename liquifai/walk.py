@@ -178,7 +178,7 @@ def walk_invocation(
         tok = tokens[i]
         # A value-taking global flag owns the next token, so `app --level run`
         # is "--level=run", NOT the `run` command. Both tokens still land in
-        # `remaining` for `_parse_globals` to consume — the walk only declines
+        # `remaining` for `flags.parse_globals` to consume — the walk only declines
         # to interpret the value.
         if not tok.literal and tok.text in GLOBAL_VALUE_FLAGS and i + 1 < n and not tokens[i + 1].literal:
             walk.remaining.append(tok)

@@ -16,9 +16,7 @@ Each takes the ``LiquifyApp`` as ``app`` (typed ``Any`` to avoid a circular
 import — ``core`` imports this module) and is called by a thin same-named
 private method on :class:`liquifai.core.LiquifyApp` so existing call sites and
 tests keep working unchanged. Those methods call these functions DIRECTLY —
-there is deliberately no controller object in between (the former
-``CompletionController`` forwarded five methods to these five functions and
-added no behaviour of its own).
+there is deliberately no controller object in between.
 """
 
 import os
