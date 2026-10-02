@@ -219,7 +219,7 @@ def test_apply_overrides_warns_even_when_nothing_else_applies() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _delete_dotted_key — applies deletions to the live config dict.
+# delete_dotted_key — applies deletions to the live config dict.
 # ---------------------------------------------------------------------------
 
 

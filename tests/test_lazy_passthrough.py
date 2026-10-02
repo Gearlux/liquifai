@@ -1,5 +1,5 @@
 """Pins the rule: ``confluid.PartialClass`` (the YAML ``!lazy:`` Fluid) is
-NEVER auto-flowed by liquifai's ``_deep_flow``, even in ``flow_mode="auto"``.
+NEVER auto-flowed by liquifai's ``deep_flow``, even in ``flow_mode="auto"``.
 
 The receiving code is responsible for calling ``confluid.flow(value,
 **runtime_kwargs)`` later (e.g. inside ``configure_optimizers``).
