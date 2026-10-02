@@ -578,60 +578,6 @@ level — that is the one step that would quietly make it public.
 
 ---
 
-## 7. Deprecations are served by `__getattr__`, not by a comment
-
-*2026-07-26*
-
-**Context.** The 2026-07 consolidation moved helpers out of `core.py` into
-`di`, `overrides` and `grammar`. External code imported them from their old
-home under underscore-prefixed names, so `core.py` kept nine aliases:
-
-```python
-_deep_flow = di.deep_flow
-_expand_strings = overrides.expand_strings
-...
-```
-
-with a comment saying "do not remove these". That note stood for months and the
-aliases never got cleaned up, for a structural reason: **a plain assignment is
-invisible**. Nothing distinguishes an alias access from any other attribute
-access, so there was no way to tell whether a consumer still used one, no
-signal reaching anybody who did, and therefore no moment at which removing them
-felt safe. A comment cannot deprecate anything.
-
-**Decision.** Serve them from a PEP-562 module `__getattr__` that emits a
-`DeprecationWarning` naming the exact replacement import, and remove the plain
-assignments. Migrate liquifai's own code and tests onto the owning modules, and
-pin that with a test that greps the package for any internal use.
-
-**Consequences.**
-
-- Access is now observable: a consumer's own test suite surfaces the warning,
-  and the message says precisely what to write instead — no cross-referencing.
-- The internal-usage pin turns the eventual deletion into a pure external
-  migration. When `test_deprecated_aliases.py` passes, the only thing standing
-  between here and removal is auditing consumers.
-- A removal date exists (v1.0) and appears in the warning, so the decision is
-  not deferred indefinitely by the absence of a forcing function.
-- Cost: attribute access on `liquifai.core` for an unknown name now runs a
-  Python-level hook. Irrelevant here (these are import-time lookups), but worth
-  knowing before applying the pattern to a hot path.
-
-**Example.**
-
-```python
->>> import liquifai.core as core
->>> core._deep_flow
-DeprecationWarning: liquifai.core._deep_flow is deprecated and will be removed
-in v1.0; import it from its owning module instead:
-`from liquifai.di import deep_flow`.
-```
-
-**What you may change.** Nothing here is load-bearing for behaviour — the
-aliases resolve to the same objects. What must NOT change is the direction: do
-not add a new alias to `_DEPRECATED_ALIASES` (it is a shrinking set), and do
-not silence the warning to make a test suite quiet — migrate the import.
-
 ## 8. Host facts reach a config as a scope AND as an injected key
 
 *(2026-08-22)*
@@ -777,3 +723,66 @@ flag layer. What must NOT change: an unset flag stays `None`. Never re-read a
 it passes every end-to-end test, and it re-creates this bug the moment the engine
 grows a layer liquifai does not mirror. `tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`
 pins the mechanism directly for that reason.
+
+## 10. An operation is registered once and wrapped for each front-end
+
+*(2026-07-14)*
+
+**Context.** The same function often needs two callers: a person at a shell and an LLM
+calling a tool. A CLI handler prints; a tool must return data. Writing each surface by hand
+means two parameter lists, two sets of defaults and two docstrings for one behaviour, and they
+drift: a parameter added to the CLI never reaches the tool schema, or the reverse.
+
+**Decision.** A pure operation is a function that returns a JSON-serializable dict, registered
+once with `@app.operation()`. Each front-end gets a thin wrapper around that one function:
+
+- `build_commands()` wraps it as a CLI command. The wrapper asks the CLI context factory for
+  the injected first argument (`conn`), calls the operation, and hands the dict to the
+  presenter.
+- `make_mcp_tools()` wraps it as an MCP tool. The MCP context factory's own parameters are
+  prepended to the tool's parameters, and a failure is returned in-band as `{"error": …}` so
+  one tool cannot break a session.
+
+Both wrappers get their signature from the same two helpers in `introspection.py`:
+`split_context_param` removes the injected `conn` parameter, and `graft_signature` stamps the
+wrapper's `__signature__` and `__annotations__`. `@app.command()` stays the decorator for
+hand-written CLI handlers only; it takes no `presentation`, so an operation has exactly one
+registration path.
+
+**Consequences.**
+
+- A parameter added to an operation appears everywhere at once: as a CLI flag, in `--help`
+  and completion, and in the MCP JSON schema. A parameter without a default becomes a CLI
+  positional.
+- The injected connection is never a caller-visible parameter. A CLI call configures it
+  through the CLI context factory, which typically reads `liquifai.get_context()` (so a
+  `--dry_run` override reaches it); an MCP call configures it through the MCP factory's
+  parameters.
+- The schemas are generated from live annotation objects, so `tools.py` and `bridge/` must not
+  use `from __future__ import annotations`: string annotations would reach the schema
+  generator unevaluated.
+- The guarantee holds only while the surgery stays in one place. A third copy, written for one
+  more wrapper, reopens the drift this record exists to prevent.
+
+**Example.**
+
+```python
+app = LiquifyApp(name="dataset")
+
+@app.operation(presentation="list", columns=(("name", "Name"),))
+def dataset_list(conn: MyConn, *, limit: int = 10) -> dict:   # `conn` is injected
+    return {"items": [...], "count": 3}
+
+app.set_context_factory(build_conn)        # CLI: where `conn` comes from
+app.set_presenter(render_result)           # CLI: how the dict is printed
+app.build_commands()                       # -> `dataset list --limit 5`
+
+app.set_mcp_context_factory(lambda dry_run=False: MyConn(dry_run=dry_run))
+for tool in make_mcp_tools(app):           # the same function as an MCP tool
+    mcp_server.tool()(tool)                #    schema: {dry_run: bool, limit: int}
+```
+
+**What you may change.** You may add a front-end (another wrapper over `_operations`), a
+presentation, or operation metadata. Build any new wrapper's signature with
+`split_context_param` and `graft_signature`, never by hand, and do not give `@app.command()` a
+second way to register an operation.
