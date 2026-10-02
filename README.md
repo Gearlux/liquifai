@@ -20,7 +20,7 @@ Each topic has its own guide, and every guide has a runnable companion script in
 | Guide | What it covers | Example |
 |---|---|---|
 | [Commands & Dependency Injection](https://github.com/Gearlux/liquifai/blob/main/docs/commands-and-di.md) | `@command` / `@script_command`, config promotion (with `./config/` + XDG search paths and its DEBUG provenance notice), DI block lookup, positional arguments, flow modes | `positionals_app.py`, `promotion_app.py` et al. |
-| [CLI Overrides](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md) | The override grammar (`--key value`, dotted keys, polarity, add/delete) and the dropped-token warning | `overrides_app.py` |
+| [CLI Overrides](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md) | The override grammar (`--key value`, dotted keys, polarity, add/delete), the dropped-token warning, short options and strict flags | `overrides_app.py` |
 | [Global Flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md) | Log control (`--level`, `--log-dir`, …), `--scope` / dimension flags, `--debug`, `--docs` | `global_flags_app.py` |
 | [Host Facts](https://github.com/Gearlux/liquifai/blob/main/docs/host-facts.md) | The `os` / `device` scopes and the injected `platform` namespace — `!scope:os=darwin` blocks and `${platform.os}` values | `host_facts_app.py` |
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
@@ -87,114 +87,22 @@ if __name__ == "__main__":
 
 ## CLI Overrides
 
-Any token left after the command, positionals, and global flags is parsed as a
-config override. All forms interoperate in one invocation:
-
-| Form | Example | Effect |
-|---|---|---|
-| `--key value` | `--max_epochs 10` | set `max_epochs` (broadcast into matching nested configs) |
-| `--key=value` | `--trainer.lr=0.001` | equals form; dotted keys target nested blocks |
-| `key=value` | `model.dropout=0.2` | bare form, no dashes |
-| `--key+` / `--key-` | `--debug+` | polarity: explicit `True` / `False` |
-| `--key` | `--verbose` | implicit `True` |
-| `+key=value` | `+new_feature=true` | add a new key |
-| `~key` | `~trainer.stale` | delete the dotted key from the config |
-
-A token that matches **none** of these forms is not applied and liquifai logs a
-**warning** naming it (`Ignoring unrecognized CLI token 'lr' — expected one of:
-…`). Previously such tokens were dropped silently — a typo'd `lr 0.1` instead
-of `--lr 0.1` would run the whole job on defaults without a trace.
-
-**Hyphens and underscores are the same key.** `--custom-node URL` and `--custom_node URL`
-both address the parameter `custom_node`, and a dotted key normalises per segment
-(`--my-opt.learning-rate` → `my_opt.learning_rate`). This is safe rather than a guess: a
-hyphen cannot appear in a Python identifier, so a hyphenated key could not have addressed
-a parameter under any spelling. Only **keys** are normalised — a URL or a negative number
-keeps its hyphens, and the polarity suffix is read first, so `--default-nodes-` still means
-*false* rather than a key ending in a separator.
-
-### Short options
-
-A command may declare single-letter aliases. They are **declared**, never derived from the
-parameter's first letter — deriving would silently shadow the global shorts (`-c`, `-s`, `-d`,
-`-h` are already config / scope / debug / help):
-
-```python
-@app.command(short={"p": "port", "b": "background"})
-def restart(port: int = 8188, background: bool = False):
-    ...
-```
-
-```
-$ myapp restart -b                 # == --background
-$ myapp restart -p 9000            # == --port 9000   (-p=9000 also works)
-
-$ myapp restart --help
- Option (Shortest Unique)  Type  Current/Default Value  Documentation
- -b, --background          bool  False                  Start detached.
- --port                    int   8188                   Port to use.
-```
-
-A letter that is reserved by a global, declared twice, longer than one character, or names no
-parameter of the command raises `CommandDefinitionError` at **decoration** time — an author's
-startup error rather than a user's wrong action. A short is pure sugar: it is expanded to the long
-spelling before parsing, so everything downstream sees only `--parameter`, and an **undeclared**
-`-x` still reaches the unrecognised-token path.
-
-### Strict flags
-
-By default an override that reaches nothing falls through to the config document, which is
-a legitimate pattern for a config-driven app. An app whose commands take **plain values**
-has no such fall-through — there, a flag that reaches nothing is indistinguishable from one
-that worked. Such an app opts in:
-
-```python
-app = LiquifyApp(name="myapp", description="…", strict_flags=True)
-```
-
-```
-$ myapp launch --custom-nod URL
-Error: myapp: unknown option 'custom_nod' — it names no parameter of the 'launch' command
-and no key in the configuration. Did you mean 'custom_node'? Declared parameters: …
-```
-
-The check is narrow on purpose: only a **bare** key is judged, against the command's own
-parameters plus the top-level config keys. A **dotted** key (`--opt.lr`) addresses a nested
-object, and whether it was delivered is something only confluid's materialization report
-knows — that path keeps its existing post-materialization warning, which sees delivery this
-check cannot.
-
-The single source of truth for the global-flag vocabulary and token
-classification is `liquifai/grammar.py` (stdlib-only); the parser, `--help`,
-and shell completion all derive from it, so they cannot drift apart. Override
-parsing/application lives in `liquifai/overrides.py`, and annotation-driven
-dependency injection in `liquifai/di.py`.
+Any token left after the command, positionals and global flags is a config override:
+`--max_epochs 10`, `--trainer.lr=0.001`, `model.dropout=0.2`, `+new_key=1`, `~stale.key`. Flags behave
+exactly as if their keys were appended to the end of the config file, in the order typed. A token that
+matches no override form is not applied and is reported with a warning. Single-letter command aliases
+(`@app.command(short={"p": "port"})`) and `strict_flags=True` apps, which refuse a flag that names no
+parameter, are covered in the
+[CLI Overrides guide](https://github.com/Gearlux/liquifai/blob/main/docs/cli-overrides.md).
 
 ## Error Handling
 
-Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits the builtin it replaces, so pre-existing `except ValueError:` / `except KeyError:` code keeps working unchanged:
-
-| Exception | Also a | Raised when |
-|---|---|---|
-| `CommandDefinitionError` | `ValueError` | a `@script_command` / `@operation` / bridge declaration is invalid (bad `flow_mode` / `presentation`, or an `SdkBridge` group naming an unregistered policy / adapter) |
-| `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
-| `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
-| `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
-
-Configuration-loading failures propagate Confluid's own hierarchy (`confluid.ConfluidError` and subclasses) — `LiquifaiError` covers CLI-definition errors only.
-
-### CLI failure contract
-
-When a command runs via `app.run()`:
-
-| Failure | Behavior | Exit code |
-|---|---|---|
-| `LiquifaiError` or `confluid.ConfluidError` (bad config, unresolvable class, invalid declaration) | One clean `Error: …` line on the console; full traceback written to the log file at DEBUG | 1 |
-| Same, with `--debug` on the line | The exception **propagates** — full traceback on the console | (Python default) |
-| Missing `--config` file | Dedicated `Configuration file not found` message | 1 |
-| Unknown command/group | `Unknown command or group` (or help when no default command exists) | 1 |
-| Missing required argument | ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
-| Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
+Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits the builtin it replaces
+(`ValueError`, `KeyError`, `TypeError`, `FileNotFoundError`), so pre-existing `except` code keeps working.
+Under `app.run()` a `LiquifaiError` or `confluid.ConfluidError` becomes one clean `Error: …` line and
+exit code 1; with `--debug` on the line the exception propagates with its full traceback. The exception
+table and the CLI failure contract are in the
+[Error Handling guide](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md).
 
 ## Operations, MCP Tools, and the SDK Bridge
 

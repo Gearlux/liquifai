@@ -9,7 +9,7 @@ and consumers register their own for SDK-dialect surfaces (e.g. a paginated
 via ``SdkBridge(policies={"list": MyListPolicy()})``.
 
 NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
-annotation objects are required by liquifai/confluid/FastMCP introspection.
+annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
 import inspect

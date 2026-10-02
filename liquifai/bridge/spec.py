@@ -13,7 +13,7 @@ Both stash their spec on the function; :meth:`liquifai.bridge.SdkBridge.group`
 consumes the specs at class-decoration time.
 
 NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
-annotation objects are required by liquifai/confluid/FastMCP introspection.
+annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
 from dataclasses import dataclass, field

@@ -4,9 +4,9 @@ This module holds the ONE declaration of the global CLI flags
 (:data:`GLOBAL_FLAG_SPECS`) plus the token classifiers shared by the
 dispatcher and the completion engine. Every other surface DERIVES from it:
 
-* ``core._parse_globals`` iterates the spec table to route flag values.
+* ``flags.parse_globals`` iterates the spec table to route flag values.
 * ``core._show_help`` renders the "Global Options" block from it.
-* ``completion.py`` re-exports the derived flag sets for TAB candidates.
+* ``liquifai.completion`` re-exports the derived flag sets for TAB candidates.
 
 Never restate a flag list elsewhere — the pre-consolidation code kept three
 hand-maintained copies (parser handlers, completion constants, help strings)

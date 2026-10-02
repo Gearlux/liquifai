@@ -9,7 +9,7 @@ Deliberately stdlib-only so a consumer's policy module can import it without
 pulling in the rest of liquifai.
 
 NOTE: no ``from __future__ import annotations`` anywhere in ``liquifai.bridge``
-— liquifai/confluid/FastMCP introspect live annotation objects on synthesized
+— liquifai/confluid/``MCPServer`` introspect live annotation objects on synthesized
 operation signatures.
 """
 

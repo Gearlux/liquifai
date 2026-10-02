@@ -4,9 +4,10 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 
 | Exception | Also a | Raised when |
 |---|---|---|
-| `CommandDefinitionError` | `ValueError` | a `@command` / `@script_command` / `@operation` declaration is invalid (bad `presentation` / `flow_mode`) |
+| `CommandDefinitionError` | `ValueError` | a `@command` / `@script_command` / `@operation` / bridge declaration is invalid (bad `flow_mode` / `presentation`, or an `SdkBridge` group naming an unregistered policy / adapter) |
 | `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
 | `UnknownCommandError` | `ValueError` | the argv tokens resolved to no command, and the group has no default |
+| `UnknownFlagError` | `ValueError` | an app built with `strict_flags=True` got a CLI token that names no parameter of the command (and no top-level config key), or that matches no override form |
 | `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
 | `ConfigNotFoundError` | `FileNotFoundError` | the configuration file named on the CLI does not exist |
 | `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
@@ -41,6 +42,7 @@ When a command runs via `app.run()`:
 | Same, with `--debug` on the line | The exception **propagates** — full traceback on the console | (Python default) |
 | Missing `--config` file | `ConfigNotFoundError` -> dedicated `Configuration file not found` message | 1 |
 | Unknown command/group | `UnknownCommandError` -> `Unknown command or group` (or help when no default command exists) | 1 |
+| Unknown flag under `strict_flags=True` | `UnknownFlagError` -> ``Error: myapp: unknown option 'custom_nod' — it names no parameter of the 'launch' command …`` | 1 |
 | Missing required argument | `MissingArgumentError` -> ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
 | Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
 

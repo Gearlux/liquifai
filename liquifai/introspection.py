@@ -30,7 +30,7 @@ def graft_signature(
 ) -> None:
     """Stamp ``fn`` with a synthesized ``__signature__`` / ``__annotations__``.
 
-    The shared second step: introspection consumers (FastMCP JSON-Schema
+    The shared second step: introspection consumers (``MCPServer`` JSON-Schema
     generation, liquifai's own DI/help/completion walkers) read the wrapper's
     signature, so it must advertise ``extra_params`` (e.g. context-factory
     params) followed by the operation's own ``params``. Extra params fall

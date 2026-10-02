@@ -37,7 +37,7 @@ Consumer-dialect code never lands in liquifai itself.
    :data:`__provisional__` is the machine-readable form of this notice.
 
 NOTE: no ``from __future__ import annotations`` anywhere in this subpackage —
-liquifai/confluid/FastMCP introspect live annotation objects on the
+liquifai/confluid/``MCPServer`` introspect live annotation objects on the
 synthesized operation signatures.
 """
 

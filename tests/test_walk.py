@@ -5,7 +5,7 @@ Three contracts:
 1. ``--`` ends option parsing — every following token is a literal value, so a
    dash-leading positional is representable at last.
 2. A value-taking global flag owns the next token (``--level run`` is not the
-   ``run`` command) while both tokens still reach ``_parse_globals``.
+   ``run`` command) while both tokens still reach ``flags.parse_globals``.
 3. The router and the completion engine run the SAME walk over their two data
    shapes, so a line routes identically for dispatch and for TAB.
 """
@@ -134,7 +134,7 @@ def test_global_value_flag_value_is_not_mistaken_for_a_command() -> None:
     """`--level seek` is a flag+value pair, not the `seek` command."""
     inv = router.route(_seek_app(), ["--level", "seek"])
     assert inv.target_func is None
-    # Both tokens survive for _parse_globals to consume.
+    # Both tokens survive for flags.parse_globals to consume.
     assert [t.text for t in inv.remaining_tokens] == ["--level", "seek"]
 
 

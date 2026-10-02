@@ -1,6 +1,6 @@
 """Pins :mod:`liquifai.grammar` — the single source of truth for the CLI grammar.
 
-The parser (``core._parse_globals``), completion (``completion.GLOBAL_FLAGS``
+The parser (``flags.parse_globals``), completion (``completion.GLOBAL_FLAGS``
 et al.), and ``--help`` all DERIVE from :data:`liquifai.grammar.GLOBAL_FLAG_SPECS`.
 These tests pin the derivations and — most importantly — that help output can
 never again drift from the declared flag vocabulary (pre-consolidation,
