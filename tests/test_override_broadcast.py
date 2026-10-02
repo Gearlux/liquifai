@@ -1,4 +1,4 @@
-"""Override-matcher tests: `_merge_overrides_into_fluids` and friends.
+"""Override-matcher tests: `merge_overrides_into_fluids` and friends.
 
 Pins the rule: a flat CLI override `--key value` is a BARE broadcast, so it
 lands on every Fluid whose target class accepts it per

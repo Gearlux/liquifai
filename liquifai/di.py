@@ -3,8 +3,7 @@
 Extracted from ``core.py`` in the consolidation split: this module owns the
 annotation-driven resolution (:func:`resolve_kwargs`), the recursive Fluid
 flowing walker (:func:`deep_flow`), and the confluid active-context shim
-(:func:`confluid_active_context`). ``core.py`` re-exports the historical
-underscore-prefixed names for existing callers (streamstudio, tests).
+(:func:`confluid_active_context`).
 """
 
 from __future__ import annotations
@@ -125,9 +124,6 @@ def confluid_active_context(context_data: Dict[str, Any]) -> Iterator[None]:
 
     Thin wrapper over the public :func:`confluid.active_context` (which this
     helper predates — it used to reach into confluid's engine state directly).
-    Also reachable under a deprecated underscore-prefixed alias on
-    :mod:`liquifai.core`, which warns and is removed in v1.0 — import it from
-    here.
     """
     with active_context(context_data):
         yield

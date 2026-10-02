@@ -1,10 +1,9 @@
 import difflib
 import inspect
 import sys
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, Tuple, get_args
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, get_args
 
 import confluid
 import loggair
@@ -12,7 +11,7 @@ from loggair import get_logger
 from rich.console import Console
 from rich.markup import escape
 
-from liquifai import completion_cli, di, flags, grammar, host, overrides, report, router
+from liquifai import completion_cli, di, flags, host, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
     CommandDefinitionError,
@@ -1114,51 +1113,3 @@ class LiquifyApp:
         # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion
         # derive from, so help can never drift from what the CLI accepts.
         report.show_global_options(console)
-
-
-# ---------------------------------------------------------------------------
-# DEPRECATED re-exports — scheduled for removal in v1.0.
-#
-# The consolidation split moved these helpers to their own modules
-# (:mod:`liquifai.grammar`, :mod:`liquifai.overrides`, :mod:`liquifai.di`), but
-# external callers imported them from ``liquifai.core`` under their historical
-# underscore-prefixed names. They still resolve, and now emit a
-# ``DeprecationWarning`` naming the exact replacement import.
-#
-# They are served through a PEP-562 module ``__getattr__`` rather than plain
-# assignments so ACCESS is what warns — a plain alias cannot be detected, which
-# is why the previous "keep them forever" note never converged on a cleanup.
-# Nothing inside liquifai uses them (pinned by
-# ``tests/test_deprecated_aliases.py``); the remaining consumers are external.
-# ---------------------------------------------------------------------------
-
-#: ``{alias: (owning module, public name)}`` — the full deprecated surface.
-_DEPRECATED_ALIASES: Dict[str, Tuple[str, str]] = {
-    "_confluid_active_context": ("liquifai.di", "confluid_active_context"),
-    "_deep_flow": ("liquifai.di", "deep_flow"),
-    "_parse_override_args": ("liquifai.overrides", "parse_override_args"),
-    "_merge_overrides_into_fluids": ("liquifai.overrides", "merge_overrides_into_fluids"),
-    "_delete_dotted_key": ("liquifai.overrides", "delete_dotted_key"),
-    "_expand_strings": ("liquifai.overrides", "expand_strings"),
-    "_stops_positional": ("liquifai.grammar", "stops_positional"),
-    "_looks_like_arg": ("liquifai.grammar", "looks_like_arg"),
-    "_looks_like_key": ("liquifai.grammar", "looks_like_key"),
-}
-
-_ALIAS_MODULES = {"liquifai.di": di, "liquifai.grammar": grammar, "liquifai.overrides": overrides}
-
-
-def __getattr__(name: str) -> Any:
-    """Serve the deprecated ``liquifai.core`` aliases, warning on each access."""
-    target = _DEPRECATED_ALIASES.get(name)
-    if target is None:
-        raise AttributeError(f"module 'liquifai.core' has no attribute {name!r}")
-    module_name, public_name = target
-    warnings.warn(
-        f"liquifai.core.{name} is deprecated and will be removed in v1.0; "
-        f"import it from its owning module instead: "
-        f"`from {module_name} import {public_name}`.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return getattr(_ALIAS_MODULES[module_name], public_name)

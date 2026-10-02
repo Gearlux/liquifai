@@ -4,6 +4,14 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
+## [Unreleased]
+
+### Changed
+
+- **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
+  helpers are imported from the module that owns them: `liquifai.overrides`,
+  `liquifai.grammar` and `liquifai.di`.
+
 ## [0.3.0] - 2026-09-26
 
 ### Added
@@ -277,14 +285,6 @@ _First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
   New `examples/promotion_app.py` exercises all four outcomes (CWD,
   `./config/`, an XDG file that swallows a positional, and no match) against
   a sandboxed temp workspace.
-- **The nine `liquifai.core` re-export aliases are DEPRECATED** (removal in
-  v1.0). They are now served by a PEP-562 `core.__getattr__` that emits a
-  `DeprecationWarning` naming the exact replacement import, instead of plain
-  assignments — a plain alias is invisible, which is why the previous "keep
-  these" comment never converged on a cleanup. liquifai's own source and tests
-  were migrated onto the owning modules (`di` / `overrides` / `grammar`) and a
-  test now fails if anything internal regresses onto the deprecated surface, so
-  the v1.0 deletion is a pure external-consumer migration.
 - **Removed**: the `CliRouter` class (routing is the stateless
   `router.route(app, argv)`; `router.py` keeps the real content — the `_AppNav`
   adapter and the promoted-config resolver) and `liquifai/pipeline.py` entirely
@@ -297,8 +297,6 @@ _First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
   `._bind_dimension_flags` are gone (use `liquifai.flags`);
   `_apply_overrides` takes `Token`s; `Invocation` gained a required
   `config_token` field.
-- **New**: `docs/architecture.md` record 7 — why a deprecation must be served
-  by `__getattr__` rather than announced in a comment.
 
 - **Broadcast opt-outs are no longer bypassed by CLI overrides** *(bug fix)*.
   liquifai computed its own accept-list to decide which config nodes an
