@@ -62,6 +62,7 @@ from .cache import (  # noqa: F401
     make_lazy_refresh_spawner,
     read_dependent_value_cache,
     read_value_cache,
+    spawn_tree_refresh,
     value_cache_key,
     value_cache_path,
     values_cache_dir,

@@ -171,6 +171,12 @@ How it stays fast and offline-safe:
   kicks off a *detached, throttled* background refresh, so a freshly-added
   positional (e.g. a new `run list <experiment>`) populates itself on the **next**
   TAB — no manual `--refresh-completions` required.
+- **A missing or outdated command-tree cache self-heals too.** No
+  `~/.cache/liquifai/<app>.json`, or one written by an older liquifai, completes
+  nothing on that TAB (bash then lists files) and detaches
+  `my-app --refresh-completions` in the background, so the **next** TAB works. Same
+  throttle and `LIQUIFAI_NO_LAZY_COMPLETE=1` opt-out as the value caches; the throttle
+  marker is `~/.cache/liquifai/<app>.pending`.
 - **Refresh-everything is explicit by default**: run `my-app --refresh-completions`
   to (re)populate ALL value caches at once. Opt into automatic background refresh by
   setting `LIQUIFAI_BG_REFRESH=1` — then a successful run refreshes stale caches
