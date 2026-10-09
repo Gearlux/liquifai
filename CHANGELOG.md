@@ -6,6 +6,13 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **TAB on an app whose command-tree cache is missing or from an older liquifai no longer stays
+  dead.** `liquifai-complete` now detaches `<app> --refresh-completions` (throttled, opt out with
+  `LIQUIFAI_NO_LAZY_COMPLETE=1`), so the first TAB after an upgrade completes nothing and the next
+  one works; before, only running the app by hand rebuilt the cache.
+
 ### Changed
 
 - **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection

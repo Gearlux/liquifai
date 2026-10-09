@@ -8,9 +8,9 @@ Wire protocol: the shell wrapper sets either ``COMP_LINE`` + ``COMP_POINT`` (the
 raw command line + cursor offset — bash, quote-aware) OR ``COMP_WORDS`` +
 ``COMP_CWORD`` (the pre-split word array — zsh/fish, already quote-aware, and old
 bash installs), and passes the target app name as ``argv[1]``. We read the on-disk
-command-tree cache and emit candidates one per line. Cache miss → silent exit (the
-user gets one slow completion the first time they actually run the app, then the
-cache is populated and subsequent TABs are fast).
+command-tree cache and emit candidates one per line. Cache miss (no file, or one from an
+older ``CACHE_VERSION``) → silent exit plus a detached ``<app> --refresh-completions`` that
+repopulates it, so the next TAB is fast.
 
 ``COMP_LINE`` is preferred when present because bash's ``COMP_WORDS`` splits on
 whitespace WITHOUT honoring quotes/escapes — so a value like ``"Helios Base Model"``
@@ -28,6 +28,7 @@ from liquifai.completion import (
     escape_candidate,
     make_lazy_refresh_spawner,
     read_cache,
+    spawn_tree_refresh,
     split_comp_words,
     wants_forced_refresh,
     words_from_comp_line,
@@ -40,6 +41,8 @@ def main() -> None:
     app_name = sys.argv[1]
     tree = read_cache(app_name)
     if tree is None:
+        # Missing or outdated cache: this TAB completes nothing, the detached refresh makes the next one work.
+        spawn_tree_refresh(app_name)
         return
 
     # Prefer COMP_LINE/COMP_POINT (bash: quote-aware re-tokenization keeps
