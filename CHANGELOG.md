@@ -12,6 +12,23 @@ All notable changes to liquifai are documented here. The format follows
   dead.** `liquifai-complete` now detaches `<app> --refresh-completions` (throttled, opt out with
   `LIQUIFAI_NO_LAZY_COMPLETE=1`), so the first TAB after an upgrade completes nothing and the next
   one works; before, only running the app by hand rebuilt the cache.
+- **An MCP tool reports a context it cannot build in-band.** A raising MCP context factory now
+  returns `{"error": "<message>"}`, as every other tool failure does; before, the exception left
+  the tool.
+- **`make_mcp_tools` builds a tool for an operation with a required parameter that is not
+  keyword-only** (`def dataset_get(conn, name: str)`). Every tool parameter is now advertised
+  keyword-only; before, a factory with defaulted parameters made the whole call fail with
+  `ValueError: non-default argument follows default argument`.
+- **An operation without a `conn` parameter works from the CLI and as an MCP tool.** The context
+  is passed by name, only to an operation that declares `conn`; such an operation's tool no
+  longer advertises the factory's parameters. Before, the context was passed as the first
+  argument: `def pkg_version(name: str)` failed with `got multiple values for argument 'name'`.
+- **An operation parameter named like an MCP factory parameter is a `CommandDefinitionError`**
+  naming the operation and the parameter; before, `make_mcp_tools` failed with
+  `ValueError: duplicate parameter name`.
+- **`LiquifyApp.liquify()` loads the config it is given.** A second call naming another file
+  returned the first file's values. The active context is reused only for the same file (or no
+  file), and a call naming another file no longer replaces it.
 
 ### Changed
 

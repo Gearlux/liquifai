@@ -138,6 +138,15 @@ project folder shadows the package.
   `completion.tree._provider_spec`; instance walks use `confluid.get_hierarchy_from_instance`. §10.
 - `@app.operation` is the only operations path; `command()` takes no `presentation`.
   (`tests/test_operation_command.py`)
+- Both operation wrappers pass the context BY NAME as `introspection.CONTEXT_PARAM`, and only to
+  an operation that declares it; never `op(conn, …)`. An MCP tool advertises keyword-only
+  parameters, the factory's only for an operation that takes the context, refuses an operation
+  parameter named like a factory parameter (`CommandDefinitionError`), and builds the context
+  inside its `try`. §10. (`tests/test_operation_command.py::test_a_failing_mcp_context_factory_is_reported_in_band`
+  and the five tests after it)
+- `liquify()` answers from the active context only when the call names no `scopes` and no other
+  file; otherwise it loads the named file, and installs that context only if none was active.
+  (`tests/test_help_with_config.py::test_liquify_loads_the_config_it_is_given_not_the_one_a_previous_call_loaded`)
 - No `from __future__ import annotations` in `tools.py` or `bridge/`: DI, confluid and MCP
   schema generation read live annotation objects.
 - `core.py` re-exports nothing from `di`, `overrides` or `grammar`: a helper is imported from
@@ -172,6 +181,12 @@ project folder shadows the package.
   the throttle. `changed_at` is stamped only when the values changed.
   (`tests/test_completion.py::test_force_refresh_bypasses_ttl_on_fresh_cache`,
   `::test_force_refresh_spawns_once_per_session`, `::test_wants_forced_refresh`)
+- A missing or outdated command-tree cache detaches `<app> --refresh-completions`, which also
+  runs every provider (a network query, for an app whose providers make one). A background
+  refresh started by a TAB is accepted (user ruling 2026-10-13 — do not re-litigate) as long as
+  `LIQUIFAI_NO_LAZY_COMPLETE=1` disables it: every spawn the fast path makes goes through
+  `cache._spawn_throttled`, which honours it.
+  (`tests/test_completion.py::test_tree_refresh_is_throttled_and_can_be_opted_out`)
 - A new field in the serialized tree bumps `completion.tree.CACHE_VERSION`.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);

@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union, ca
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
-from liquifai.introspection import graft_signature, split_context_param
+from liquifai.exceptions import CommandDefinitionError
+from liquifai.introspection import CONTEXT_PARAM, graft_signature, split_context_param
 
 
 def make_mcp_tools(
@@ -48,10 +49,17 @@ def make_mcp_tools(
     Each generated tool:
 
     * has ``__name__`` == the operation function name (e.g. ``"dataset_list"``).
-    * advertises the factory params + the operation's own params in its
+    * advertises the factory params + the operation's own params, all keyword-only, in its
       ``__signature__`` / ``__annotations__`` so ``MCPServer`` generates correct JSON Schema.
-    * catches all exceptions and returns ``{"error": str(exc)}`` so a single tool
-      failure cannot break an MCP session.
+    * passes the built context to the operation BY NAME, as ``conn``. An operation without a
+      ``conn`` parameter gets no context: its tool neither calls the factory nor advertises
+      the factory's params.
+    * catches all exceptions — the factory's included — and returns ``{"error": str(exc)}``
+      so a single tool failure cannot break an MCP session.
+
+    Raises:
+        CommandDefinitionError: an operation parameter has the name of a factory parameter
+            (the tool could take that name only once).
 
     Args:
         app_or_ops: A :class:`~liquifai.LiquifyApp` or a ``{name: fn}`` dict of
@@ -80,14 +88,25 @@ def make_mcp_tools(
 
     tools: List[Callable[..., Dict[str, Any]]] = []
 
-    for _op_name, op_func in ops_items:
+    for op_name, op_func in ops_items:
         op_sig, op_params = split_context_param(op_func)
+        # The factory's parameters configure the context, so only an operation that declares
+        # one is built a context and advertises them.
+        uses_context = factory is not None and CONTEXT_PARAM in op_sig.parameters
+        extra_params = factory_params if uses_context else []
+        clash = [p.name for p in op_params if p.name in {e.name for e in extra_params}]
+        if clash:
+            raise CommandDefinitionError(
+                f"{op_name}: parameter {clash[0]!r} is also a parameter of the MCP context factory "
+                f"{getattr(factory, '__name__', repr(factory))!r}; an MCP tool takes each name once — "
+                f"rename the operation's parameter."
+            )
 
         # Capture loop variables — Python closures capture by reference.
         def _make_tool(
             op_func_: Callable[..., Any] = op_func,
-            factory_: Any = factory,
-            factory_params_: List[inspect.Parameter] = factory_params,
+            factory_: Any = factory if uses_context else None,
+            factory_params_: List[inspect.Parameter] = extra_params,
         ) -> Callable[..., Dict[str, Any]]:
             @functools.wraps(op_func_)
             def tool(**kwargs: Any) -> Dict[str, Any]:
@@ -98,17 +117,38 @@ def make_mcp_tools(
                     )
                     for p in factory_params_
                 }
-                conn = factory_(**fkwargs) if factory_ is not None else None
+                # The factory runs INSIDE the try: a context that cannot be built (an unreachable
+                # server, bad credentials) is a tool failure like any other, reported in-band.
                 try:
-                    result = op_func_(conn, **kwargs) if conn is not None else op_func_(**kwargs)
-                    return cast(Dict[str, Any], result)
+                    if factory_ is not None:
+                        kwargs[CONTEXT_PARAM] = factory_(**fkwargs)
+                    return cast(Dict[str, Any], op_func_(**kwargs))
                 except Exception as exc:  # noqa: BLE001 — MCP tools report failures in-band
                     return {"error": str(exc)}
 
             return tool
 
         tool = _make_tool()
-        graft_signature(tool, op_sig, op_params, return_annotation=Dict[str, Any], extra_params=factory_params)
+        # Every advertised parameter is KEYWORD-ONLY: a tool is only ever called by keyword, and
+        # the factory's defaulted parameters come first, so a required positional-or-keyword
+        # operation parameter after them would be an invalid signature.
+        graft_signature(
+            tool,
+            op_sig,
+            _keyword_only(op_params),
+            return_annotation=Dict[str, Any],
+            extra_params=_keyword_only(extra_params),
+        )
         tools.append(tool)
 
     return tools
+
+
+def _keyword_only(params: List[inspect.Parameter]) -> List[inspect.Parameter]:
+    """``params`` as keyword-only, ``**kwargs`` kept last; a ``*args`` no keyword call can fill is dropped."""
+    named = [
+        p.replace(kind=inspect.Parameter.KEYWORD_ONLY)
+        for p in params
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+    ]
+    return named + [p for p in params if p.kind is inspect.Parameter.VAR_KEYWORD]

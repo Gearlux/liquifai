@@ -392,3 +392,118 @@ def test_set_completions_unknown_operation_raises() -> None:
     app = LiquifyApp(name="dataset")
     with pytest.raises(UnknownOperationError):
         app.set_completions("nope", {"name": lambda: []})
+
+
+# ---------------------------------------------------------------------------
+# The context argument: built in-band, passed by NAME, absent from a tool that takes none
+# ---------------------------------------------------------------------------
+
+
+def test_a_failing_mcp_context_factory_is_reported_in_band() -> None:
+    """A tool never raises: the factory's failure is an `{"error": …}` result like the op's own."""
+    app = LiquifyApp(name="ds")
+
+    @app.operation()
+    def ds_list(conn: Any, *, limit: int = 10) -> Dict[str, Any]:
+        return {"limit": limit}
+
+    def factory(server: str = "PROD") -> Any:
+        raise ConnectionError(f"cannot reach {server}")
+
+    app.set_mcp_context_factory(factory)
+    (tool,) = make_mcp_tools(app)
+    assert tool(server="STAGING", limit=3) == {"error": "cannot reach STAGING"}
+
+
+def test_a_required_parameter_that_is_not_keyword_only_builds_a_tool() -> None:
+    """`name` without `*,` used to sit after the factory's defaulted `server` in the grafted
+    signature: `ValueError: non-default argument follows default argument` for the whole app."""
+    import inspect
+
+    app = LiquifyApp(name="ds")
+
+    @app.operation()
+    def ds_get(conn: Any, name: str) -> Dict[str, Any]:
+        return {"name": name, "server": conn}
+
+    app.set_mcp_context_factory(lambda server="PROD": server)
+    (tool,) = make_mcp_tools(app)
+    params = inspect.signature(tool).parameters
+    assert list(params) == ["server", "name"]
+    assert params["name"].default is inspect.Parameter.empty
+    assert all(p.kind is inspect.Parameter.KEYWORD_ONLY for p in params.values())
+    assert tool(name="ds1", server="DEV") == {"name": "ds1", "server": "DEV"}
+
+
+def test_an_operation_parameter_named_like_a_factory_parameter_is_refused() -> None:
+    import pytest
+
+    from liquifai.exceptions import CommandDefinitionError
+
+    app = LiquifyApp(name="ds")
+
+    @app.operation()
+    def ds_get(conn: Any, *, name: str, dry_run: bool = False) -> Dict[str, Any]:
+        return {}
+
+    def factory(server: str = "PROD", dry_run: bool = False) -> Any:
+        return object()
+
+    app.set_mcp_context_factory(factory)
+    with pytest.raises(CommandDefinitionError) as info:
+        make_mcp_tools(app)
+    assert str(info.value) == (
+        "ds_get: parameter 'dry_run' is also a parameter of the MCP context factory 'factory'; "
+        "an MCP tool takes each name once — rename the operation's parameter."
+    )
+
+
+def test_an_operation_without_conn_gets_no_context_from_the_mcp_tool() -> None:
+    """The context is passed BY NAME, only to an operation that declares `conn`; the factory's
+    parameters configure that context, so a tool without one does not advertise them."""
+    import inspect
+
+    built: list = []
+    app = LiquifyApp(name="pkg")
+
+    @app.operation()
+    def pkg_version(name: str) -> Dict[str, Any]:
+        return {"name": name}
+
+    app.set_mcp_context_factory(lambda server="PROD": built.append(server))
+    (tool,) = make_mcp_tools(app)
+    assert list(inspect.signature(tool).parameters) == ["name"]
+    assert tool(name="rich") == {"name": "rich"}
+    assert built == []
+
+
+def test_an_operation_without_conn_gets_no_context_from_the_cli() -> None:
+    built: list = []
+    app = LiquifyApp(name="pkg")
+
+    @app.operation()
+    def pkg_version(name: str) -> Dict[str, Any]:
+        return {"name": name}
+
+    app.set_context_factory(lambda: built.append("conn"))
+    shown: list = []
+    app.set_presenter(lambda result, presentation, **kw: shown.append(result))
+    app.build_commands()
+    app._commands["version"](name="rich")
+    assert shown == [{"name": "rich"}]
+    assert built == []
+
+
+def test_the_cli_passes_the_context_by_name_even_when_the_factory_returns_none() -> None:
+    seen: list = []
+    app = LiquifyApp(name="pkg")
+
+    @app.operation()
+    def pkg_info(conn: Any, *, name: str) -> Dict[str, Any]:
+        seen.append((conn, name))
+        return {}
+
+    app.set_context_factory(lambda: None)
+    app.build_commands()
+    app._commands["info"](name="rich")
+    assert seen == [(None, "rich")]

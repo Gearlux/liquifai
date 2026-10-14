@@ -3,9 +3,14 @@
 import inspect
 from typing import Any, Callable, List, Sequence, Tuple
 
+#: The parameter an operation receives its injected context under. Passed BY NAME, never by
+#: position: an operation without it gets no context (and its wrapper builds none), where a
+#: positional pass would hand the context to whatever its first parameter is.
+CONTEXT_PARAM = "conn"
+
 
 def split_context_param(
-    op_func: Callable[..., Any], context_param: str = "conn"
+    op_func: Callable[..., Any], context_param: str = CONTEXT_PARAM
 ) -> Tuple[inspect.Signature, List[inspect.Parameter]]:
     """Return ``op_func``'s signature and its parameters minus the context one.
 

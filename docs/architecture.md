@@ -760,6 +760,18 @@ registration path.
   through the CLI context factory, which typically reads `liquifai.get_context()` (so a
   `--dry_run` override reaches it); an MCP call configures it through the MCP factory's
   parameters.
+- The connection is passed BY NAME (`introspection.CONTEXT_PARAM`, `conn`), and only to an
+  operation that declares it. A positional pass handed it to whatever the first parameter was:
+  `def pkg_version(name: str)` came back `{'error': "pkg_version() got multiple values for
+  argument 'name'"}`. An operation without `conn` gets no factory call, and its tool advertises
+  none of the factory's parameters, since those configure a connection it never receives.
+- An MCP tool's advertised parameters are all keyword-only, factory parameters first. A tool is
+  only called by keyword, and with positional-or-keyword parameters a factory's defaulted
+  `server="PROD"` ahead of an operation's required `name` was an invalid signature, so
+  `make_mcp_tools` failed for the whole app. A name both sides declare is refused with a
+  `CommandDefinitionError`, because a tool can take each name only once.
+- The factory runs inside the tool's `try`: a connection that cannot be built is a tool
+  failure like any other, returned as `{"error": …}`.
 - The schemas are generated from live annotation objects, so `tools.py` and `bridge/` must not
   use `from __future__ import annotations`: string annotations would reach the schema
   generator unevaluated.
