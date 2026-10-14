@@ -46,9 +46,12 @@ class P:
             ``SdkBridge(adapters=...)``) parsing the CLI string into the
             structured SDK value.
         send_positional: pass to the SDK call positionally; else as a kwarg.
-        omit_empty: when an optional value is empty/falsy, drop it from the SDK
-            call (so the SDK default applies) instead of forwarding it.
-        validate: a flag (has a default) that is nonetheless required at runtime.
+        omit_empty: leave an optional value out of the SDK call (so the SDK default
+            applies) when it is missing (``None`` / ``""``) or is the declared default
+            and that default is empty (``""``, ``0``, ``False``). A typed ``0`` or
+            ``False`` that differs from the default is always sent.
+        validate: a flag (has a default) that is nonetheless required at runtime;
+            ``None`` or ``""`` counts as missing, ``0`` and ``False`` do not.
     """
 
     cli: str

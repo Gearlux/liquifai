@@ -16,7 +16,15 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Protocol, Tuple
 
-from liquifai.bridge.shaping import attr_str, dry_descriptor, format_call, items_result, record_to_dict, records_of
+from liquifai.bridge.shaping import (
+    attr_str,
+    dry_descriptor,
+    format_call,
+    is_missing,
+    items_result,
+    record_to_dict,
+    records_of,
+)
 from liquifai.bridge.shaping import require as _require
 from liquifai.bridge.spec import ExposeSpec, P
 
@@ -141,7 +149,9 @@ def resolve_call(
         if p.sdk is None:  # client-side-only param
             continue
         value = kwargs.get(p.cli, p.default if not p.required else "")
-        if p.omit_empty and not p.required and not value:
+        # Left to the SDK: a missing value, or the declared default when that default is empty
+        # (an option nobody touched). A typed `0` / `False` that differs from it is sent.
+        if p.omit_empty and not p.required and (is_missing(value) or (not value and value == p.default)):
             continue
         if p.adapt is not None:
             value = adapters[p.adapt](value)
