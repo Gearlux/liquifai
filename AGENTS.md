@@ -168,7 +168,7 @@ project folder shadows the package.
 - The `liquifai-complete` path reads JSON caches and imports only stdlib: every
   `liquifai/completion/` module stays stdlib-only at import (confluid only lazily inside
   functions). It never imports the app or runs a provider in-process; its one side effect is
-  detaching a self-heal subprocess. §2. *(Unpinned beyond `grammar.py`.)*
+  detaching a self-heal subprocess. §2. (`tests/test_fast_path_imports.py`)
 - `liquifai.__version__` is read lazily in `__init__.__getattr__`, because every TAB imports
   the package. Never make it eager.
   (`tests/test_version.py::test_importing_liquifai_does_not_read_the_metadata`)
