@@ -1,6 +1,7 @@
 """Tests for liquifai.bridge.group — SdkBridge end-to-end with a fake SDK."""
 
 import inspect
+import re
 from typing import Any, Callable, Dict, List
 
 import pytest
@@ -15,6 +16,8 @@ from liquifai.exceptions import CommandDefinitionError
 
 class FakeListPolicy:
     """A consumer-dialect list policy — proves the policy seam + options passthrough."""
+
+    options = frozenset({"client_filter"})
 
     def __init__(self) -> None:
         self.seen_options: List[Dict[str, Any]] = []
@@ -141,6 +144,137 @@ def test_unknown_adapter_raises_at_decoration() -> None:
         class WidgetClient(BaseWidgetClient):
             @expose(verb="info", presentation="fields", params=[P("name", adapt="bogus")])
             def get_widget(self) -> None: ...
+
+
+def test_a_misspelled_expose_setting_is_refused_at_decoration() -> None:
+    """`colums` / `presentaton` used to land in `options`, unread: a working op rendered wrong."""
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError) as info:
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", params=[P("name")], colums=(("name", "Name"),), presentaton="fields")
+            def get_widget(self) -> None: ...
+
+    line = inspect.getsourcelines(test_a_misspelled_expose_setting_is_refused_at_decoration)[1] + 7
+    assert str(info.value) == (
+        f"@expose('get_widget') in group 'widget' ({__file__}:{line}): unknown settings "
+        f"'colums' (did you mean 'columns'?), 'presentaton' (did you mean 'presentation'?). "
+        f"Policy 'call' (CallPolicy) reads none; a policy names the settings it reads in its "
+        f"`options` attribute."
+    )
+
+
+def test_a_setting_only_another_policy_reads_is_refused() -> None:
+    """`client_filter` is the list policy's; on an op routed to `call` nothing would read it."""
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError, match=r"unknown setting 'client_filter'\. Policy 'call'"):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", presentation="fields", params=[P("name")], client_filter="name")
+            def get_widget(self) -> None: ...
+
+
+def test_a_policy_names_the_settings_it_reads() -> None:
+    class TaggedPolicy:
+        options = frozenset({"tag", "flavour"})
+
+        def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+            def op(conn: Any) -> Dict[str, Any]:
+                return dict(spec.options)
+
+            op.__signature__ = build_op_signature([], ctx.conn_cls)  # type: ignore[attr-defined]
+            return op
+
+    bridge = _bridge(policies={"tagged": TaggedPolicy()})
+    with pytest.raises(CommandDefinitionError, match=r"'flavor' \(did you mean 'flavour'\?\)\. Policy 'tagged' "):
+
+        @bridge.group(name="widget", sub="widget")
+        class Misspelled(BaseWidgetClient):
+            @expose(verb="info", policy="tagged", flavor="mint")
+            def get_widget(self) -> None: ...
+
+    @bridge.group(name="gadget", sub="gadget")
+    class Spelled(BaseWidgetClient):
+        @expose(verb="info", policy="tagged", tag="t", flavour="mint")
+        def get_widget(self) -> None: ...
+
+    assert bridge.get_app("gadget")._operations["gadget_info"](FakeConn()) == {"tag": "t", "flavour": "mint"}
+
+
+def test_a_policy_that_names_no_settings_reads_none() -> None:
+    class Bare:
+        def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+            raise AssertionError("never built: the spec is refused first")
+
+    bridge = _bridge(policies={"bare": Bare()})  # type: ignore[dict-item]
+    with pytest.raises(CommandDefinitionError, match=r"unknown setting 'tag'\. Policy 'bare' \(Bare\) reads none"):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", policy="bare", tag="t")
+            def get_widget(self) -> None: ...
+
+
+@pytest.mark.parametrize(
+    "param, message",
+    [
+        (P("count", type=list), "P('count') declares type list; a parameter's type is one of str, int, float, bool"),
+        (P("tags", type=int, adapt="csv"), "P('tags') declares type int and adapter 'csv'; the adapter decides"),
+        (P("limit", type=int, default="10"), "P('limit') declares type int but its default '10' is a str"),
+    ],
+)
+def test_a_parameter_type_that_cannot_hold_is_refused_at_decoration(param: P, message: str) -> None:
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError, match=re.escape(message)):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="versions", presentation="status", params=[P("name"), param])
+            def get_widget_versions(self) -> None: ...
+
+
+def test_a_declared_type_reaches_the_mcp_schema() -> None:
+    bridge = _bridge()
+
+    @bridge.group(name="widget", sub="widget")
+    class WidgetClient(BaseWidgetClient):
+        @expose(verb="versions", presentation="status", params=[P("name"), P("count", type=int)])
+        def get_widget_versions(self) -> None: ...
+
+    app = bridge.get_app("widget")
+    app.set_mcp_context_factory(lambda dry_run=False: FakeConn(dry_run=dry_run))
+    (tool,) = make_mcp_tools(app)
+    assert {n: p.annotation for n, p in inspect.signature(tool).parameters.items() if n != "dry_run"} == {
+        "name": str,
+        "count": int,
+    }
+
+
+def test_a_typed_cli_positional_reaches_the_sdk_as_its_type() -> None:
+    """A CLI positional binds as text (`widget versions w1 7`); the SDK gets the number, as over MCP."""
+    sub = FakeSub({"get_widget_versions": None})
+    conn = FakeConn(client=FakeClient(widget=sub))
+
+    def configure(app: LiquifyApp) -> None:
+        app.set_context_factory(lambda: conn)
+        app.build_commands()
+
+    bridge = _bridge(configure=configure)
+
+    @bridge.group(name="widget", sub="widget")
+    class WidgetClient(BaseWidgetClient):
+        @expose(verb="versions", presentation="status", params=[P("name"), P("count", type=int)])
+        def get_widget_versions(self) -> None: ...
+
+    bridge.get_app("widget")._commands["versions"](name="w1", count="7")
+    assert sub.last_call() == ("get_widget_versions", (), {"name": "w1", "count": 7})
+
+
+def test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn() -> None:
+    app = _decorate_widget_group(_bridge())
+    assert app._operations["widget_info"].__annotations__ == {"name": str, "return": Dict[str, Any]}
 
 
 def test_consumer_adapter_merges_over_defaults() -> None:

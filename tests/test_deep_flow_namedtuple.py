@@ -1,4 +1,4 @@
-"""Regression test: ``_deep_flow`` must rebuild NamedTuples positionally.
+"""Regression test: ``deep_flow`` must rebuild NamedTuples positionally.
 
 Repro for the bug surfaced by the navigaitor end-to-end smoke run, where a
 ``recordstream.record.Record`` (a NamedTuple of ``(input, target, metadata)``)
@@ -49,7 +49,7 @@ def test_deep_flow_preserves_namedtuple_field_layout() -> None:
 
 
 def test_deep_flow_namedtuple_directly() -> None:
-    """Calling _deep_flow on a NamedTuple value directly must be a no-op."""
+    """Calling deep_flow on a NamedTuple value directly must be a no-op."""
     record = _Record(input="X", target=42, metadata={"k": "v"})
     result = deep_flow(record)
     assert isinstance(result, _Record)

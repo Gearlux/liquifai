@@ -1,10 +1,9 @@
 import difflib
 import inspect
 import sys
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, Tuple, get_args
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, get_args
 
 import confluid
 import loggair
@@ -12,7 +11,7 @@ from loggair import get_logger
 from rich.console import Console
 from rich.markup import escape
 
-from liquifai import completion_cli, di, flags, grammar, host, overrides, report, router
+from liquifai import completion_cli, di, flags, host, overrides, report, router
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
     CommandDefinitionError,
@@ -24,7 +23,7 @@ from liquifai.exceptions import (
     UnknownOperationError,
 )
 from liquifai.grammar import GLOBAL_FLAG_SPECS, HELP_FLAGS
-from liquifai.introspection import graft_signature, split_context_param
+from liquifai.introspection import CONTEXT_PARAM, graft_signature, split_context_param
 from liquifai.overrides import expand_strings, parse_override_args, str_param_names
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
 
@@ -262,6 +261,7 @@ class LiquifyApp:
             # Capture all loop variables — Python closures capture by reference.
             def _make_handler(
                 op_func_: Callable[..., Any] = op_func,
+                uses_context_: bool = CONTEXT_PARAM in sig.parameters,
                 presentation_: str = presentation,
                 columns_: Any = columns,
                 title_: str = title,
@@ -269,8 +269,11 @@ class LiquifyApp:
             ) -> Callable[..., None]:
                 def cmd(**kwargs: Any) -> None:
                     ctx_factory = self._context_factory
-                    conn = ctx_factory() if ctx_factory is not None else None
-                    result = op_func_(conn, **kwargs) if conn is not None else op_func_(**kwargs)
+                    call_kwargs = dict(kwargs)
+                    # BY NAME, and only to an operation that declares the context parameter.
+                    if uses_context_ and ctx_factory is not None:
+                        call_kwargs[CONTEXT_PARAM] = ctx_factory()
+                    result = op_func_(**call_kwargs)
                     presenter = self._presenter
                     if presenter is not None:
                         actual_title = title_.format_map(kwargs) if title_ and "{" in title_ else title_
@@ -519,10 +522,9 @@ class LiquifyApp:
         :meth:`_execute` (phase 6).
         """
         # 0. SHELL COMPLETION — must short-circuit before any bootstrap so
-        # tab completion stays fast and side-effect-free. (The old in-process
-        # ``_<APP>_COMPLETE`` env-var protocol was removed: every installed
-        # shell wrapper calls the standalone ``liquifai-complete`` binary, so
-        # the in-app path was dead code in production.)
+        # tab completion stays fast and side-effect-free. Every installed shell
+        # wrapper calls the standalone ``liquifai-complete`` binary; only the
+        # install and refresh requests are handled in-app.
         if self._maybe_handle_completion_install(sys.argv[1:]):
             return None
         if self._maybe_handle_refresh_completion_value(sys.argv[1:]):
@@ -972,9 +974,9 @@ class LiquifyApp:
     def _resolve_kwargs(self, func: Callable[..., Any]) -> Dict[str, Any]:
         """DI-resolve ``func``'s parameters against ``self.context.config_data``.
 
-        Shared between :meth:`run_command` and :meth:`liquify` — the latter
-        needs the same live instances DI would produce, but without actually
-        invoking the command. Delegates to :func:`liquifai.di.resolve_kwargs`.
+        Used by :meth:`run_command`; :meth:`liquify` calls
+        :func:`liquifai.di.resolve_kwargs` with the context it chose, which may
+        not be ``self.context``.
         """
         assert self.context is not None
         return di.resolve_kwargs(self.context, func)
@@ -993,40 +995,56 @@ class LiquifyApp:
         Public hook for tooling that needs the flowed graph (help rendering,
         graph export, test harnesses).
 
-        If ``config_path`` is None and a context already exists, the current
-        context's config is used verbatim. Otherwise the config is loaded
-        lazily here (no loggair / no CLI override merge — intended for
-        read-only introspection).
+        The active context (a real run's, overrides applied, or one a previous
+        call installed) is reused verbatim when the call names no ``scopes`` and
+        either no ``config_path`` or the file that context loaded. Otherwise the
+        config is loaded here (no loggair / no CLI override merge — intended for
+        read-only introspection); that context is installed only when none was
+        active, so a call naming another file never replaces a run's context.
         """
-        if self.context is None:
-            # Same XDG-lookup identity as run() — lazy introspection must
-            # resolve relative config paths the way a real run would.
-            confluid.set_app_name(self.name)
-            ctx = LiquifyContext(
-                name=self.name,
-                config_path=config_path,
-                scopes=scopes or [],
-                debug=False,
-            )
-            ctx.logger = get_logger(self.name)
-            if config_path is not None:
-                # Same host facts as a real run — help rendering and graph export must
-                # show the document THIS machine resolves, not an unscoped variant.
-                raw = confluid.load(config_path, until="raw")
-                ctx.host_facts = host.host_facts(host.forced_values(ctx.scopes))
-                ctx.scopes = host.auto_scopes(ctx.host_facts, raw) + ctx.scopes
-                data = host.inject_facts(raw, ctx.host_facts)
-                ctx.config_data = confluid.load(data, until="document", scopes=ctx.scopes or None)
-                ctx.config_data = expand_strings(ctx.config_data)
-            self.context = ctx
-            set_context(self.context)
-        kwargs = self._resolve_kwargs(target_func)
+        ctx = self.context
+        if ctx is None or not self._is_active_config(config_path, scopes):
+            ctx = self._introspection_context(config_path, scopes)
+            if self.context is None:
+                self.context = ctx
+                set_context(ctx)
+        kwargs = di.resolve_kwargs(ctx, target_func)
         # Deep-flow any unflowed Fluids so callers introspect live instances
         # all the way down the graph. Bare `flow()` leaves nested Class
         # kwargs deferred (they flow lazily in production), but the liquify
         # contract is "fully flowed graph" — introspection tools need every
         # attribute resolved.
-        return {k: di.deep_flow(v, context=self.context.config_data) for k, v in kwargs.items()}
+        return {k: di.deep_flow(v, context=ctx.config_data) for k, v in kwargs.items()}
+
+    def _is_active_config(self, config_path: Optional[Path], scopes: Optional[List[str]]) -> bool:
+        """Whether :meth:`liquify` may answer from the active context: no scopes asked, same file."""
+        assert self.context is not None
+        if scopes is not None:
+            return False
+        if config_path is None:
+            return True
+        active = self.context.config_path
+        return active is not None and (
+            confluid.resolve_config_path(config_path).resolve() == confluid.resolve_config_path(active).resolve()
+        )
+
+    def _introspection_context(self, config_path: Optional[Path], scopes: Optional[List[str]]) -> LiquifyContext:
+        """A context for :meth:`liquify` loaded from ``config_path`` the way a real run loads it."""
+        # Same XDG-lookup identity as run() — lazy introspection must
+        # resolve relative config paths the way a real run would.
+        confluid.set_app_name(self.name)
+        ctx = LiquifyContext(name=self.name, config_path=config_path, scopes=scopes or [], debug=False)
+        ctx.logger = get_logger(self.name)
+        if config_path is not None:
+            # Same host facts as a real run — help rendering and graph export must
+            # show the document THIS machine resolves, not an unscoped variant.
+            raw = confluid.load(config_path, until="raw")
+            ctx.host_facts = host.host_facts(host.forced_values(ctx.scopes))
+            ctx.scopes = host.auto_scopes(ctx.host_facts, raw) + ctx.scopes
+            data = host.inject_facts(raw, ctx.host_facts)
+            ctx.config_data = confluid.load(data, until="document", scopes=ctx.scopes or None)
+            ctx.config_data = expand_strings(ctx.config_data)
+        return ctx
 
     def _show_help(
         self,
@@ -1114,51 +1132,3 @@ class LiquifyApp:
         # (grammar.GLOBAL_FLAG_SPECS) — the same table the parser and completion
         # derive from, so help can never drift from what the CLI accepts.
         report.show_global_options(console)
-
-
-# ---------------------------------------------------------------------------
-# DEPRECATED re-exports — scheduled for removal in v1.0.
-#
-# The consolidation split moved these helpers to their own modules
-# (:mod:`liquifai.grammar`, :mod:`liquifai.overrides`, :mod:`liquifai.di`), but
-# external callers imported them from ``liquifai.core`` under their historical
-# underscore-prefixed names. They still resolve, and now emit a
-# ``DeprecationWarning`` naming the exact replacement import.
-#
-# They are served through a PEP-562 module ``__getattr__`` rather than plain
-# assignments so ACCESS is what warns — a plain alias cannot be detected, which
-# is why the previous "keep them forever" note never converged on a cleanup.
-# Nothing inside liquifai uses them (pinned by
-# ``tests/test_deprecated_aliases.py``); the remaining consumers are external.
-# ---------------------------------------------------------------------------
-
-#: ``{alias: (owning module, public name)}`` — the full deprecated surface.
-_DEPRECATED_ALIASES: Dict[str, Tuple[str, str]] = {
-    "_confluid_active_context": ("liquifai.di", "confluid_active_context"),
-    "_deep_flow": ("liquifai.di", "deep_flow"),
-    "_parse_override_args": ("liquifai.overrides", "parse_override_args"),
-    "_merge_overrides_into_fluids": ("liquifai.overrides", "merge_overrides_into_fluids"),
-    "_delete_dotted_key": ("liquifai.overrides", "delete_dotted_key"),
-    "_expand_strings": ("liquifai.overrides", "expand_strings"),
-    "_stops_positional": ("liquifai.grammar", "stops_positional"),
-    "_looks_like_arg": ("liquifai.grammar", "looks_like_arg"),
-    "_looks_like_key": ("liquifai.grammar", "looks_like_key"),
-}
-
-_ALIAS_MODULES = {"liquifai.di": di, "liquifai.grammar": grammar, "liquifai.overrides": overrides}
-
-
-def __getattr__(name: str) -> Any:
-    """Serve the deprecated ``liquifai.core`` aliases, warning on each access."""
-    target = _DEPRECATED_ALIASES.get(name)
-    if target is None:
-        raise AttributeError(f"module 'liquifai.core' has no attribute {name!r}")
-    module_name, public_name = target
-    warnings.warn(
-        f"liquifai.core.{name} is deprecated and will be removed in v1.0; "
-        f"import it from its owning module instead: "
-        f"`from {module_name} import {public_name}`.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return getattr(_ALIAS_MODULES[module_name], public_name)

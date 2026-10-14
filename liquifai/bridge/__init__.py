@@ -37,7 +37,7 @@ Consumer-dialect code never lands in liquifai itself.
    :data:`__provisional__` is the machine-readable form of this notice.
 
 NOTE: no ``from __future__ import annotations`` anywhere in this subpackage —
-liquifai/confluid/FastMCP introspect live annotation objects on the
+liquifai/confluid/``MCPServer`` introspect live annotation objects on the
 synthesized operation signatures.
 """
 
@@ -51,6 +51,7 @@ from liquifai.bridge.policies import (
     PolicyContext,
     build_op_signature,
     default_target,
+    read_typed,
     resolve_call,
     resolve_policy,
     shape_status,
@@ -62,6 +63,7 @@ from liquifai.bridge.shaping import (
     dry_descriptor,
     filter_records,
     format_call,
+    is_missing,
     items_result,
     jsonify,
     parse_csv,
@@ -71,7 +73,7 @@ from liquifai.bridge.shaping import (
     records_of,
     require,
 )
-from liquifai.bridge.spec import CustomSpec, ExposeSpec, P, custom, expose
+from liquifai.bridge.spec import P_TYPES, CustomSpec, ExposeSpec, P, custom, expose
 
 #: Machine-readable stability marker: this subpackage sits OUTSIDE liquifai's
 #: version contract (see the module warning). Tooling that audits a codebase
@@ -90,6 +92,7 @@ __all__ = [
     "BRIDGED_ATTR",
     # specs
     "P",
+    "P_TYPES",
     "ExposeSpec",
     "CustomSpec",
     "expose",
@@ -105,6 +108,7 @@ __all__ = [
     "default_target",
     "build_op_signature",
     "resolve_call",
+    "read_typed",
     "shape_status",
     # shaping helpers
     "DEFAULT_ADAPTERS",
@@ -117,6 +121,7 @@ __all__ = [
     "attr_str",
     "filter_records",
     "require",
+    "is_missing",
     "parse_csv",
     "parse_kv",
     "parse_tags",

@@ -84,6 +84,51 @@ def test_build_op_signature_optional_params_carry_default_and_type() -> None:
     assert sig.return_annotation == Dict[str, Any]
 
 
+def test_a_declared_type_is_the_annotation_required_or_not() -> None:
+    """Without it a required param is always `str`, so an MCP client was told `count` is text."""
+    sig = build_op_signature([P("count", type=int), P("ratio", type=float, default=1), P("tag", type=str)], FakeConn)
+    assert [sig.parameters[n].annotation for n in ("count", "ratio", "tag")] == [int, float, str]
+
+
+# ---------------------------------------------------------------------------
+# resolve_call — a declared type reads a typed word the way a CLI flag value is read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declared, given, sent",
+    [
+        (int, "7", 7),  # a CLI positional is text
+        (int, 7, 7),  # an MCP call is already typed
+        (float, "1.5", 1.5),
+        (float, "2", 2.0),
+        (float, 2, 2.0),
+        (bool, "false", False),
+        (bool, True, True),
+        (str, "007", "007"),  # text stays exactly as typed
+    ],
+)
+def test_a_declared_type_reads_the_value(declared: type, given: Any, sent: Any) -> None:
+    spec = ExposeSpec(verb="versions", params=[P("value", type=declared)])
+    _, kwargs = resolve_call(spec, {"value": given}, DEFAULT_ADAPTERS)
+    assert kwargs == {"value": sent} and type(kwargs["value"]) is type(sent)
+
+
+@pytest.mark.parametrize(
+    "declared, given", [(int, "abc"), (int, "1.5"), (int, True), (bool, "yes please"), (float, "x")]
+)
+def test_a_value_that_is_not_the_declared_type_is_refused(declared: type, given: Any) -> None:
+    spec = ExposeSpec(verb="versions", params=[P("value", type=declared)])
+    with pytest.raises(ValueError, match=rf"^value: expected {declared.__name__}, got {given!r}$"):
+        resolve_call(spec, {"value": given}, DEFAULT_ADAPTERS)
+
+
+def test_a_typed_option_left_at_its_empty_default_is_still_left_out() -> None:
+    spec = ExposeSpec(verb="list", params=[P("page", type=int, default=0)])
+    assert resolve_call(spec, {"page": "0"}, DEFAULT_ADAPTERS)[1] == {}
+    assert resolve_call(spec, {"page": "3"}, DEFAULT_ADAPTERS)[1] == {"page": 3}
+
+
 # ---------------------------------------------------------------------------
 # resolve_call
 # ---------------------------------------------------------------------------
@@ -118,6 +163,44 @@ def test_resolve_call_omit_empty_false_forwards_empty() -> None:
     spec = ExposeSpec(verb="list", params=[P("status", default="", omit_empty=False)])
     _, kwargs = resolve_call(spec, {"status": ""}, DEFAULT_ADAPTERS)
     assert kwargs == {"status": ""}
+
+
+def test_a_required_zero_or_false_is_given_not_missing() -> None:
+    """`--count 0` used to raise `Missing required argument(s): count`."""
+    spec = ExposeSpec(verb="versions", params=[P("count"), P("strict")])
+    _, kwargs = resolve_call(spec, {"count": 0, "strict": False}, DEFAULT_ADAPTERS)
+    assert kwargs == {"count": 0, "strict": False}
+
+
+def test_a_required_none_or_empty_text_is_still_missing() -> None:
+    spec = ExposeSpec(verb="versions", params=[P("name"), P("count")])
+    with pytest.raises(ValueError, match=r"^Missing required argument\(s\): name, count$"):
+        resolve_call(spec, {"name": "", "count": None}, DEFAULT_ADAPTERS)
+
+
+def test_a_typed_zero_that_differs_from_the_default_is_sent() -> None:
+    """`--limit 0` against a default of 10 used to be dropped, so the SDK got its own default."""
+    spec = ExposeSpec(verb="versions", params=[P("limit", default=10), P("strict", default=True)])
+    _, kwargs = resolve_call(spec, {"limit": 0, "strict": False}, DEFAULT_ADAPTERS)
+    assert kwargs == {"limit": 0, "strict": False}
+
+
+def test_an_untouched_option_with_an_empty_default_is_still_left_to_the_sdk() -> None:
+    spec = ExposeSpec(
+        verb="create", params=[P("description", default=""), P("diff_only", default=False), P("page", default=0)]
+    )
+    assert resolve_call(spec, {}, DEFAULT_ADAPTERS)[1] == {}
+    assert resolve_call(spec, {"description": "", "diff_only": False, "page": 0}, DEFAULT_ADAPTERS)[1] == {}
+
+
+def test_an_untouched_option_with_a_non_empty_default_is_still_sent() -> None:
+    spec = ExposeSpec(verb="list", params=[P("limit", default=10)])
+    assert resolve_call(spec, {}, DEFAULT_ADAPTERS)[1] == {"limit": 10}
+
+
+def test_a_none_option_is_left_to_the_sdk() -> None:
+    spec = ExposeSpec(verb="list", params=[P("limit", default=10)])
+    assert resolve_call(spec, {"limit": None}, DEFAULT_ADAPTERS)[1] == {}
 
 
 def test_resolve_call_client_side_only_param_skipped() -> None:

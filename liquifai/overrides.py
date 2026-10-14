@@ -5,8 +5,7 @@ everything between "a list of leftover CLI tokens" and "the config tree has
 the overrides merged in" — parsing (:func:`parse_override_args`), Fluid
 broadcast (:func:`merge_overrides_into_fluids`), deletions
 (:func:`delete_dotted_key`), and env/``~`` expansion
-(:func:`expand_strings`). ``core.py`` re-exports the historical
-underscore-prefixed names for existing callers (streamstudio, tests).
+(:func:`expand_strings`).
 
 Token *classification* lives in :mod:`liquifai.grammar` (stdlib-only, shared
 with the completion fast path); this module may import confluid freely.

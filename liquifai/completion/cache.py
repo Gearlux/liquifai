@@ -236,29 +236,48 @@ def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], 
     """
 
     def spawn(cache_key: str, inputs: Dict[str, str]) -> None:
-        if os.environ.get("LIQUIFAI_NO_LAZY_COMPLETE"):
-            return
         base = (
             dependent_value_cache_path(app_name, cache_key, inputs) if inputs else value_cache_path(app_name, cache_key)
         )
-        marker = base.with_suffix(".pending")
-        try:
-            if marker.exists() and (time.time() - marker.stat().st_mtime) < LAZY_REFRESH_THROTTLE:
-                return  # a refresh for this combo was attempted very recently
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.touch()
-        except OSError:
-            return
         payload = json.dumps({"key": cache_key, "inputs": inputs})
-        try:
-            subprocess.Popen(
-                [app_name, "--refresh-completion-value", payload],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError:
-            pass
+        _spawn_throttled(base.with_suffix(".pending"), [app_name, "--refresh-completion-value", payload])
 
     return spawn
+
+
+def spawn_tree_refresh(app_name: str) -> None:
+    """DETACH ``<app> --refresh-completions`` to rebuild a missing or outdated command-tree cache.
+
+    Called by the fast path when :func:`liquifai.completion.read_cache` finds nothing usable
+    (no file, or one written by an older ``CACHE_VERSION``): that TAB completes nothing — bash
+    falls back to listing files — and the next one works. Same throttle and opt-out as
+    :func:`make_lazy_refresh_spawner`; the marker is ``<cache_dir>/<app>.pending``.
+    """
+    _spawn_throttled(cache_dir() / f"{app_name}.pending", [app_name, "--refresh-completions"])
+
+
+def _spawn_throttled(marker: Path, argv: List[str]) -> None:
+    """Run ``argv`` detached, at most once per :data:`LAZY_REFRESH_THROTTLE` per ``marker``.
+
+    Best-effort: ``$LIQUIFAI_NO_LAZY_COMPLETE`` or any ``OSError`` (marker unwritable, command
+    not installed) means no refresh, never a failed completion.
+    """
+    if os.environ.get("LIQUIFAI_NO_LAZY_COMPLETE"):
+        return
+    try:
+        if marker.exists() and (time.time() - marker.stat().st_mtime) < LAZY_REFRESH_THROTTLE:
+            return  # a refresh for this cache was attempted very recently
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        return
+    try:
+        subprocess.Popen(
+            argv,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError:
+        pass
