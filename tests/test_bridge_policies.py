@@ -84,6 +84,51 @@ def test_build_op_signature_optional_params_carry_default_and_type() -> None:
     assert sig.return_annotation == Dict[str, Any]
 
 
+def test_a_declared_type_is_the_annotation_required_or_not() -> None:
+    """Without it a required param is always `str`, so an MCP client was told `count` is text."""
+    sig = build_op_signature([P("count", type=int), P("ratio", type=float, default=1), P("tag", type=str)], FakeConn)
+    assert [sig.parameters[n].annotation for n in ("count", "ratio", "tag")] == [int, float, str]
+
+
+# ---------------------------------------------------------------------------
+# resolve_call — a declared type reads a typed word the way a CLI flag value is read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declared, given, sent",
+    [
+        (int, "7", 7),  # a CLI positional is text
+        (int, 7, 7),  # an MCP call is already typed
+        (float, "1.5", 1.5),
+        (float, "2", 2.0),
+        (float, 2, 2.0),
+        (bool, "false", False),
+        (bool, True, True),
+        (str, "007", "007"),  # text stays exactly as typed
+    ],
+)
+def test_a_declared_type_reads_the_value(declared: type, given: Any, sent: Any) -> None:
+    spec = ExposeSpec(verb="versions", params=[P("value", type=declared)])
+    _, kwargs = resolve_call(spec, {"value": given}, DEFAULT_ADAPTERS)
+    assert kwargs == {"value": sent} and type(kwargs["value"]) is type(sent)
+
+
+@pytest.mark.parametrize(
+    "declared, given", [(int, "abc"), (int, "1.5"), (int, True), (bool, "yes please"), (float, "x")]
+)
+def test_a_value_that_is_not_the_declared_type_is_refused(declared: type, given: Any) -> None:
+    spec = ExposeSpec(verb="versions", params=[P("value", type=declared)])
+    with pytest.raises(ValueError, match=rf"^value: expected {declared.__name__}, got {given!r}$"):
+        resolve_call(spec, {"value": given}, DEFAULT_ADAPTERS)
+
+
+def test_a_typed_option_left_at_its_empty_default_is_still_left_out() -> None:
+    spec = ExposeSpec(verb="list", params=[P("page", type=int, default=0)])
+    assert resolve_call(spec, {"page": "0"}, DEFAULT_ADAPTERS)[1] == {}
+    assert resolve_call(spec, {"page": "3"}, DEFAULT_ADAPTERS)[1] == {"page": 3}
+
+
 # ---------------------------------------------------------------------------
 # resolve_call
 # ---------------------------------------------------------------------------

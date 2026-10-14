@@ -6,6 +6,14 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`liquifai.bridge` (provisional): `P(..., type=int)` declares a parameter's type** — `str`,
+  `int`, `float` or `bool`. The MCP schema shows it (before, every required parameter was a
+  string), and a CLI word is read as a flag value is (`widget versions w1 7` sends `7`) or
+  refused (`count: expected int, got 'abc'`). A type outside that set, a type beside an adapter,
+  or a default of another type is a `CommandDefinitionError` when the group is decorated.
+
 ### Fixed
 
 - **TAB on an app whose command-tree cache is missing or from an older liquifai no longer stays

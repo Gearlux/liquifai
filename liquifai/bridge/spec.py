@@ -16,6 +16,7 @@ NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
 annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
+import builtins
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -23,6 +24,10 @@ from liquifai.core import Presentation
 
 #: Marker for a required (no-default) parameter — distinct from ``None``/``""``.
 _MISSING: Any = object()
+
+#: The types a :class:`P` may declare: the scalars both a CLI word and an MCP JSON-schema
+#: value carry. A closed set, checked when the group is decorated.
+P_TYPES: Tuple[builtins.type, ...] = (str, int, float, bool)
 
 #: Attribute under which ``@expose`` stashes its spec on the decorated stub method.
 _EXPOSE_ATTR = "__liquifai_expose__"
@@ -52,6 +57,10 @@ class P:
             ``False`` that differs from the default is always sent.
         validate: a flag (has a default) that is nonetheless required at runtime;
             ``None`` or ``""`` counts as missing, ``0`` and ``False`` do not.
+        type: the value's type — one of :data:`P_TYPES` (``str``, ``int``, ``float``,
+            ``bool``). It is the parameter's annotation, so an MCP schema shows it, and a
+            value typed as text is read as a CLI flag value is (``"7"`` -> ``7``) and must
+            yield it. Unset: an optional takes its default's type, a required one ``str``.
     """
 
     cli: str
@@ -61,6 +70,7 @@ class P:
     send_positional: bool = False
     omit_empty: bool = True
     validate: bool = False
+    type: Optional[builtins.type] = None
 
     def __post_init__(self) -> None:
         if self.sdk == "":

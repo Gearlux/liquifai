@@ -1,6 +1,7 @@
 """Tests for liquifai.bridge.group — SdkBridge end-to-end with a fake SDK."""
 
 import inspect
+import re
 from typing import Any, Callable, Dict, List
 
 import pytest
@@ -214,6 +215,61 @@ def test_a_policy_that_names_no_settings_reads_none() -> None:
         class WidgetClient(BaseWidgetClient):
             @expose(verb="info", policy="bare", tag="t")
             def get_widget(self) -> None: ...
+
+
+@pytest.mark.parametrize(
+    "param, message",
+    [
+        (P("count", type=list), "P('count') declares type list; a parameter's type is one of str, int, float, bool"),
+        (P("tags", type=int, adapt="csv"), "P('tags') declares type int and adapter 'csv'; the adapter decides"),
+        (P("limit", type=int, default="10"), "P('limit') declares type int but its default '10' is a str"),
+    ],
+)
+def test_a_parameter_type_that_cannot_hold_is_refused_at_decoration(param: P, message: str) -> None:
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError, match=re.escape(message)):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="versions", presentation="status", params=[P("name"), param])
+            def get_widget_versions(self) -> None: ...
+
+
+def test_a_declared_type_reaches_the_mcp_schema() -> None:
+    bridge = _bridge()
+
+    @bridge.group(name="widget", sub="widget")
+    class WidgetClient(BaseWidgetClient):
+        @expose(verb="versions", presentation="status", params=[P("name"), P("count", type=int)])
+        def get_widget_versions(self) -> None: ...
+
+    app = bridge.get_app("widget")
+    app.set_mcp_context_factory(lambda dry_run=False: FakeConn(dry_run=dry_run))
+    (tool,) = make_mcp_tools(app)
+    assert {n: p.annotation for n, p in inspect.signature(tool).parameters.items() if n != "dry_run"} == {
+        "name": str,
+        "count": int,
+    }
+
+
+def test_a_typed_cli_positional_reaches_the_sdk_as_its_type() -> None:
+    """A CLI positional binds as text (`widget versions w1 7`); the SDK gets the number, as over MCP."""
+    sub = FakeSub({"get_widget_versions": None})
+    conn = FakeConn(client=FakeClient(widget=sub))
+
+    def configure(app: LiquifyApp) -> None:
+        app.set_context_factory(lambda: conn)
+        app.build_commands()
+
+    bridge = _bridge(configure=configure)
+
+    @bridge.group(name="widget", sub="widget")
+    class WidgetClient(BaseWidgetClient):
+        @expose(verb="versions", presentation="status", params=[P("name"), P("count", type=int)])
+        def get_widget_versions(self) -> None: ...
+
+    bridge.get_app("widget")._commands["versions"](name="w1", count="7")
+    assert sub.last_call() == ("get_widget_versions", (), {"name": "w1", "count": 7})
 
 
 def test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn() -> None:

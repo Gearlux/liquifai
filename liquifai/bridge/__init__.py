@@ -51,6 +51,7 @@ from liquifai.bridge.policies import (
     PolicyContext,
     build_op_signature,
     default_target,
+    read_typed,
     resolve_call,
     resolve_policy,
     shape_status,
@@ -72,7 +73,7 @@ from liquifai.bridge.shaping import (
     records_of,
     require,
 )
-from liquifai.bridge.spec import CustomSpec, ExposeSpec, P, custom, expose
+from liquifai.bridge.spec import P_TYPES, CustomSpec, ExposeSpec, P, custom, expose
 
 #: Machine-readable stability marker: this subpackage sits OUTSIDE liquifai's
 #: version contract (see the module warning). Tooling that audits a codebase
@@ -91,6 +92,7 @@ __all__ = [
     "BRIDGED_ATTR",
     # specs
     "P",
+    "P_TYPES",
     "ExposeSpec",
     "CustomSpec",
     "expose",
@@ -106,6 +108,7 @@ __all__ = [
     "default_target",
     "build_op_signature",
     "resolve_call",
+    "read_typed",
     "shape_status",
     # shaping helpers
     "DEFAULT_ADAPTERS",
