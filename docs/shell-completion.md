@@ -171,19 +171,28 @@ How it stays fast and offline-safe:
   kicks off a *detached, throttled* background refresh, so a freshly-added
   positional (e.g. a new `run list <experiment>`) populates itself on the **next**
   TAB — no manual `--refresh-completions` required.
+- **A missing or outdated command-tree cache self-heals too.** No
+  `~/.cache/liquifai/<app>.json`, or one written by an older liquifai, completes
+  nothing on that TAB (bash then lists files) and detaches
+  `my-app --refresh-completions` in the background, so the **next** TAB works. That
+  refresh also runs every value provider, so a provider that queries a server does so
+  then. Same throttle and `LIQUIFAI_NO_LAZY_COMPLETE=1` opt-out as the value caches;
+  the throttle marker is `~/.cache/liquifai/<app>.pending`.
 - **Refresh-everything is explicit by default**: run `my-app --refresh-completions`
   to (re)populate ALL value caches at once. Opt into automatic background refresh by
   setting `LIQUIFAI_BG_REFRESH=1` — then a successful run refreshes stale caches
   (>10 min) in a detached daemon thread, never blocking the command. It is OFF
-  by default so a normal run never triggers a surprise provider call (e.g. a
-  platform query). A sub-app alias (`ds` for `dataset`) shares the canonical
+  by default. A sub-app alias (`ds` for `dataset`) shares the canonical
   command's value cache.
 - **Prefix matching is case-insensitive**: `cifar<TAB>` finds `CIFAR_…`.
 - **Values with spaces work.** A candidate like `My Dataset V2` is transported
-  as one token (the wrappers newline-join `$COMP_WORDS`) and emitted
-  backslash-escaped so the shell inserts it as a single argument. bash gets this
-  with no re-install; **zsh/fish users should re-run `--install-completion`** once
-  to pick up the newline-joining wrapper.
+  as one token and emitted backslash-escaped so the shell inserts it as a single
+  argument. The bash wrapper forwards `$COMP_LINE` / `$COMP_POINT` so
+  `liquifai-complete` re-tokenizes the raw line quote-aware (bash's own
+  `$COMP_WORDS` splits on spaces); the zsh and fish wrappers newline-join their
+  word arrays. **Re-run `--install-completion`** after upgrading liquifai so the
+  installed wrapper matches: an older bash wrapper has no `$COMP_LINE`, and
+  shatters a value with spaces.
 
 ### Dependent positionals (a later `<version>` that depends on an earlier `<name>`)
 

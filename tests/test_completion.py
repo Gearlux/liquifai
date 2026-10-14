@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, List
 
 import pytest
 
@@ -992,6 +992,79 @@ def test_fast_complete_main_serves_from_cache(app: LiquifyApp, capsys: Any, monk
     out = capsys.readouterr().out.splitlines()
     assert "greet" in out
     assert "group" in out
+
+
+def _stub_popen(monkeypatch: Any) -> List[Any]:
+    calls: List[Any] = []
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", lambda *a, **k: calls.append(a))
+    return calls
+
+
+def _run_fast_complete(monkeypatch: Any, app_name: str = "myapp") -> None:
+    monkeypatch.setattr(sys, "argv", ["liquifai-complete", app_name])
+    monkeypatch.setenv("COMP_WORDS", f"{app_name} ")
+    monkeypatch.setenv("COMP_CWORD", "1")
+
+    from liquifai import _fast_complete
+
+    _fast_complete.main()
+
+
+def test_fast_complete_refreshes_an_outdated_tree_cache(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    # A cache written by an older liquifai (version below CACHE_VERSION) completes nothing;
+    # without a refresh it stays that way until the app is run by hand.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    comp.cache_path("myapp").parent.mkdir(parents=True)
+    comp.cache_path("myapp").write_text('{"version": 2, "tree": {"name": "myapp", "commands": ["old"]}}')
+    calls = _stub_popen(monkeypatch)
+
+    _run_fast_complete(monkeypatch)
+
+    assert capsys.readouterr().out == ""
+    assert [c[0] for c in calls] == [["myapp", "--refresh-completions"]]
+
+
+def test_fast_complete_refreshes_a_missing_tree_cache(capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    calls = _stub_popen(monkeypatch)
+
+    _run_fast_complete(monkeypatch)
+
+    assert [c[0] for c in calls] == [["myapp", "--refresh-completions"]]
+
+
+def test_fast_complete_spawns_nothing_for_a_current_cache(
+    app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    comp.write_cache(app)
+    calls = _stub_popen(monkeypatch)
+
+    _run_fast_complete(monkeypatch)
+
+    assert "greet" in capsys.readouterr().out.splitlines()
+    assert calls == []
+
+
+def test_tree_refresh_is_throttled_and_can_be_opted_out(iso_cache: Path, monkeypatch: Any) -> None:
+    calls = _stub_popen(monkeypatch)
+
+    monkeypatch.setenv("LIQUIFAI_NO_LAZY_COMPLETE", "1")
+    comp.spawn_tree_refresh("myapp")
+    assert calls == []
+
+    monkeypatch.delenv("LIQUIFAI_NO_LAZY_COMPLETE")
+    for _ in range(3):  # rapid TABs fork one refresh, not three
+        comp.spawn_tree_refresh("myapp")
+    assert len(calls) == 1
+
+
+def test_tree_refresh_swallows_an_app_that_is_not_installed(iso_cache: Path, monkeypatch: Any) -> None:
+    def missing(*_a: Any, **_k: Any) -> None:
+        raise FileNotFoundError("nosuchapp")
+
+    monkeypatch.setattr(comp.cache.subprocess, "Popen", missing)
+    comp.spawn_tree_refresh("nosuchapp")  # completion must never break the shell
 
 
 def test_fast_complete_main_prefers_comp_line(app: LiquifyApp, capsys: Any, monkeypatch: Any, tmp_path: Path) -> None:

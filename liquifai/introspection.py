@@ -1,11 +1,16 @@
 """Centralized signature surgery and introspection utilities for liquifai."""
 
 import inspect
-from typing import Any, Callable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Sequence, Tuple
+
+#: The parameter an operation receives its injected context under. Passed BY NAME, never by
+#: position: an operation without it gets no context (and its wrapper builds none), where a
+#: positional pass would hand the context to whatever its first parameter is.
+CONTEXT_PARAM = "conn"
 
 
 def split_context_param(
-    op_func: Callable[..., Any], context_param: str = "conn"
+    op_func: Callable[..., Any], context_param: str = CONTEXT_PARAM
 ) -> Tuple[inspect.Signature, List[inspect.Parameter]]:
     """Return ``op_func``'s signature and its parameters minus the context one.
 
@@ -30,7 +35,7 @@ def graft_signature(
 ) -> None:
     """Stamp ``fn`` with a synthesized ``__signature__`` / ``__annotations__``.
 
-    The shared second step: introspection consumers (FastMCP JSON-Schema
+    The shared second step: introspection consumers (``MCPServer`` JSON-Schema
     generation, liquifai's own DI/help/completion walkers) read the wrapper's
     signature, so it must advertise ``extra_params`` (e.g. context-factory
     params) followed by the operation's own ``params``. Extra params fall
@@ -40,8 +45,23 @@ def graft_signature(
     fn.__signature__ = op_sig.replace(  # type: ignore[attr-defined]
         parameters=extra + params, return_annotation=return_annotation
     )
-    fn.__annotations__ = {
-        **{p.name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any) for p in extra},
+    fn.__annotations__ = annotations_for(params, return_annotation=return_annotation, extra_params=extra)
+
+
+def annotations_for(
+    params: Sequence[inspect.Parameter],
+    *,
+    return_annotation: Any,
+    extra_params: Sequence[inspect.Parameter] = (),
+) -> Dict[str, Any]:
+    """The ``__annotations__`` dict a wrapper advertising ``extra_params`` + ``params`` carries.
+
+    Extra params fall back to ``Any`` when unannotated; an unannotated own param is left out.
+    Used by :func:`graft_signature` and by the bridge, which keeps a policy-built signature
+    and only needs the matching annotations.
+    """
+    return {
+        **{p.name: (p.annotation if p.annotation is not inspect.Parameter.empty else Any) for p in extra_params},
         **{p.name: p.annotation for p in params if p.annotation is not inspect.Parameter.empty},
         "return": return_annotation,
     }

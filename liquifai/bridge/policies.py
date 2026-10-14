@@ -9,19 +9,28 @@ and consumers register their own for SDK-dialect surfaces (e.g. a paginated
 via ``SdkBridge(policies={"list": MyListPolicy()})``.
 
 NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
-annotation objects are required by liquifai/confluid/FastMCP introspection.
+annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Protocol, Tuple, runtime_checkable
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Protocol, Tuple
 
-from liquifai.bridge.shaping import attr_str, dry_descriptor, format_call, items_result, record_to_dict, records_of
+from confluid import parse_value
+
+from liquifai.bridge.shaping import (
+    attr_str,
+    dry_descriptor,
+    format_call,
+    is_missing,
+    items_result,
+    record_to_dict,
+    records_of,
+)
 from liquifai.bridge.shaping import require as _require
 from liquifai.bridge.spec import ExposeSpec, P
 
 
-@runtime_checkable
 class BridgeConnection(Protocol):
     """What a synthesized operation needs from its first (``conn``) parameter.
 
@@ -69,6 +78,11 @@ class PolicyContext:
 class OpPolicy(Protocol):
     """Spec in, operation out — the bridge's policy extension point."""
 
+    #: The extra ``@expose`` settings this policy reads from :attr:`ExposeSpec.options`
+    #: (``frozenset({"client_filter"})``). Any other extra setting on an op routed here is
+    #: refused when the group is decorated; a policy without this attribute reads none.
+    options: FrozenSet[str]
+
     def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
         """Build the operation callable for ``spec``.
 
@@ -112,11 +126,32 @@ def build_op_signature(params: List[P], conn_cls: type) -> inspect.Signature:
     sig_params = [inspect.Parameter("conn", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=conn_cls)]
     for p in params:
         default = inspect.Parameter.empty if p.required else p.default
-        annotation = type(p.default) if (not p.required and p.default is not None) else str
+        annotation = p.type or (type(p.default) if (not p.required and p.default is not None) else str)
         sig_params.append(
             inspect.Parameter(p.cli, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=annotation)
         )
     return inspect.Signature(sig_params, return_annotation=Dict[str, Any])
+
+
+def read_typed(p: P, value: Any) -> Any:
+    """``value`` as ``p.type``: text is read the way a CLI flag value is (``"7"`` -> ``7``).
+
+    A CLI positional always arrives as text and an MCP argument already typed, so both reach
+    the SDK as the same value. Text declared ``str`` is kept exactly as typed; a missing value
+    and an undeclared type pass through. ``float`` accepts an integer; ``int`` never accepts a
+    ``bool``.
+
+    Raises:
+        ValueError: the value does not read as ``p.type`` (``count: expected int, got 'abc'``).
+    """
+    if p.type is None or p.type is str or is_missing(value):
+        return value
+    read = parse_value(value) if isinstance(value, str) else value
+    if p.type is float and type(read) is int:
+        read = float(read)
+    if type(read) is not p.type:
+        raise ValueError(f"{p.cli}: expected {p.type.__name__}, got {value!r}")
+    return read
 
 
 def resolve_call(
@@ -137,7 +172,10 @@ def resolve_call(
         if p.sdk is None:  # client-side-only param
             continue
         value = kwargs.get(p.cli, p.default if not p.required else "")
-        if p.omit_empty and not p.required and not value:
+        value = read_typed(p, value)
+        # Left to the SDK: a missing value, or the declared default when that default is empty
+        # (an option nobody touched). A typed `0` / `False` that differs from it is sent.
+        if p.omit_empty and not p.required and (is_missing(value) or (not value and value == p.default)):
             continue
         if p.adapt is not None:
             value = adapters[p.adapt](value)
@@ -168,18 +206,36 @@ def shape_status(spec: ExposeSpec, result: Any, kwargs: Dict[str, Any]) -> Dict[
     return out
 
 
+def _single_call_op(
+    spec: ExposeSpec, ctx: PolicyContext, shape: Callable[[Any, Dict[str, Any]], Dict[str, Any]]
+) -> Callable[..., Dict[str, Any]]:
+    """An operation making ONE SDK call, its result shaped by ``shape(result, kwargs)``.
+
+    The part :class:`CallPolicy` and :class:`ItemsPolicy` share: map the CLI kwargs onto the
+    call (:func:`resolve_call`), answer a dry run before touching the client, call
+    ``spec.sdk_method`` on the group's target, and carry :func:`build_op_signature`.
+    """
+    method = spec.sdk_method
+    fn_label = ctx.call_label(method)
+
+    def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
+        call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
+        if conn.dry_run:
+            return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
+        result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
+        return shape(result, kwargs)
+
+    op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
+    return op
+
+
 class CallPolicy:
     """One SDK call; result shaped as ``fields`` (full record) or ``status``."""
 
-    def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
-        method = spec.sdk_method
-        fn_label = ctx.call_label(method)
+    options: FrozenSet[str] = frozenset()
 
-        def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
-            call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
-            if conn.dry_run:
-                return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
-            result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
+    def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+        def shape(result: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
             if spec.presentation == "fields":
                 if spec.nullable and result is None:
                     return {"found": False, **{p.cli: kwargs.get(p.cli) for p in spec.params if p.required}}
@@ -187,8 +243,7 @@ class CallPolicy:
                 return {"found": True, **record} if spec.nullable else record
             return ctx.shape_status(spec, result, kwargs)
 
-        op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
-        return op
+        return _single_call_op(spec, ctx, shape)
 
 
 class ItemsPolicy:
@@ -200,19 +255,12 @@ class ItemsPolicy:
     paginated list surface (that is an SDK dialect, hence consumer-side).
     """
 
+    options: FrozenSet[str] = frozenset()
+
     def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
-        method = spec.sdk_method
-        fn_label = ctx.call_label(method)
-
-        def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
-            call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
-            if conn.dry_run:
-                return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
-            result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
-            return items_result(records_of(result, attr=spec.result_attr))
-
-        op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
-        return op
+        return _single_call_op(
+            spec, ctx, lambda result, _kwargs: items_result(records_of(result, attr=spec.result_attr))
+        )
 
 
 #: The SDK-agnostic policies every bridge starts with. Consumers merge their

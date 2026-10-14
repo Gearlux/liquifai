@@ -4,6 +4,61 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
+## [0.3.1] - 2026-10-14
+
+### Breaking
+
+- **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
+  helpers are imported from the module that owns them: `liquifai.overrides`,
+  `liquifai.grammar` and `liquifai.di`.
+
+### Added
+
+- **`liquifai.bridge` (provisional): `P(..., type=int)` declares a parameter's type** — `str`,
+  `int`, `float` or `bool`. The MCP schema shows it (before, every required parameter was a
+  string), and a CLI word is read as a flag value is (`widget versions w1 7` sends `7`) or
+  refused (`count: expected int, got 'abc'`). A type outside that set, a type beside an adapter,
+  or a default of another type is a `CommandDefinitionError` when the group is decorated.
+
+### Fixed
+
+- **TAB on an app whose command-tree cache is missing or from an older liquifai no longer stays
+  dead.** `liquifai-complete` now detaches `<app> --refresh-completions` (throttled, opt out with
+  `LIQUIFAI_NO_LAZY_COMPLETE=1`), so the first TAB after an upgrade completes nothing and the next
+  one works; before, only running the app by hand rebuilt the cache.
+- **An MCP tool reports a context it cannot build in-band.** A raising MCP context factory now
+  returns `{"error": "<message>"}`, as every other tool failure does; before, the exception left
+  the tool.
+- **`make_mcp_tools` builds a tool for an operation with a required parameter that is not
+  keyword-only** (`def dataset_get(conn, name: str)`). Every tool parameter is now advertised
+  keyword-only; before, a factory with defaulted parameters made the whole call fail with
+  `ValueError: non-default argument follows default argument`.
+- **An operation without a `conn` parameter works from the CLI and as an MCP tool.** The context
+  is passed by name, only to an operation that declares `conn`; such an operation's tool no
+  longer advertises the factory's parameters. Before, the context was passed as the first
+  argument: `def pkg_version(name: str)` failed with `got multiple values for argument 'name'`.
+- **An operation parameter named like an MCP factory parameter is a `CommandDefinitionError`**
+  naming the operation and the parameter; before, `make_mcp_tools` failed with
+  `ValueError: duplicate parameter name`.
+- **`LiquifyApp.liquify()` loads the config it is given.** A second call naming another file
+  returned the first file's values. The active context is reused only for the same file (or no
+  file), and a call naming another file no longer replaces it.
+
+### Changed
+
+- **`liquifai.bridge` (provisional): an `@expose` setting the routed policy does not read is a
+  `CommandDefinitionError`** at class decoration, naming the `@expose`'s file and line and the
+  closest setting (`unknown setting 'colums' (did you mean 'columns'?)`). A policy names the
+  settings it reads in an `options` attribute (`frozenset({"client_filter"})`); the built-in
+  `call` and `items` policies, and a policy without the attribute, read none. Before, a misspelled
+  setting was accepted and ignored. `Group` no longer carries `sub`, and `BridgeConnection` is no
+  longer `runtime_checkable`; a synthesized operation's annotations now include `return`.
+- **`liquifai.bridge` (provisional): `0` and `False` are values, not "missing".** A required
+  `P("count")` given `0` is sent (before: `Missing required argument(s): count`), and an
+  optional `--limit 0` against a default of 10 is sent (before: dropped, so the SDK applied its
+  own default). An optional left at an empty default (`""`, `0`, `False`) is still left out, and
+  `shaping.require` counts only `None` and `""` as missing; `shaping.is_missing` states the rule.
+
 ## [0.3.0] - 2026-09-26
 
 ### Added
@@ -277,14 +332,6 @@ _First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
   New `examples/promotion_app.py` exercises all four outcomes (CWD,
   `./config/`, an XDG file that swallows a positional, and no match) against
   a sandboxed temp workspace.
-- **The nine `liquifai.core` re-export aliases are DEPRECATED** (removal in
-  v1.0). They are now served by a PEP-562 `core.__getattr__` that emits a
-  `DeprecationWarning` naming the exact replacement import, instead of plain
-  assignments — a plain alias is invisible, which is why the previous "keep
-  these" comment never converged on a cleanup. liquifai's own source and tests
-  were migrated onto the owning modules (`di` / `overrides` / `grammar`) and a
-  test now fails if anything internal regresses onto the deprecated surface, so
-  the v1.0 deletion is a pure external-consumer migration.
 - **Removed**: the `CliRouter` class (routing is the stateless
   `router.route(app, argv)`; `router.py` keeps the real content — the `_AppNav`
   adapter and the promoted-config resolver) and `liquifai/pipeline.py` entirely
@@ -297,8 +344,6 @@ _First public release, published to PyPI as `liquifai` (tag `v0.1.0`)._
   `._bind_dimension_flags` are gone (use `liquifai.flags`);
   `_apply_overrides` takes `Token`s; `Invocation` gained a required
   `config_token` field.
-- **New**: `docs/architecture.md` record 7 — why a deprecation must be served
-  by `__getattr__` rather than announced in a comment.
 
 - **Broadcast opt-outs are no longer bypassed by CLI overrides** *(bug fix)*.
   liquifai computed its own accept-list to decide which config nodes an

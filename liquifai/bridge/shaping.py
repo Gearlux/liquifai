@@ -9,7 +9,7 @@ Deliberately stdlib-only so a consumer's policy module can import it without
 pulling in the rest of liquifai.
 
 NOTE: no ``from __future__ import annotations`` anywhere in ``liquifai.bridge``
-— liquifai/confluid/FastMCP introspect live annotation objects on synthesized
+— liquifai/confluid/``MCPServer`` introspect live annotation objects on synthesized
 operation signatures.
 """
 
@@ -150,11 +150,19 @@ def filter_records(records: List[Any], attr: str, needle: str, case_sensitive: b
     return [r for r in records if low in attr_str(r, attr).lower()]
 
 
-def require(**named: str) -> None:
-    """Raise ``ValueError`` if any named argument is empty."""
-    missing = [name for name, value in named.items() if not value]
+def require(**named: Any) -> None:
+    """Raise ``ValueError`` if any named argument is missing: ``None`` or empty text.
+
+    ``0`` and ``False`` are values a caller gave (``--count 0``), never "missing".
+    """
+    missing = [name for name, value in named.items() if is_missing(value)]
     if missing:
         raise ValueError(f"Missing required argument(s): {', '.join(missing)}")
+
+
+def is_missing(value: Any) -> bool:
+    """Whether ``value`` stands for "not given": ``None`` or ``""`` — never ``0`` or ``False``."""
+    return value is None or value == ""
 
 
 def parse_tags(tags: str) -> List[str]:

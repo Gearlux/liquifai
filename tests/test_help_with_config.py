@@ -325,3 +325,32 @@ def test_scope_dimensions_block_names_a_negation_only_dimension_without_values(t
     path = _write_yaml(tmp_path, "unless_seg: !notscope:task=segmentation\n  head: default\n")
     out = _capture_console(show_scope_dimensions, confluid.load(path, until="raw"), source=path.name)
     assert "--task <value>" in out
+
+
+def test_liquify_loads_the_config_it_is_given_not_the_one_a_previous_call_loaded(tmp_path: Path) -> None:
+    """A second `liquify()` naming another file used to return the FIRST file's values."""
+    first, second = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    first.write_text("lr: 0.1\n")
+    second.write_text("lr: 0.5\n")
+    app = LiquifyApp(name="liquify-twice")
+
+    def train(lr: float = 0.0) -> None: ...
+
+    assert app.liquify(train, config_path=first) == {"lr": 0.1}
+    assert app.liquify(train, config_path=second) == {"lr": 0.5}
+    # The context the first call installed still answers a call that names no file.
+    assert app.liquify(train) == {"lr": 0.1}
+    assert app.context is not None and app.context.config_path == first
+
+
+def test_liquify_reuses_the_active_context_for_the_same_file(tmp_path: Path) -> None:
+    cfg = tmp_path / "a.yaml"
+    cfg.write_text("lr: 0.1\n")
+    app = LiquifyApp(name="liquify-same")
+
+    def train(lr: float = 0.0) -> None: ...
+
+    app.liquify(train, config_path=cfg)
+    assert app.context is not None
+    app.context.config_data["lr"] = 0.9  # e.g. a CLI override applied by a real run
+    assert app.liquify(train, config_path=cfg) == {"lr": 0.9}

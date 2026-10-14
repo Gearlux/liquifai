@@ -1,10 +1,7 @@
 """Tests for :mod:`liquifai.report` — the Rich help renderers.
 
 Covers both layouts of ``show_configuration``: the default Rich table and the
-``--docs`` one-option-per-line view. (The discovery-walker tests that used to
-share this file were removed with ``liquifai/discovery.py`` — its
-``get_configurable_paths`` duplicated ``confluid.get_hierarchy_from_instance``,
-which is what ``report`` actually calls.)
+``--docs`` one-option-per-line view.
 """
 
 from typing import Any
