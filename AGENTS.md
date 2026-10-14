@@ -8,7 +8,7 @@ repeated here.
 
 The app framework the workspace CLIs are built on. `LiquifyApp` sets up loggair and confluid
 and injects config-built objects into command signatures by type annotation, so an app declares
-commands and nothing else. Published on PyPI (0.3.0) from a public repo. It requires
+commands and nothing else. Published on PyPI (0.3.1) from a public repo. It requires
 `confluid>=0.3.0`: `overrides.py` imports `accepts_key`/`accepts_broadcast`/`accepts_any_key`
 at module level, so an older confluid fails at import.
 

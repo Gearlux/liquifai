@@ -4,7 +4,13 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
-## [Unreleased]
+## [0.3.1] - 2026-10-14
+
+### Breaking
+
+- **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
+  helpers are imported from the module that owns them: `liquifai.overrides`,
+  `liquifai.grammar` and `liquifai.di`.
 
 ### Added
 
@@ -52,9 +58,6 @@ All notable changes to liquifai are documented here. The format follows
   optional `--limit 0` against a default of 10 is sent (before: dropped, so the SDK applied its
   own default). An optional left at an empty default (`""`, `0`, `False`) is still left out, and
   `shaping.require` counts only `None` and `""` as missing; `shaping.is_missing` states the rule.
-- **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
-  helpers are imported from the module that owns them: `liquifai.overrides`,
-  `liquifai.grammar` and `liquifai.di`.
 
 ## [0.3.0] - 2026-09-26
 
