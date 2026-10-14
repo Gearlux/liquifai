@@ -16,6 +16,8 @@ from liquifai.exceptions import CommandDefinitionError
 class FakeListPolicy:
     """A consumer-dialect list policy — proves the policy seam + options passthrough."""
 
+    options = frozenset({"client_filter"})
+
     def __init__(self) -> None:
         self.seen_options: List[Dict[str, Any]] = []
 
@@ -141,6 +143,82 @@ def test_unknown_adapter_raises_at_decoration() -> None:
         class WidgetClient(BaseWidgetClient):
             @expose(verb="info", presentation="fields", params=[P("name", adapt="bogus")])
             def get_widget(self) -> None: ...
+
+
+def test_a_misspelled_expose_setting_is_refused_at_decoration() -> None:
+    """`colums` / `presentaton` used to land in `options`, unread: a working op rendered wrong."""
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError) as info:
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", params=[P("name")], colums=(("name", "Name"),), presentaton="fields")
+            def get_widget(self) -> None: ...
+
+    line = inspect.getsourcelines(test_a_misspelled_expose_setting_is_refused_at_decoration)[1] + 7
+    assert str(info.value) == (
+        f"@expose('get_widget') in group 'widget' ({__file__}:{line}): unknown settings "
+        f"'colums' (did you mean 'columns'?), 'presentaton' (did you mean 'presentation'?). "
+        f"Policy 'call' (CallPolicy) reads none; a policy names the settings it reads in its "
+        f"`options` attribute."
+    )
+
+
+def test_a_setting_only_another_policy_reads_is_refused() -> None:
+    """`client_filter` is the list policy's; on an op routed to `call` nothing would read it."""
+    bridge = _bridge()
+    with pytest.raises(CommandDefinitionError, match=r"unknown setting 'client_filter'\. Policy 'call'"):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", presentation="fields", params=[P("name")], client_filter="name")
+            def get_widget(self) -> None: ...
+
+
+def test_a_policy_names_the_settings_it_reads() -> None:
+    class TaggedPolicy:
+        options = frozenset({"tag", "flavour"})
+
+        def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+            def op(conn: Any) -> Dict[str, Any]:
+                return dict(spec.options)
+
+            op.__signature__ = build_op_signature([], ctx.conn_cls)  # type: ignore[attr-defined]
+            return op
+
+    bridge = _bridge(policies={"tagged": TaggedPolicy()})
+    with pytest.raises(CommandDefinitionError, match=r"'flavor' \(did you mean 'flavour'\?\)\. Policy 'tagged' "):
+
+        @bridge.group(name="widget", sub="widget")
+        class Misspelled(BaseWidgetClient):
+            @expose(verb="info", policy="tagged", flavor="mint")
+            def get_widget(self) -> None: ...
+
+    @bridge.group(name="gadget", sub="gadget")
+    class Spelled(BaseWidgetClient):
+        @expose(verb="info", policy="tagged", tag="t", flavour="mint")
+        def get_widget(self) -> None: ...
+
+    assert bridge.get_app("gadget")._operations["gadget_info"](FakeConn()) == {"tag": "t", "flavour": "mint"}
+
+
+def test_a_policy_that_names_no_settings_reads_none() -> None:
+    class Bare:
+        def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+            raise AssertionError("never built: the spec is refused first")
+
+    bridge = _bridge(policies={"bare": Bare()})  # type: ignore[dict-item]
+    with pytest.raises(CommandDefinitionError, match=r"unknown setting 'tag'\. Policy 'bare' \(Bare\) reads none"):
+
+        @bridge.group(name="widget", sub="widget")
+        class WidgetClient(BaseWidgetClient):
+            @expose(verb="info", policy="bare", tag="t")
+            def get_widget(self) -> None: ...
+
+
+def test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn() -> None:
+    app = _decorate_widget_group(_bridge())
+    assert app._operations["widget_info"].__annotations__ == {"name": str, "return": Dict[str, Any]}
 
 
 def test_consumer_adapter_merges_over_defaults() -> None:

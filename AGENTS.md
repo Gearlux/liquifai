@@ -160,6 +160,14 @@ project folder shadows the package.
   a consumer-registered policy (`SdkBridge(policies=…)`) or adapter (`adapters=`).
 - Registration is per-`SdkBridge` instance, never module-global. An unknown policy or adapter
   key raises `CommandDefinitionError` at decoration.
+- A policy names the extra `@expose` settings it reads in `options: FrozenSet[str]`; a policy
+  without it reads none. Any other extra setting raises `CommandDefinitionError` at decoration,
+  naming the `@expose`'s file:line and the closest setting. Never accept undeclared settings again.
+  §11. (`tests/test_bridge_group.py::test_a_misspelled_expose_setting_is_refused_at_decoration`
+  and the three tests after it)
+- A synthesized op's annotations come from `introspection.annotations_for`, and both built-in
+  policies build their op with `policies._single_call_op`; never re-inline either.
+  (`tests/test_bridge_group.py::test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn`)
 - Test fakes are hand-written (`tests/bridge_fakes.py`), never `MagicMock`.
   (`tests/test_bridge_group.py`, `tests/test_bridge_policies.py`, `tests/test_bridge_shaping.py`)
 

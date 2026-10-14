@@ -32,6 +32,13 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Changed
 
+- **`liquifai.bridge` (provisional): an `@expose` setting the routed policy does not read is a
+  `CommandDefinitionError`** at class decoration, naming the `@expose`'s file and line and the
+  closest setting (`unknown setting 'colums' (did you mean 'columns'?)`). A policy names the
+  settings it reads in an `options` attribute (`frozenset({"client_filter"})`); the built-in
+  `call` and `items` policies, and a policy without the attribute, read none. Before, a misspelled
+  setting was accepted and ignored. `Group` no longer carries `sub`, and `BridgeConnection` is no
+  longer `runtime_checkable`; a synthesized operation's annotations now include `return`.
 - **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
   helpers are imported from the module that owns them: `liquifai.overrides`,
   `liquifai.grammar` and `liquifai.di`.

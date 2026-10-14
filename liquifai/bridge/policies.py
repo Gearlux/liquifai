@@ -14,14 +14,13 @@ annotation objects are required by liquifai/confluid/``MCPServer`` introspection
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Protocol, Tuple, runtime_checkable
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Protocol, Tuple
 
 from liquifai.bridge.shaping import attr_str, dry_descriptor, format_call, items_result, record_to_dict, records_of
 from liquifai.bridge.shaping import require as _require
 from liquifai.bridge.spec import ExposeSpec, P
 
 
-@runtime_checkable
 class BridgeConnection(Protocol):
     """What a synthesized operation needs from its first (``conn``) parameter.
 
@@ -68,6 +67,11 @@ class PolicyContext:
 
 class OpPolicy(Protocol):
     """Spec in, operation out — the bridge's policy extension point."""
+
+    #: The extra ``@expose`` settings this policy reads from :attr:`ExposeSpec.options`
+    #: (``frozenset({"client_filter"})``). Any other extra setting on an op routed here is
+    #: refused when the group is decorated; a policy without this attribute reads none.
+    options: FrozenSet[str]
 
     def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
         """Build the operation callable for ``spec``.
@@ -168,18 +172,36 @@ def shape_status(spec: ExposeSpec, result: Any, kwargs: Dict[str, Any]) -> Dict[
     return out
 
 
+def _single_call_op(
+    spec: ExposeSpec, ctx: PolicyContext, shape: Callable[[Any, Dict[str, Any]], Dict[str, Any]]
+) -> Callable[..., Dict[str, Any]]:
+    """An operation making ONE SDK call, its result shaped by ``shape(result, kwargs)``.
+
+    The part :class:`CallPolicy` and :class:`ItemsPolicy` share: map the CLI kwargs onto the
+    call (:func:`resolve_call`), answer a dry run before touching the client, call
+    ``spec.sdk_method`` on the group's target, and carry :func:`build_op_signature`.
+    """
+    method = spec.sdk_method
+    fn_label = ctx.call_label(method)
+
+    def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
+        call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
+        if conn.dry_run:
+            return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
+        result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
+        return shape(result, kwargs)
+
+    op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
+    return op
+
+
 class CallPolicy:
     """One SDK call; result shaped as ``fields`` (full record) or ``status``."""
 
-    def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
-        method = spec.sdk_method
-        fn_label = ctx.call_label(method)
+    options: FrozenSet[str] = frozenset()
 
-        def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
-            call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
-            if conn.dry_run:
-                return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
-            result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
+    def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
+        def shape(result: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
             if spec.presentation == "fields":
                 if spec.nullable and result is None:
                     return {"found": False, **{p.cli: kwargs.get(p.cli) for p in spec.params if p.required}}
@@ -187,8 +209,7 @@ class CallPolicy:
                 return {"found": True, **record} if spec.nullable else record
             return ctx.shape_status(spec, result, kwargs)
 
-        op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
-        return op
+        return _single_call_op(spec, ctx, shape)
 
 
 class ItemsPolicy:
@@ -200,19 +221,12 @@ class ItemsPolicy:
     paginated list surface (that is an SDK dialect, hence consumer-side).
     """
 
+    options: FrozenSet[str] = frozenset()
+
     def build(self, spec: ExposeSpec, ctx: PolicyContext) -> Callable[..., Dict[str, Any]]:
-        method = spec.sdk_method
-        fn_label = ctx.call_label(method)
-
-        def op(conn: Any, **kwargs: Any) -> Dict[str, Any]:
-            call_args, call_kwargs = resolve_call(spec, kwargs, ctx.adapters)
-            if conn.dry_run:
-                return dry_descriptor(ctx.group, spec.verb, format_call(fn_label, *call_args, **call_kwargs))
-            result = getattr(ctx.target(conn), method)(*call_args, **call_kwargs)
-            return items_result(records_of(result, attr=spec.result_attr))
-
-        op.__signature__ = build_op_signature(spec.params, ctx.conn_cls)  # type: ignore[attr-defined]
-        return op
+        return _single_call_op(
+            spec, ctx, lambda result, _kwargs: items_result(records_of(result, attr=spec.result_attr))
+        )
 
 
 #: The SDK-agnostic policies every bridge starts with. Consumers merge their

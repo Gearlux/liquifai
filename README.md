@@ -178,7 +178,24 @@ The knobs you can tune, and where they live:
 | `target=` | `SdkBridge(...)` | `(conn, sub) -> call target` override for non-attribute sub-client access |
 | `shape_status=` | `SdkBridge(...)` | Override the default `status`-presentation result shaper |
 | `P(cli, sdk=, default=, adapt=, ...)` | `@expose(params=[...])` | One CLI param mapped onto an SDK kwarg; no default = required = CLI positional |
-| extra `**options` | `@expose(...)` | Policy-specific knobs (e.g. a list policy's `client_filter=` / `extras=`) — opaque to the generic bridge |
+| extra `**options` | `@expose(...)` | Policy-specific knobs (e.g. a list policy's `client_filter=` / `extras=`) — opaque to the generic bridge, but each must be named in the routed policy's `options` attribute |
+
+A policy names the extra settings it reads; any other extra `@expose` setting
+— a typo, or a setting meant for another policy — is refused when the class is
+decorated, with the file and line of the `@expose`:
+
+```python
+class MyListPolicy:
+    options = frozenset({"client_filter", "extras"})   # the built-ins read none
+
+    def build(self, spec, ctx): ...
+```
+
+```
+CommandDefinitionError: @expose('list_widgets') in group 'widget' (.../widget.py:40): unknown
+setting 'client_filtr' (did you mean 'client_filter'?). Policy 'list' (MyListPolicy) reads
+'client_filter', 'extras'; a policy names the settings it reads in its `options` attribute.
+```
 
 Every generated op honors `conn.dry_run` **before** touching the SDK client,
 returning a `{"dry_run": True, "command", "action", "call"}` descriptor — so
