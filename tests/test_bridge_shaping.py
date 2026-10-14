@@ -220,6 +220,11 @@ def test_require_raises_listing_all_missing() -> None:
     require(name="ok")  # no raise
 
 
+def test_require_counts_only_none_and_empty_text_as_missing() -> None:
+    with pytest.raises(ValueError, match=r"^Missing required argument\(s\): a$"):
+        require(a=None, b=0, c=False, d="0")
+
+
 def test_format_call_shapes() -> None:
     assert format_call("client.f") == "client.f()"
     rendered = format_call("client.f", "a", key=1)

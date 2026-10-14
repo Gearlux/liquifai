@@ -168,6 +168,11 @@ project folder shadows the package.
 - A synthesized op's annotations come from `introspection.annotations_for`, and both built-in
   policies build their op with `policies._single_call_op`; never re-inline either.
   (`tests/test_bridge_group.py::test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn`)
+- "Missing" is `shaping.is_missing`: `None` or `""`, never `0` or `False` — for a required
+  param (`require`) and for `omit_empty`, which leaves out only a missing value or an empty
+  declared default. Never test a value with `not value` in a call path.
+  (`tests/test_bridge_policies.py::test_a_required_zero_or_false_is_given_not_missing` and the
+  five tests after it; `tests/test_bridge_shaping.py::test_require_counts_only_none_and_empty_text_as_missing`)
 - Test fakes are hand-written (`tests/bridge_fakes.py`), never `MagicMock`.
   (`tests/test_bridge_group.py`, `tests/test_bridge_policies.py`, `tests/test_bridge_shaping.py`)
 

@@ -120,6 +120,44 @@ def test_resolve_call_omit_empty_false_forwards_empty() -> None:
     assert kwargs == {"status": ""}
 
 
+def test_a_required_zero_or_false_is_given_not_missing() -> None:
+    """`--count 0` used to raise `Missing required argument(s): count`."""
+    spec = ExposeSpec(verb="versions", params=[P("count"), P("strict")])
+    _, kwargs = resolve_call(spec, {"count": 0, "strict": False}, DEFAULT_ADAPTERS)
+    assert kwargs == {"count": 0, "strict": False}
+
+
+def test_a_required_none_or_empty_text_is_still_missing() -> None:
+    spec = ExposeSpec(verb="versions", params=[P("name"), P("count")])
+    with pytest.raises(ValueError, match=r"^Missing required argument\(s\): name, count$"):
+        resolve_call(spec, {"name": "", "count": None}, DEFAULT_ADAPTERS)
+
+
+def test_a_typed_zero_that_differs_from_the_default_is_sent() -> None:
+    """`--limit 0` against a default of 10 used to be dropped, so the SDK got its own default."""
+    spec = ExposeSpec(verb="versions", params=[P("limit", default=10), P("strict", default=True)])
+    _, kwargs = resolve_call(spec, {"limit": 0, "strict": False}, DEFAULT_ADAPTERS)
+    assert kwargs == {"limit": 0, "strict": False}
+
+
+def test_an_untouched_option_with_an_empty_default_is_still_left_to_the_sdk() -> None:
+    spec = ExposeSpec(
+        verb="create", params=[P("description", default=""), P("diff_only", default=False), P("page", default=0)]
+    )
+    assert resolve_call(spec, {}, DEFAULT_ADAPTERS)[1] == {}
+    assert resolve_call(spec, {"description": "", "diff_only": False, "page": 0}, DEFAULT_ADAPTERS)[1] == {}
+
+
+def test_an_untouched_option_with_a_non_empty_default_is_still_sent() -> None:
+    spec = ExposeSpec(verb="list", params=[P("limit", default=10)])
+    assert resolve_call(spec, {}, DEFAULT_ADAPTERS)[1] == {"limit": 10}
+
+
+def test_a_none_option_is_left_to_the_sdk() -> None:
+    spec = ExposeSpec(verb="list", params=[P("limit", default=10)])
+    assert resolve_call(spec, {"limit": None}, DEFAULT_ADAPTERS)[1] == {}
+
+
 def test_resolve_call_client_side_only_param_skipped() -> None:
     spec = ExposeSpec(verb="download", params=[P("name"), P("versioned", sdk=None, default=False)])
     _, kwargs = resolve_call(spec, {"name": "x", "versioned": True}, DEFAULT_ADAPTERS)

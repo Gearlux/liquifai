@@ -39,6 +39,11 @@ All notable changes to liquifai are documented here. The format follows
   `call` and `items` policies, and a policy without the attribute, read none. Before, a misspelled
   setting was accepted and ignored. `Group` no longer carries `sub`, and `BridgeConnection` is no
   longer `runtime_checkable`; a synthesized operation's annotations now include `return`.
+- **`liquifai.bridge` (provisional): `0` and `False` are values, not "missing".** A required
+  `P("count")` given `0` is sent (before: `Missing required argument(s): count`), and an
+  optional `--limit 0` against a default of 10 is sent (before: dropped, so the SDK applied its
+  own default). An optional left at an empty default (`""`, `0`, `False`) is still left out, and
+  `shaping.require` counts only `None` and `""` as missing; `shaping.is_missing` states the rule.
 - **`liquifai.core` re-exports no helpers.** The override, grammar and dependency-injection
   helpers are imported from the module that owns them: `liquifai.overrides`,
   `liquifai.grammar` and `liquifai.di`.
