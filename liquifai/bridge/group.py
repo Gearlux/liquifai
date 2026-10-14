@@ -33,7 +33,7 @@ from loggair import get_logger
 from liquifai.bridge.policies import BUILTIN_POLICIES, OpPolicy, PolicyContext, default_target, resolve_policy
 from liquifai.bridge.policies import shape_status as _default_shape_status
 from liquifai.bridge.shaping import DEFAULT_ADAPTERS
-from liquifai.bridge.spec import _CUSTOM_ATTR, _EXPOSE_ATTR, CustomSpec, ExposeSpec
+from liquifai.bridge.spec import _CUSTOM_ATTR, _EXPOSE_ATTR, P_TYPES, CustomSpec, ExposeSpec, P
 from liquifai.core import LiquifyApp
 from liquifai.exceptions import CommandDefinitionError
 from liquifai.introspection import annotations_for, split_context_param
@@ -83,6 +83,25 @@ def _check_options(spec: ExposeSpec, group: str, policy_key: str, policy: OpPoli
         f"{', '.join(named)}. Policy {policy_key!r} ({type(policy).__name__}) reads {reads}; a policy names "
         f"the settings it reads in its `options` attribute."
     )
+
+
+def _type_problem(p: P) -> str:
+    """Why ``p``'s declared type cannot hold, or ``""``: an unlisted type, an adapter, a default of another type."""
+    if p.type is None:
+        return ""
+    name = p.type.__name__
+    if p.type not in P_TYPES:
+        return (
+            f"P({p.cli!r}) declares type {name}; a parameter's type is one of "
+            f"{', '.join(t.__name__ for t in P_TYPES)}."
+        )
+    if p.adapt is not None:
+        return f"P({p.cli!r}) declares type {name} and adapter {p.adapt!r}; the adapter decides the value's type."
+    if p.required or p.default is None:
+        return ""
+    if type(p.default) is p.type or (p.type is float and type(p.default) is int):
+        return ""
+    return f"P({p.cli!r}) declares type {name} but its default {p.default!r} is a {type(p.default).__name__}."
 
 
 def _sdk_docstring(cls: type, method: str) -> str:
@@ -274,8 +293,11 @@ class SdkBridge:
         )
 
     def _validate_spec(self, spec: ExposeSpec, group_name: str) -> None:
-        """Fail at decoration time (not first call) on unknown adapter keys."""
+        """Fail at decoration time (not first call) on unknown adapter keys and impossible types."""
         for p in spec.params:
+            problem = _type_problem(p)
+            if problem:
+                raise CommandDefinitionError(f"@expose({spec.sdk_method!r}) in group {group_name!r}: {problem}")
             if p.adapt is not None and p.adapt not in self._adapters:
                 raise CommandDefinitionError(
                     f"@expose({spec.sdk_method!r}) in group {group_name!r}: P({p.cli!r}) uses "

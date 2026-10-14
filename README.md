@@ -178,6 +178,7 @@ The knobs you can tune, and where they live:
 | `target=` | `SdkBridge(...)` | `(conn, sub) -> call target` override for non-attribute sub-client access |
 | `shape_status=` | `SdkBridge(...)` | Override the default `status`-presentation result shaper |
 | `P(cli, sdk=, default=, adapt=, ...)` | `@expose(params=[...])` | One CLI param mapped onto an SDK kwarg; no default = required = CLI positional |
+| `P(..., type=int)` | `@expose(params=[...])` | The value's type — `str`, `int`, `float` or `bool` — shown in the MCP schema; a CLI word is read as a flag value is (`"7"` → `7`) and refused if it is not one (`count: expected int, got 'abc'`). Unset: the default's type, `str` for a required param |
 | extra `**options` | `@expose(...)` | Policy-specific knobs (e.g. a list policy's `client_filter=` / `extras=`) — opaque to the generic bridge, but each must be named in the routed policy's `options` attribute |
 
 A policy names the extra settings it reads; any other extra `@expose` setting

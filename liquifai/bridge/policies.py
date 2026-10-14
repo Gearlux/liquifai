@@ -16,6 +16,8 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Protocol, Tuple
 
+from confluid import parse_value
+
 from liquifai.bridge.shaping import (
     attr_str,
     dry_descriptor,
@@ -124,11 +126,32 @@ def build_op_signature(params: List[P], conn_cls: type) -> inspect.Signature:
     sig_params = [inspect.Parameter("conn", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=conn_cls)]
     for p in params:
         default = inspect.Parameter.empty if p.required else p.default
-        annotation = type(p.default) if (not p.required and p.default is not None) else str
+        annotation = p.type or (type(p.default) if (not p.required and p.default is not None) else str)
         sig_params.append(
             inspect.Parameter(p.cli, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=annotation)
         )
     return inspect.Signature(sig_params, return_annotation=Dict[str, Any])
+
+
+def read_typed(p: P, value: Any) -> Any:
+    """``value`` as ``p.type``: text is read the way a CLI flag value is (``"7"`` -> ``7``).
+
+    A CLI positional always arrives as text and an MCP argument already typed, so both reach
+    the SDK as the same value. Text declared ``str`` is kept exactly as typed; a missing value
+    and an undeclared type pass through. ``float`` accepts an integer; ``int`` never accepts a
+    ``bool``.
+
+    Raises:
+        ValueError: the value does not read as ``p.type`` (``count: expected int, got 'abc'``).
+    """
+    if p.type is None or p.type is str or is_missing(value):
+        return value
+    read = parse_value(value) if isinstance(value, str) else value
+    if p.type is float and type(read) is int:
+        read = float(read)
+    if type(read) is not p.type:
+        raise ValueError(f"{p.cli}: expected {p.type.__name__}, got {value!r}")
+    return read
 
 
 def resolve_call(
@@ -149,6 +172,7 @@ def resolve_call(
         if p.sdk is None:  # client-side-only param
             continue
         value = kwargs.get(p.cli, p.default if not p.required else "")
+        value = read_typed(p, value)
         # Left to the SDK: a missing value, or the declared default when that default is empty
         # (an option nobody touched). A typed `0` / `False` that differs from it is sent.
         if p.omit_empty and not p.required and (is_missing(value) or (not value and value == p.default)):

@@ -168,6 +168,13 @@ project folder shadows the package.
 - A synthesized op's annotations come from `introspection.annotations_for`, and both built-in
   policies build their op with `policies._single_call_op`; never re-inline either.
   (`tests/test_bridge_group.py::test_a_synthesized_op_annotates_its_parameters_and_return_but_not_conn`)
+- A `P` may declare `type=` from the closed `spec.P_TYPES` (`str`, `int`, `float`, `bool`); it is
+  the annotation, and `policies.read_typed` reads a text value with `confluid.parse_value` and
+  refuses one that is not that type. An unlisted type, `type=` with `adapt=`, or a default of
+  another type is a `CommandDefinitionError` at decoration. Never widen the set to a structured
+  type here — an adapter decides those.
+  (`tests/test_bridge_policies.py::test_a_declared_type_reads_the_value` and its neighbours,
+  `tests/test_bridge_group.py::test_a_parameter_type_that_cannot_hold_is_refused_at_decoration`)
 - "Missing" is `shaping.is_missing`: `None` or `""`, never `0` or `False` — for a required
   param (`require`) and for `omit_empty`, which leaves out only a missing value or an empty
   declared default. Never test a value with `not value` in a call path.
