@@ -174,15 +174,15 @@ How it stays fast and offline-safe:
 - **A missing or outdated command-tree cache self-heals too.** No
   `~/.cache/liquifai/<app>.json`, or one written by an older liquifai, completes
   nothing on that TAB (bash then lists files) and detaches
-  `my-app --refresh-completions` in the background, so the **next** TAB works. Same
-  throttle and `LIQUIFAI_NO_LAZY_COMPLETE=1` opt-out as the value caches; the throttle
-  marker is `~/.cache/liquifai/<app>.pending`.
+  `my-app --refresh-completions` in the background, so the **next** TAB works. That
+  refresh also runs every value provider, so a provider that queries a server does so
+  then. Same throttle and `LIQUIFAI_NO_LAZY_COMPLETE=1` opt-out as the value caches;
+  the throttle marker is `~/.cache/liquifai/<app>.pending`.
 - **Refresh-everything is explicit by default**: run `my-app --refresh-completions`
   to (re)populate ALL value caches at once. Opt into automatic background refresh by
   setting `LIQUIFAI_BG_REFRESH=1` — then a successful run refreshes stale caches
   (>10 min) in a detached daemon thread, never blocking the command. It is OFF
-  by default so a normal run never triggers a surprise provider call (e.g. a
-  platform query). A sub-app alias (`ds` for `dataset`) shares the canonical
+  by default. A sub-app alias (`ds` for `dataset`) shares the canonical
   command's value cache.
 - **Prefix matching is case-insensitive**: `cifar<TAB>` finds `CIFAR_…`.
 - **Values with spaces work.** A candidate like `My Dataset V2` is transported

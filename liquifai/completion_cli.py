@@ -137,10 +137,11 @@ def maybe_background_refresh_values(app: Any, ttl: float = 600.0) -> None:
     detached daemon thread so the next TAB sees fresh values without blocking
     the command that just ran. Best-effort: any failure is swallowed.
 
-    It is OFF by default because a provider may hit the network (e.g. query a
-    platform), and a normal run should never trigger a surprise background
-    request — the deterministic path is ``--refresh-completions``. Set
+    It is OFF by default: a provider may hit the network (e.g. query a
+    platform), and the explicit path is ``--refresh-completions``. Set
     ``LIQUIFAI_BG_REFRESH=1`` (e.g. in a project rc) to keep caches warm for free.
+    (The TAB fast path's own self-heal spawns are a separate switch,
+    ``LIQUIFAI_NO_LAZY_COMPLETE``.)
     """
     if not os.environ.get("LIQUIFAI_BG_REFRESH"):
         return

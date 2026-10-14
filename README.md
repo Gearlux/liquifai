@@ -131,6 +131,13 @@ for tool in make_mcp_tools(app):
 positionals are derived from the operation signature: every keyword-only
 parameter without a default becomes a positional slot.
 
+The context reaches an operation **by name**, as its `conn` parameter; an
+operation without one is called without a context, and its MCP tool does not
+advertise the MCP context factory's parameters. A tool returns every failure as
+`{"error": "…"}`, a context the factory could not build included. An operation
+parameter named like a factory parameter (both with `dry_run`, say) is refused
+when the tools are built, with a `CommandDefinitionError` naming the operation.
+
 ### SDK bridge (`liquifai.bridge`, provisional)
 
 For CLIs that mirror an existing Python SDK, `liquifai.bridge` generates the
@@ -205,6 +212,21 @@ print(liquifai.__version__)  # e.g. 0.3.0
 | Extra | What it opts into |
 |---|---|
 | `liquifai[bridge]` | The **provisional** `liquifai.bridge` subpackage (see above). It adds no requirements today — it is a contract marker that records, in your metadata, a dependency on a surface excluded from the version contract. |
+
+## Environment variables
+
+Both tune shell completion; neither is needed to run an app.
+
+| Variable | Default | Set it to `1` to |
+|---|---|---|
+| `LIQUIFAI_NO_LAZY_COMPLETE` | unset (refresh on) | stop a TAB from starting a background refresh. Without it, a TAB that finds a completion cache missing, outdated or stale detaches `<app> --refresh-completions` or `<app> --refresh-completion-value …`, and those run your value providers — a provider that queries a server queries it then. |
+| `LIQUIFAI_BG_REFRESH` | unset (off) | refresh stale value caches in the background after every successful command. |
+
+```bash
+export LIQUIFAI_NO_LAZY_COMPLETE=1   # TAB reads the caches and never starts anything
+```
+
+Details: [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md).
 
 ## License
 MIT
