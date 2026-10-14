@@ -23,9 +23,10 @@ NOTE: no ``from __future__ import annotations`` in ``liquifai.bridge`` — live
 annotation objects are required by liquifai/confluid/``MCPServer`` introspection.
 """
 
+import difflib
 import inspect
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from dataclasses import dataclass, fields
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 from loggair import get_logger
 
@@ -35,6 +36,7 @@ from liquifai.bridge.shaping import DEFAULT_ADAPTERS
 from liquifai.bridge.spec import _CUSTOM_ATTR, _EXPOSE_ATTR, CustomSpec, ExposeSpec
 from liquifai.core import LiquifyApp
 from liquifai.exceptions import CommandDefinitionError
+from liquifai.introspection import annotations_for, split_context_param
 
 logger = get_logger("liquifai.bridge")
 
@@ -49,9 +51,38 @@ class Group:
     """A registered group — its built app + the metadata the CLI mounts it with."""
 
     name: str
-    sub: str
     aliases: List[str]
     app: LiquifyApp
+
+
+#: The settings every ``@expose`` takes; anything else lands in ``ExposeSpec.options``.
+_EXPOSE_SETTINGS: FrozenSet[str] = frozenset(f.name for f in fields(ExposeSpec)) - {"sdk_method", "options"}
+
+
+def _check_options(spec: ExposeSpec, group: str, policy_key: str, policy: OpPolicy, stub: Any) -> None:
+    """Refuse an ``@expose`` setting the routed policy does not read.
+
+    ``@expose(**options)`` takes any keyword so a consumer policy can define its own settings,
+    which also made a typo (``colums=``) or a setting meant for another policy silently do
+    nothing. The policy names what it reads in its ``options`` attribute; one without it reads
+    none. Runs at class decoration, i.e. when the consumer's module is imported.
+    """
+    accepted: FrozenSet[str] = frozenset(getattr(policy, "options", frozenset()))
+    unknown = sorted(set(spec.options) - accepted)
+    if not unknown:
+        return
+    code = getattr(stub, "__code__", None)
+    where = f" ({code.co_filename}:{code.co_firstlineno})" if code is not None else ""
+    named = []
+    for key in unknown:
+        close = difflib.get_close_matches(key, sorted(_EXPOSE_SETTINGS | accepted), n=1)
+        named.append(f"{key!r} (did you mean {close[0]!r}?)" if close else repr(key))
+    reads = ", ".join(repr(o) for o in sorted(accepted)) or "none"
+    raise CommandDefinitionError(
+        f"@expose({spec.sdk_method!r}) in group {group!r}{where}: unknown setting{'s' if len(unknown) > 1 else ''} "
+        f"{', '.join(named)}. Policy {policy_key!r} ({type(policy).__name__}) reads {reads}; a policy names "
+        f"the settings it reads in its `options` attribute."
+    )
 
 
 def _sdk_docstring(cls: type, method: str) -> str:
@@ -76,12 +107,9 @@ def _synthesize(spec: ExposeSpec, ctx: PolicyContext, policy: OpPolicy, sdk_doc:
     op.__qualname__ = op_name
     op.__doc__ = spec.doc or sdk_doc or f"{spec.verb.replace('-', ' ').title()} ({ctx.sub or ctx.group})."
     setattr(op, BRIDGED_ATTR, True)
-    # mypy/introspection: mirror annotations from the policy-built signature.
-    op.__annotations__ = {
-        p.name: p.annotation
-        for p in op.__signature__.parameters.values()  # type: ignore[attr-defined]
-        if p.name != "conn" and p.annotation is not inspect.Parameter.empty
-    }
+    # Introspection reads the annotations: mirror the policy-built signature, minus `conn`.
+    sig, params = split_context_param(op)
+    op.__annotations__ = annotations_for(params, return_annotation=sig.return_annotation)
     return op
 
 
@@ -169,6 +197,7 @@ class SdkBridge:
                             f"{policy_key!r}, which is not registered on this bridge "
                             f"(available: {sorted(self._policies)}); pass it via SdkBridge(policies=...)"
                         )
+                    _check_options(espec, name, policy_key, policy, member)
                     op: Callable[..., Any] = _synthesize(espec, ctx, policy, _sdk_docstring(cls, espec.sdk_method))
                     # The default title's placeholder must be a param the op actually
                     # has (the presenter ``format_map``s it even for status ops), so
@@ -207,7 +236,7 @@ class SdkBridge:
                 self._configure(app)
             else:
                 app.build_commands()
-            self._groups[name] = Group(name=name, sub=sub, aliases=list(aliases or []), app=app)
+            self._groups[name] = Group(name=name, aliases=list(aliases or []), app=app)
             return cls
 
         return _decorate

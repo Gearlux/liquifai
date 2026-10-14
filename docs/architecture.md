@@ -802,3 +802,43 @@ for tool in make_mcp_tools(app):           # the same function as an MCP tool
 presentation, or operation metadata. Build any new wrapper's signature with
 `split_context_param` and `graft_signature`, never by hand, and do not give `@app.command()` a
 second way to register an operation.
+
+## 11. A bridge policy names the `@expose` settings it reads
+
+*(2026-10-14)*
+
+**Context.** `@expose(**options)` takes any keyword, so a consumer policy can define settings
+the generic bridge knows nothing about (a list policy's `client_filter=`). The same openness
+swallowed mistakes: `@expose(verb="info", colums=…, presentaton="fields")` produced a working
+operation that printed a bare status line instead of a table, and `client_filter=` on an operation
+routed to the `call` policy did nothing. No layer could tell a policy's setting from a typo,
+because nothing said which settings exist.
+
+**Decision.** The reader declares them. A policy carries `options: FrozenSet[str]`, the extra
+settings it reads from `ExposeSpec.options`; the built-in `call` and `items` policies read none,
+and a policy without the attribute reads none. When a group is decorated, any extra setting the
+routed policy does not name raises `CommandDefinitionError`, naming the `@expose`'s file and
+line, the unknown key with the closest core or declared setting, and what the policy reads. A
+wrapping policy declares its own settings plus its inner policy's.
+
+**Consequences.**
+
+- A typo fails when the consumer's module is imported, not as a wrong-looking result in use.
+- The engine still never learns what a setting means; it only checks the name against the
+  policy's own declaration, so the "an SDK's dialect never lands here" rule (§6) is untouched.
+- Adding a setting to a policy is two edits: read it in `build`, name it in `options`.
+
+**Example.**
+
+```python
+class MyListPolicy:
+    options = frozenset({"client_filter", "extras"})
+
+    def build(self, spec, ctx):
+        client_filter = spec.options.get("client_filter", "")
+        ...
+```
+
+**What you may change.** Any policy's `options` set, and the wording of the refusal. Do not
+make an undeclared policy accept every setting again, and do not move the check to call time:
+the point is that a declaration mistake is an author's startup error.
