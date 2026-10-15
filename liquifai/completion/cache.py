@@ -216,6 +216,47 @@ def _dependent_changed_recently(app_name: str, cache_key: str, inputs: Dict[str,
     return ca is not None and (time.time() - ca) < window
 
 
+def slot_inputs(info: Dict[str, Any], typed: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """The cache inputs a slot answers for the typed positionals, None when it cannot answer yet.
+
+    ``static``: none (``{}``). ``dependent``: every earlier positional it depends on, all typed. ``prefix`` (an option's
+    value or a command's config scopes): the LEADING positionals typed, ``{}`` when none is.
+    """
+    kind = info.get("kind")
+    deps = list(info.get("depends_on", []))
+    if kind == "static":
+        return {}
+    if kind == "dependent":
+        return {d: typed[d] for d in deps} if deps and all(d in typed for d in deps) else None
+    leading: Dict[str, str] = {}
+    for dep in deps:
+        if dep not in typed:
+            break
+        leading[dep] = typed[dep]
+    return leading
+
+
+def read_slot_values(app_name: str, info: Dict[str, Any], typed: Dict[str, str]) -> Optional[List[str]]:
+    """A slot's cached values for the typed positionals (None: not cached, or not answerable yet)."""
+    inputs = slot_inputs(info, typed)
+    if inputs is None:
+        return None
+    if info.get("kind") == "static":
+        return read_value_cache(app_name, str(info.get("key", "")))
+    return read_dependent_value_cache(app_name, str(info.get("key", "")), inputs)
+
+
+def slot_is_stale(app_name: str, info: Dict[str, Any], inputs: Dict[str, str]) -> bool:
+    """True when the slot's cache for ``inputs`` is missing or older than :data:`DEPENDENT_REFRESH_TTL`."""
+    key = str(info.get("key", ""))
+    age = (
+        _value_cache_age(app_name, key)
+        if info.get("kind") == "static"
+        else _dependent_value_cache_age(app_name, key, inputs)
+    )
+    return age is None or age > DEPENDENT_REFRESH_TTL
+
+
 def make_lazy_refresh_spawner(app_name: str) -> Callable[[str, Dict[str, str]], None]:
     """Return a callback that DETACHES a targeted refresh for one positional's cache.
 

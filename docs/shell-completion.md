@@ -257,6 +257,34 @@ double-TAB signal and keep the age-gated behaviour. It needs the up-to-date
 wrapper: **re-run `my-app --install-completion`** (or `liquifai-install-completions`)
 once and re-source, otherwise the double-TAB is treated as an ordinary TAB.
 
+### An option's value (`--library <TAB>`)
+
+A `completions=` key that names an OPTION rather than a positional completes that option's value:
+
+```python
+@app.command(positionals=["option"], completions={"option": options, "library": lambda: ["unofficial", "complete"]})
+def review(option: str = "", library: str = "") -> None: ...
+```
+
+`review a --library <TAB>` → `unofficial complete`. Its provider takes nothing, or the positionals
+typed so far (`{name: word}`, `{}` when none is) — cached per prefix of them, like a command's
+config scopes. A key that names no parameter of the command is refused when it is decorated
+(`CommandDefinitionError`, with the closest parameter): a misspelt key would complete nothing.
+
+### A list's next word (`a,<TAB>`)
+
+After a comma, a positional, an option's value and `--scope` complete the list's next item:
+`pictures all a,<TAB>` → `a,b a,c …`, the words already in the list left out. Shells keep a comma
+inside the word, so the candidate is the whole list.
+
+### The same values in `--help`
+
+`<command> --help` ends with a "Values" block: each slot with a provider and the values TAB would
+offer it, read from the same cache — never by running a provider, which may query a server. A slot
+that depends on a positional not typed shows nothing (`download --help` vs `download cifar10
+--help`); an empty cache says to run `<app> --refresh-completions`. Long lists show 20 values and a
+count.
+
 ### `--scope <TAB>` for a command that runs its own config
 
 A command declaring `@command(config_files=provider)` (see [Commands](commands-and-di.md#the-scopes-of-the-config-a-command-runs-config_files))
