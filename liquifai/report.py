@@ -336,8 +336,36 @@ def show_config_scopes(provider: Callable[..., Any], typed: Mapping[str, str], *
         console.print(f"  [dim](none declared in {escape(named)})[/dim]")
         return
     width = max(len(name) for name in found)
+    present = [f for f in files if f.is_file()]
     for name, where in found.items():
-        console.print(f"  {escape(name).ljust(width)}  [dim]{escape(', '.join(where))}[/dim]")
+        if len(present) > 1 and len(where) == len(present):
+            said = f"every config ({len(where)} files)"
+        else:
+            said = ", ".join(where[:3]) + (f" (+{len(where) - 3} more)" if len(where) > 3 else "")
+        console.print(f"  {escape(name).ljust(width)}  [dim]{escape(said)}[/dim]")
+
+
+#: How many values a slot shows in help before it counts the rest.
+SLOT_VALUES_SHOWN = 20
+
+
+def show_slot_values(rows: List[Any], *, app_name: str, console: Console) -> None:
+    """Render the "Values" block: per slot (``<positional>`` or ``--option``), the values TAB offers it.
+
+    ``rows`` are ``(slot, values)``, read from the completion cache by the caller. Empty rows → the cache is not
+    filled yet, and the line says how to fill it.
+    """
+    console.print(
+        f"\n[bold]Values[/bold] (what TAB offers; [dim]{escape(app_name)} --refresh-completions[/dim] refreshes them):"
+    )
+    if not rows:
+        console.print(f"  [dim](not cached yet — run: {escape(app_name)} --refresh-completions)[/dim]")
+        return
+    width = max(len(slot) for slot, _ in rows)
+    for slot, values in rows:
+        shown = " | ".join(values[:SLOT_VALUES_SHOWN])
+        more = f" (+{len(values) - SLOT_VALUES_SHOWN} more)" if len(values) > SLOT_VALUES_SHOWN else ""
+        console.print(f"  {escape(slot).ljust(width)}  {escape(shown)}[dim]{more}[/dim]")
 
 
 def show_scope_dimensions(raw_config: Any, *, console: Console, source: str) -> None:

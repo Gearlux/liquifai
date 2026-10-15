@@ -23,6 +23,8 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v8: ``flag_completions`` ``{cmd: {option: {key, kind, depends_on}}}`` (``--library <TAB>``); ``scope_completions``
+# entries take the same shape (kind ``prefix``).
 # v7: ``scope_completions`` ``{cmd: {key, typed}}`` for a ``@command(config_files=...)`` command, so
 # ``--scope <TAB>`` offers its config files' scopes (cached per typed words); its ``scopes`` parameter is not a flag.
 # v6: declared positionals are EXCLUDED from ``signature_paths`` /
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 7
+CACHE_VERSION: int = 8
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -101,36 +103,27 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
                 if spelling not in bools:
                     bools.append(spelling)
         signature_bool_flags[cmd] = bools
-    # Per-command completion info for positionals that registered a provider
-    # (``@command(..., completions={...})``): ``{positional: {key, kind, depends_on}}``.
-    # ``kind`` is ``dependent`` when the provider takes an argument (it receives the
-    # earlier positionals) else ``static``; ``depends_on`` lists the prior positionals
-    # a dependent provider is enumerated against. complete_from_tree reads this to
-    # offer cached real values instead of the ``<name>`` placeholder.
+    # Per-command completion info for every slot with a provider (``@command(..., completions={...})``):
+    # ``{name: {key, kind, depends_on}}``. A positional's ``kind`` is ``dependent`` when its provider takes an
+    # argument (it receives the earlier positionals) else ``static``; an OPTION's (a completions key that is no
+    # positional) is ``static`` or ``prefix`` (it receives the leading positionals typed). complete_from_tree reads
+    # these to offer cached real values instead of the ``<name>`` placeholder, or after ``--<option>``.
     positional_completions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    flag_completions: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for cmd, func in app._commands.items():
         providers = getattr(func, "__liquifai_completions__", {}) or {}
-        if not providers:
-            continue
         pos_list = list(getattr(func, "__liquifai_positionals__", []))
-        positional_completions[cmd] = {
-            pos: {
-                k: v
-                for k, v in _provider_spec(_path, cmd, pos, provider, pos_list).items()
-                if k in ("key", "kind", "depends_on")
-            }
-            for pos, provider in providers.items()
-        }
-    # {cmd: {key, typed}} for a command that runs config files of its own (``config_files=``): their scopes, cached
-    # per prefix of typed positionals when its provider reads them (``typed``), else once, under ``{}``.
+        for name, provider in providers.items():
+            spec = _slot_info(_provider_spec(_path, cmd, name, provider, pos_list))
+            (positional_completions if name in pos_list else flag_completions).setdefault(cmd, {})[name] = spec
+    # {cmd: {key, kind, depends_on}} for a command that runs config files of its own (``config_files=``): their
+    # scopes, cached per prefix of typed positionals when its provider reads them, else once, under ``{}``.
     scope_completions: Dict[str, Dict[str, Any]] = {}
     for cmd, func in app._commands.items():
         files = _config_files_provider(func)
         if files is not None:
-            scope_completions[cmd] = {
-                "key": cache.value_cache_key(_path, cmd, SCOPE_SLOT),
-                "typed": _provider_arity(files) > 0,
-            }
+            pos_list = list(getattr(func, "__liquifai_positionals__", [])) if _provider_arity(files) else []
+            scope_completions[cmd] = _slot_info(_provider_spec(_path, cmd, SCOPE_SLOT, _scope_names(files), pos_list))
     return {
         "name": app.name,
         "commands": list(app._commands.keys()),
@@ -156,8 +149,10 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         # to emit ``<name>`` placeholder hints before flags when the cursor is at
         # an unfilled positional slot.
         "positionals": positionals_map,
-        # {cmd: {positional: value-cache-key}} — only positionals with a provider.
+        # {cmd: {positional: {key, kind, depends_on}}} — only positionals with a provider.
         "positional_completions": positional_completions,
+        # {cmd: {option: {key, kind, depends_on}}} — options whose value has a provider (``--library <TAB>``).
+        "flag_completions": flag_completions,
         "scope_completions": scope_completions,
     }
 
@@ -168,6 +163,11 @@ SCOPE_SLOT = "--scope"
 #: The parameter a ``@command(config_files=...)`` command receives its typed ``--scope`` values in. Defined here
 #: (stdlib-only) so core, the help and the tree read ONE name.
 SCOPES_PARAM = "scopes"
+
+
+def _slot_info(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """The JSON-safe part of a provider spec the fast path reads."""
+    return {k: v for k, v in spec.items() if k in ("key", "kind", "depends_on")}
 
 
 def _config_files_provider(func: Any) -> Optional[Callable[..., Any]]:
@@ -225,13 +225,14 @@ def _provider_spec(
     this independently — a drift hazard between the tree and the refreshers.
     """
     key = cache.value_cache_key(path, cmd, pos)
-    if pos == SCOPE_SLOT:
-        # The scopes of a command's config files, cached per PREFIX of typed positionals (``{}`` included):
-        # ``pictures --scope`` reads the default files, ``pictures all a --scope`` a's.
+    if pos == SCOPE_SLOT or (pos not in pos_list and _provider_arity(provider) > 0):
+        # A slot that is no positional — a command's config scopes, an option's value — answering for the words
+        # typed: cached per PREFIX of typed positionals (``{}`` included). ``pictures --scope`` reads the default
+        # files, ``pictures all a --scope`` a's; ``review a --mode`` asks the provider with ``{"option": "a"}``.
         return {
             "key": key,
             "provider": provider,
-            "kind": "scopes",
+            "kind": "prefix",
             "depends_on": list(pos_list),
             "prior_keys": {d: cache.value_cache_key(path, cmd, d) for d in pos_list},
         }
@@ -328,8 +329,8 @@ def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, 
         except Exception:
             continue
         written[s["key"]] = len(values)
-    for s in specs:  # a command's config scopes — per prefix of its typed positionals, none typed first
-        if s["kind"] != "scopes":
+    for s in specs:  # config scopes and option values — per prefix of the typed positionals, none typed first
+        if s["kind"] != "prefix":
             continue
         total = 0
         for inputs in _prefixes(s, app.name, max_combos):
@@ -383,7 +384,7 @@ def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Op
     for s in iter_completion_providers(app):
         if s["key"] != cache_key:
             continue
-        if s["kind"] == "scopes":  # keyed by any prefix of typed words, the empty one included
+        if s["kind"] == "prefix":  # keyed by any prefix of typed words, the empty one included
             want_dependent = True
         elif (s["kind"] == "dependent") != want_dependent:
             continue

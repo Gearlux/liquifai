@@ -122,6 +122,25 @@ def _validated_shorts(func: Callable[..., Any], cmd_name: str, short: Optional[D
     return validated
 
 
+def _validated_completions(
+    func: Callable[..., Any], cmd_name: str, completions: Optional[Dict[str, Callable[..., Any]]]
+) -> Dict[str, Callable[..., Any]]:
+    """Check a command's ``completions=`` at DECORATION time: each key names a parameter (a positional, or an option
+    whose value TAB completes) — a misspelt key would complete nothing, silently."""
+    if not completions:
+        return {}
+    try:
+        params = set(inspect.signature(func).parameters)
+    except (ValueError, TypeError):  # pragma: no cover - defensive: unintrospectable callable
+        return dict(completions)
+    for name in completions:
+        if params and name not in params:
+            close = difflib.get_close_matches(name, sorted(params), n=1)
+            hint = f" — did you mean {close[0]!r}?" if close else ""
+            raise CommandDefinitionError(f"{cmd_name}: completions key '{name}' names no parameter{hint}")
+    return dict(completions)
+
+
 def _validated_config_files(
     func: Callable[..., Any], cmd_name: str, config_files: Optional[Callable[..., ConfigFiles]]
 ) -> Optional[Callable[..., ConfigFiles]]:
@@ -381,7 +400,7 @@ class LiquifyApp:
             setattr(f, "__liquifai_positionals__", list(positionals or []))
             # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
             # completion). Read by completion.serialize_app / iter_completion_providers.
-            setattr(f, "__liquifai_completions__", dict(completions or {}))
+            setattr(f, "__liquifai_completions__", _validated_completions(f, cmd_name, completions))
             setattr(f, "__liquifai_short__", _validated_shorts(f, cmd_name, short))
             # The config files the command runs (None: --scope activates on the app's own config, as ever). Read
             # by _prepare (the typed scopes go to the command, checked against the files), the help and completion.
@@ -1111,6 +1130,31 @@ class LiquifyApp:
             ctx.config_data = expand_strings(ctx.config_data)
         return ctx
 
+    def _show_slot_values(self, func: Callable[..., Any], typed: Dict[str, str], console: Console) -> None:
+        """The values TAB offers each slot of ``func`` with a provider, read from the completion cache — never by
+        running a provider (one may query a server). A slot depending on a word not typed shows nothing."""
+        providers = getattr(func, "__liquifai_completions__", {}) or {}
+        if not providers:
+            return
+        from liquifai.completion import cache as value_cache
+        from liquifai.completion.tree import _provider_spec, _slot_info
+
+        path = self._command_path(func)
+        groups, cmd = tuple(path[1:-1]), path[-1]
+        positionals = list(getattr(func, "__liquifai_positionals__", []))
+        rows: List[tuple] = []
+        answerable = False
+        for name, provider in providers.items():
+            info = _slot_info(_provider_spec(groups, cmd, name, provider, positionals))
+            if value_cache.slot_inputs(info, typed) is None:
+                continue
+            answerable = True
+            values = value_cache.read_slot_values(self.name, info, typed)
+            if values:
+                rows.append((f"<{name}>" if name in positionals else f"--{name}", values))
+        if answerable:
+            report.show_slot_values(rows, app_name=self.name, console=console)
+
     def _show_help(
         self,
         app: "LiquifyApp",
@@ -1186,6 +1230,7 @@ class LiquifyApp:
                 )
             if files_provider is not None:
                 report.show_config_scopes(files_provider, typed or {}, console=console)
+            self._show_slot_values(target_func, typed or {}, console)
         else:
             report.show_command_index(app, console)
 

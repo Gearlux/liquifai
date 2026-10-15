@@ -220,6 +220,11 @@ project folder shadows the package.
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on
   `${COMP_WORDS[*]}`. A wrapper change needs `--install-completion` re-run.
+- A `completions=` key names a parameter or is refused at decoration. A key naming an OPTION completes its
+  value (kind `static`, or `prefix`: cached per prefix of typed positionals, as a `config_files=` command's
+  scopes are). After a comma every list slot completes the next word (`engine._list_candidates`). `--help`'s
+  "Values" block reads the same cache through `cache.read_slot_values` — never a provider.
+  (`tests/test_value_completion.py`)
 - At a flag position: a bool flag opens no value slot; option keys already typed drop out;
   global flags are never dropped (`--scope` repeats).
 - Every app declares the `liquifai.apps` entry point (name = binary = `LiquifyApp.name`). Keep

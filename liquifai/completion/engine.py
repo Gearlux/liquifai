@@ -217,6 +217,48 @@ def complete_from_tree(
     )
 
 
+def _typed_positionals(cur: Dict[str, Any], cmd_name: str, parsed: List[str], args_index: int) -> Dict[str, str]:
+    """The positionals typed after the command, by name — leading words up to the first flag-like token."""
+    names = list((cur.get("positionals") or {}).get(cmd_name, []))
+    typed: List[str] = []
+    for tok in parsed[args_index:]:
+        if stops_positional(tok):
+            break
+        typed.append(tok)
+    return dict(zip(names, typed))
+
+
+def _slot_candidates(
+    info: Dict[str, Any],
+    typed: Dict[str, str],
+    incomplete: str,
+    app_name: str,
+    lazy_refresh: Optional[Callable[..., None]],
+    force_refresh: bool,
+) -> List[str]:
+    """A non-positional slot's cached values (an option's value, a command's config scopes), self-healing."""
+    inputs = cache.slot_inputs(info, typed)
+    if inputs is None:
+        return []
+    values = cache.read_slot_values(app_name, info, typed)
+    if lazy_refresh is not None and (force_refresh or cache.slot_is_stale(app_name, info, inputs)):
+        lazy_refresh(info["key"], inputs)
+    return _list_candidates(list(values or []), incomplete)
+
+
+def _list_candidates(values: List[str], incomplete: str) -> List[str]:
+    """``values`` matching ``incomplete`` — or, after a comma, the list's next word: ``a,`` → ``a,b``, ``a,c``.
+
+    A comma separates a list's items in a positional (``pictures all a,d``), an option's value and ``--scope``; the
+    words already in the list are left out. Shells keep a comma inside the word, so the whole list is the candidate.
+    """
+    if "," not in incomplete:
+        return _filter_prefix(values, incomplete)
+    head, _, tail = incomplete.rpartition(",")
+    chosen = set(head.split(","))
+    return [f"{head},{value}" for value in _filter_prefix(values, tail) if value not in chosen]
+
+
 def _scope_candidates(
     tree: Dict[str, Any],
     parsed: List[str],
@@ -234,23 +276,11 @@ def _scope_candidates(
     walk = walk_invocation(tokenize(parsed), _TreeNav(tree), _peek_config)
     cur = walk.nav.node if isinstance(walk.nav, _TreeNav) else tree
     cmd_name = walk.cmd_name or ""
-    entry = (cur.get("scope_completions") or {}).get(cmd_name) or {}
-    key = entry.get("key")
-    if not key:
+    info = (cur.get("scope_completions") or {}).get(cmd_name)
+    if not info:
         return []
-    names = list((cur.get("positionals") or {}).get(cmd_name, [])) if entry.get("typed") else []
-    typed: List[str] = []
-    for tok in parsed[walk.args_index :]:
-        if stops_positional(tok):
-            break
-        typed.append(tok)
-    inputs = dict(zip(names, typed))
-    values = cache.read_dependent_value_cache(app_name, key, inputs)
-    if lazy_refresh is not None:
-        age = cache._dependent_value_cache_age(app_name, key, inputs)
-        if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
-            lazy_refresh(key, inputs)
-    return _filter_prefix(list(values or []), incomplete)
+    typed = _typed_positionals(cur, cmd_name, parsed, walk.args_index)
+    return _slot_candidates(info, typed, incomplete, app_name, lazy_refresh, force_refresh)
 
 
 def _command_candidates(
@@ -334,6 +364,11 @@ def _command_candidates(
         and prev not in GLOBAL_FLAGS
         and prev not in bool_flags
     ):
+        # An option whose value has a provider (``--library <TAB>``) offers its cached values.
+        info = ((cur.get("flag_completions") or {}).get(cmd_name) or {}).get(prev[2:].replace("-", "_"))
+        if info:
+            typed = _typed_positionals(cur, cmd_name, parsed, args_index)
+            return _slot_candidates(info, typed, incomplete, app_name, lazy_refresh, force_refresh)
         return []
 
     # A script_command's first positional is its YAML config path, so before
@@ -455,6 +490,8 @@ def _command_candidates(
         candidates.extend(f for f in signature_flags if _not_used(f))
     # Prepend positional hint (if any) before flag candidates; _filter_prefix
     # naturally drops it when the user has started typing a non-matching prefix.
+    if "," in incomplete and positional_hint and not positional_hint[-1].startswith("<"):
+        return _list_candidates([v for v in positional_hint if not v.startswith("<")], incomplete)
     return _filter_prefix(positional_hint + candidates, incomplete)
 
 

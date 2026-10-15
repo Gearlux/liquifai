@@ -211,8 +211,9 @@ class TestTheHelp:
         app, _ = _app(configs)
         only_a = _help(app, ["pictures", "all", "a", "--help"], monkeypatch, capsys)
         assert "original" in only_a and "mode=fast" not in only_a
-        both = _help(app, ["pictures", "--help"], monkeypatch, capsys)
-        assert "original" in both and "mode=fast" in both and "val" in both
+        both = " ".join(_help(app, ["pictures", "--help"], monkeypatch, capsys).split())
+        assert "original" in both and "mode=fast" in both
+        assert "val every config (2 files)" in both, "a scope every file declares is said once"
 
     def test_the_docs_layout_lists_them_too(self, configs: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any) -> None:
         app, _ = _app(configs)

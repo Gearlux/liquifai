@@ -6,7 +6,20 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- **A `completions=` key that names no parameter of the command is refused when it is decorated**
+  (`CommandDefinitionError: review: completions key 'libary' names no parameter — did you mean 'library'?`). It used
+  to be kept and complete nothing.
+
 ### Added
+
+- **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
+  `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
+- **A list's next word completes after a comma** — positionals, option values and `--scope`: `pictures all a,<TAB>`
+  → `a,b a,c`, the words already listed left out.
+- **`--help` shows the values TAB offers** in a "Values" block, read from the completion cache (no provider runs);
+  a dependent slot answers for the words typed before `--help`.
 
 - **`@app.command(config_files=provider)`: a command names the config it runs, and liquifai reads its scopes.** For a
   command that hands a YAML of its own choosing to another tool. The provider returns the files — called with

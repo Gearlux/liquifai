@@ -8,10 +8,13 @@ show the candidates each would contribute.
 Run with no arguments for the demo; with arguments to act as the app itself.
 """
 
+import os
 import sys
+import tempfile
 from typing import Dict, List
 
 from liquifai import LiquifyApp
+from liquifai.completion.tree import refresh_value_caches
 
 app = LiquifyApp(name="completion-demo")
 
@@ -31,12 +34,19 @@ def dataset_versions(inputs: Dict[str, str]) -> List[str]:
     return _DATASETS.get(inputs.get("name", ""), [])
 
 
+def formats() -> List[str]:
+    """An OPTION's provider: ``download cifar10 --format <TAB>`` completes the option's value."""
+    return ["parquet", "arrow", "csv"]
+
+
 @app.command(
     "download",
     positionals=["name", "version"],
-    completions={"name": dataset_names, "version": dataset_versions},
+    completions={"name": dataset_names, "version": dataset_versions, "format": formats},
 )
-def download(name: str = "", version: str = "latest", path: str = ".", overwrite: bool = False) -> None:
+def download(
+    name: str = "", version: str = "latest", path: str = ".", overwrite: bool = False, format: str = "parquet"
+) -> None:
     """Pretend-download a dataset version.
 
     Args:
@@ -44,8 +54,9 @@ def download(name: str = "", version: str = "latest", path: str = ".", overwrite
         version: Version — TAB-completes per the typed name via dataset_versions().
         path: Destination directory.
         overwrite: Replace an existing download.
+        format: File format — TAB-completes from formats(); a comma list's next word too (parquet,<TAB>).
     """
-    print(f"RESULT name={name!r} version={version!r} path={path!r} overwrite={overwrite}")
+    print(f"RESULT name={name!r} version={version!r} path={path!r} overwrite={overwrite} format={format!r}")
 
 
 def demo() -> None:
@@ -75,6 +86,13 @@ def demo() -> None:
     out = comp.complete(app, line, cword=5)
     print("after the bool flag (… --overwrite <TAB>):", [c for c in out if c in ("--path", "--overwrite")])
     print("  -> --overwrite is bool (no value slot) and, once typed, not re-offered")
+    print()
+    os.environ["XDG_CACHE_HOME"] = tempfile.mkdtemp()  # a throwaway cache: the demo never touches yours
+    refresh_value_caches(app)
+    line = ["completion-demo", "download", "cifar10", "--format", ""]
+    print("an option's value (… --format <TAB>):", comp.complete(app, line, cword=4))
+    line = ["completion-demo", "download", "cifar10", "--format", "parquet,"]
+    print("a list's next word (… --format parquet,<TAB>):", comp.complete(app, line, cword=4))
 
 
 if __name__ == "__main__":
