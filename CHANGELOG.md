@@ -4,6 +4,28 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
+## [Unreleased]
+
+### Added
+
+- **`@app.command(config_files=provider)`: a command names the config it runs, and liquifai reads its scopes.** For a
+  command that hands a YAML of its own choosing to another tool. The provider returns the files — called with
+  nothing, or with the positionals typed so far (`{name: word}`). `my-app compile run2 --scope onnx` then gives the
+  command `scopes=["onnx"]` (typed order, comma lists split) instead of activating `onnx` on the app's own config,
+  where it reached nothing and nothing said so. `--help` lists every scope the files declare (bare ones by name,
+  keyed ones as `KEY=VAL`) with the file declaring it, `--scope <TAB>` offers them for the words typed before it,
+  and a scope one of the files lacks is refused before the command runs: `Error: configs/b.yaml has no scope
+  'original' (its scopes: val)` (`UnknownScopeError`). A command without a `scopes` parameter, or a provider taking
+  more than one argument, is a `CommandDefinitionError`. Needs confluid's `discover_boolean_scopes`. The
+  completion-tree cache moves to version 7.
+
+### Fixed
+
+- **Help text keeps its square brackets.** A docstring, description or default like `a list ("[epochs=1]")` printed as
+  `a list ("")`: help is rendered through Rich markup, which read the brackets as a style tag. Every text an app's
+  author wrote — the app's description, a command's docstring, the argument and option tables, the command index —
+  is now printed as written.
+
 ## [0.3.1] - 2026-10-14
 
 ### Breaking

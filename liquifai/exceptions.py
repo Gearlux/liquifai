@@ -38,6 +38,14 @@ class UnknownFlagError(LiquifaiError, ValueError):
     """
 
 
+class UnknownScopeError(LiquifaiError, ValueError):
+    """A typed ``--scope`` names no scope of a config file the command runs (``@command(config_files=...)``).
+
+    The message names the file, the scope, and the scopes the file does declare. Raised before the command body runs,
+    so nothing has started with a scope the config would have ignored.
+    """
+
+
 class MissingArgumentError(LiquifaiError, TypeError):
     """A command parameter without a default received no value from the CLI, the config, or DI.
 

@@ -54,6 +54,11 @@ project folder shadows the package.
   the document, and only the detected copy is filtered against the document's declared values,
   so a typed `--scope` keeps confluid's typo error. `--os`/`--device` stay ordinary overrides,
   never implicit dimension flags. No environment variable is set or read. (`tests/test_host.py`) §8.
+- A `@command(config_files=provider)` command receives the typed `--scope` values in its `scopes`
+  parameter and they activate NOTHING on the app's config. liquifai reads the scopes off the files
+  the provider names for the typed words (`config_scopes`, the one reader) — never a list the
+  command declares — and refuses one a file lacks before the body runs (`UnknownScopeError`).
+  (`tests/test_command_scopes.py`) §12.
 - A log flag the user did not type is forwarded as `None`. Never restate loggair's defaults and
   never read a `LOGGAIR_*` variable here.
   (`tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`) §9.
@@ -125,6 +130,9 @@ project folder shadows the package.
   `layout="lines"`: same data. Help for an app's default command lists the other commands first.
   (`tests/test_core_extended.py::test_bare_help_lists_the_commands_even_when_a_default_command_answers_it`,
   `tests/test_completion.py::test_run_docs_flag_renders_lines`)
+- Every text an app's author wrote reaches Rich ESCAPED (`rich.markup.escape`): the description,
+  a docstring, every table cell, the command index — `[epochs=1]` is otherwise a style tag and
+  vanishes. (`tests/test_command_scopes.py::test_help_text_keeps_square_brackets`)
 - A positional is never advertised as a `--flag` in help or completion, though that spelling
   still parses. (`tests/test_help_with_config.py`, the `_version_create_app` cases in
   `tests/test_completion.py`)

@@ -257,6 +257,16 @@ double-TAB signal and keep the age-gated behaviour. It needs the up-to-date
 wrapper: **re-run `my-app --install-completion`** (or `liquifai-install-completions`)
 once and re-source, otherwise the double-TAB is treated as an ordinary TAB.
 
+### `--scope <TAB>` for a command that runs its own config
+
+A command declaring `@command(config_files=provider)` (see [Commands](commands-and-di.md#the-scopes-of-the-config-a-command-runs-config_files))
+gets `--scope <TAB>` / `-s <TAB>` offering the scopes of the files it runs for the words typed
+before the flag. The refresh reads the files for no words typed and for every combination of the
+leading positionals' cached values (`pictures all a`); words it did not enumerate are read in the
+background on the first TAB, like a dependent positional's, and appear on the next. A provider
+that takes no argument is read once. After any other command's `--scope` nothing is offered: its
+scopes belong to the app's config.
+
 ## Runnable example
 
 [`examples/completion_providers.py`](../examples/completion_providers.py) wires

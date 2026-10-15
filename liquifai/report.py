@@ -1,6 +1,7 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
@@ -18,6 +19,7 @@ def show_configuration(
     layout: HelpLayout = "table",
     positionals: Optional[List[str]] = None,
     shorts: Optional[Dict[str, str]] = None,
+    hidden: Optional[List[str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
@@ -49,11 +51,17 @@ def show_configuration(
     rendered as their own "Positional Arguments" block and EXCLUDED from the
     options — mirroring completion, which never offers a positional as its
     ``--flag`` spelling (the spelling still parses; it just isn't advertised).
+    ``hidden`` parameters are excluded the same way without a block of their own
+    (a ``config_files=`` command's ``scopes``, filled from ``--scope``).
+
+    Every text a command's author wrote (docs, types, values) is printed ESCAPED: help is
+    rendered through Rich markup, where ``[epochs=1]`` reads as a style tag and vanishes.
     """
     from confluid import get_hierarchy, get_hierarchy_from_instance
 
     pos_names = list(positionals or [])
     _render_positionals(target, pos_names, layout)
+    pos_names += list(hidden or [])
 
     if _looks_like_flowed_graph(config_map):
         hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
@@ -96,7 +104,7 @@ def show_configuration(
             val_str = val_str[:47] + "..."
         letter = by_param.get(short_path)
         spelling = f"-{letter}, --{short_path}" if letter else f"--{short_path}"
-        table.add_row(spelling, type_str, val_str, doc)
+        table.add_row(escape(spelling), escape(str(type_str)), escape(val_str), escape(doc or ""))
     console.print(table)
 
 
@@ -128,8 +136,6 @@ def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout)
 
     console = Console()
     if layout == "lines":
-        from rich.markup import escape
-
         console.print("\n[bold cyan]Positional Arguments[/bold cyan]")
         name_w = max(len(p) + 2 for p in positionals)
         type_w = max((len(str(hierarchy[p][0])) for p in positionals if p in hierarchy), default=0)
@@ -147,7 +153,7 @@ def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout)
     table.add_column("Documentation", style="dim white")
     for p in positionals:
         type_str, _default, doc = hierarchy.get(p, ("", None, ""))
-        table.add_row(f"<{p}>", str(type_str), doc or "")
+        table.add_row(escape(f"<{p}>"), escape(str(type_str)), escape(doc or ""))
     console.print(table)
 
 
@@ -177,7 +183,9 @@ def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
         parts = path.split(".")
         host = parts[-2] if len(parts) >= 2 else ""
         val_str = _short_repr(value)
-        table.add_row(f"--{short_path}", host, type_str, val_str, doc)
+        table.add_row(
+            escape(f"--{short_path}"), escape(host), escape(str(type_str)), escape(val_str), escape(doc or "")
+        )
     console.print(table)
 
 
@@ -195,7 +203,6 @@ def _render_lines(
     keep it readable while staying a single physical line per option (greppable).
     """
     from confluid import shortest_unique_paths
-    from rich.markup import escape
 
     console = Console()
     console.print(f"\n[bold cyan]{title}[/bold cyan]")
@@ -281,12 +288,12 @@ def show_command_index(app: Any, console: Console) -> None:
             continue  # alias rows fold into their canonical group below
         aliases = sorted(a for a, canon in app._sub_app_aliases.items() if canon == name)
         label = f"{name} ({', '.join(aliases)})" if aliases else name
-        desc = f"[bold]Group:[/bold] {sub_app.description}" if sub_app.description else "Group."
-        table.add_row(label, desc)
+        desc = f"[bold]Group:[/bold] {escape(sub_app.description)}" if sub_app.description else "Group."
+        table.add_row(escape(label), desc)
 
     for name, func in sorted(app._commands.items()):
         desc = func.__doc__.strip().split("\n")[0] if func.__doc__ else "No description."
-        table.add_row(name, desc)
+        table.add_row(escape(name), escape(desc))
 
     console.print(table)
 
@@ -306,6 +313,31 @@ def show_global_options(console: Console) -> None:
     console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
     console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
     console.print("")
+
+
+def show_config_scopes(provider: Callable[..., Any], typed: Mapping[str, str], *, console: Console) -> None:
+    """Render the "Scopes" block of a ``@command(config_files=...)`` command: the scopes of the files it runs.
+
+    The files are the provider's for the words typed on the help line (``pictures all a --help`` reads ``a``'s), read
+    here, live (help is no hot path): one line per scope with the files declaring it. A provider or file that fails
+    leaves a ``<scope>`` placeholder and its reason, and the rest of the help still renders.
+    """
+    from liquifai import config_scopes
+
+    console.print("\n[bold]Scopes[/bold] (-s, --scope NAME — of the config this command runs):")
+    try:
+        files = config_scopes.files_for(provider, typed)
+        found = config_scopes.offered(files)
+    except Exception as exc:  # the help must render whatever reading the files needs
+        console.print(f"  <scope>  [dim]scopes unavailable: {escape(str(exc))}[/dim]")
+        return
+    if not found:
+        named = ", ".join(config_scopes.display(f) for f in files) or "no file"
+        console.print(f"  [dim](none declared in {escape(named)})[/dim]")
+        return
+    width = max(len(name) for name in found)
+    for name, where in found.items():
+        console.print(f"  {escape(name).ljust(width)}  [dim]{escape(', '.join(where))}[/dim]")
 
 
 def show_scope_dimensions(raw_config: Any, *, console: Console, source: str) -> None:
