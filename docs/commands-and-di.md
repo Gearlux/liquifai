@@ -206,11 +206,46 @@ and a default command that declares no positionals and is not a script command
 behaves as before. TAB completion hints the positional at a bare prompt
 (`my-app <TAB>` → `<workspace>` beside the command names).
 
+## The scopes of the config a command runs (`config_files=`)
+
+`--scope NAME` activates a scope of the app's OWN config. A command that runs a config of its own
+choosing — it hands a YAML to another tool — names that file instead, and liquifai reads its scopes:
+
+```python
+def picture_configs(typed: dict[str, str]) -> list[Path]:   # the positionals typed so far; {} when none
+    return [CONFIGS / f"{word}.yaml" for word in (typed.get("options") or "a,b").split(",")]
+
+@app.command(positionals=["split", "options"], config_files=picture_configs)
+def pictures(split: str = "all", options: str = "", scopes: list[str] | None = None) -> None:
+    for word in options.split(","):
+        subprocess.run(["tool", "run", f"{word}.yaml", *(["--scope", ",".join(scopes)] if scopes else [])])
+```
+
+```bash
+my-app pictures all a --scope original   # scopes=["original"]; the app's own config is not scoped
+my-app pictures all a --help             # "Scopes": every scope a.yaml declares, with the file declaring it
+my-app pictures all a --scope <TAB>      # original val   (read from a.yaml)
+my-app pictures all a,b --scope original
+Error: configs/b.yaml has no scope 'original' (its scopes: mode=fast, val)
+```
+
+The provider takes nothing (the files never depend on the words) or one argument, the positionals
+typed so far as `{name: word}` — `{}` when none is, so it names the command's defaults. liquifai
+reads each file raw, includes followed: a bare scope is offered as its name, a keyed one as
+`KEY=VAL`. A typed scope is refused (`UnknownScopeError`, one `Error:` line) when ANY file the
+typed words name lacks it — the command runs every one of them — before the command body runs; a
+provider that raises (an unknown word) skips the check and leaves the command to refuse. The
+typed values land in the command's `scopes` parameter (it must have one, and the provider may take
+at most one argument: either mistake is refused when the command is decorated), and the parameter
+is never advertised as its own `--scopes` flag. A command without `config_files=` keeps `--scope`
+for the app's config, as before.
+
 ## Runnable examples
 
 - [`examples/basic_app.py`](../examples/basic_app.py) — minimal app with two commands and `get_context`.
 - [`examples/simple_app.py`](../examples/simple_app.py) — a `@configurable` component + logger wiring.
 - [`examples/positionals_app.py`](../examples/positionals_app.py) — positional binding and its interop with flags.
+- [`examples/scopes_app.py`](../examples/scopes_app.py) — a command naming the config it runs: the scopes liquifai reads from it in `--help`, two runs and the refusal of a scope it lacks.
 - [`examples/promotion_app.py`](../examples/promotion_app.py) — config promotion across the search tiers, the DEBUG provenance notice, and the case where an XDG file swallows a positional.
 - [`examples/liquifai_app.py`](../examples/liquifai_app.py) — fuller confluid + loggair wiring.
 - [`examples/linefit/`](../examples/linefit/README.md) — an installable training-style CLI built on `@script_command`: config promotion, `flow_mode="auto"` with a `Lazy` optimizer, dotted overrides, and a `print-config` reproducibility verb.

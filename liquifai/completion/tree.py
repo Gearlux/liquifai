@@ -23,6 +23,8 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v7: ``scope_completions`` ``{cmd: {key, typed}}`` for a ``@command(config_files=...)`` command, so
+# ``--scope <TAB>`` offers its config files' scopes (cached per typed words); its ``scopes`` parameter is not a flag.
 # v6: declared positionals are EXCLUDED from ``signature_paths`` /
 # ``signature_flags`` (a required positional was also offered as its ``--flag``
 # spelling — the spelling still parses, it is just no longer advertised), and
@@ -41,7 +43,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 6
+CACHE_VERSION: int = 7
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -84,7 +86,8 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
     signature_bool_flags: Dict[str, List[str]] = {}
     for cmd, func in app._commands.items():
         hierarchy = _introspect_function_hierarchy(func)
-        pos = set(positionals_map[cmd])
+        # A positional, and a config_files= command's ``scopes`` (filled from ``--scope``), is never a flag to offer.
+        pos = set(positionals_map[cmd]) | ({SCOPES_PARAM} if _config_files_provider(func) is not None else set())
         paths = sorted(p for p in hierarchy if p.split(".", 1)[0] not in pos)
         command_paths[cmd] = paths
         display = _flag_display_map(paths)
@@ -118,6 +121,16 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
             }
             for pos, provider in providers.items()
         }
+    # {cmd: {key, typed}} for a command that runs config files of its own (``config_files=``): their scopes, cached
+    # per prefix of typed positionals when its provider reads them (``typed``), else once, under ``{}``.
+    scope_completions: Dict[str, Dict[str, Any]] = {}
+    for cmd, func in app._commands.items():
+        files = _config_files_provider(func)
+        if files is not None:
+            scope_completions[cmd] = {
+                "key": cache.value_cache_key(_path, cmd, SCOPE_SLOT),
+                "typed": _provider_arity(files) > 0,
+            }
     return {
         "name": app.name,
         "commands": list(app._commands.keys()),
@@ -145,7 +158,32 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "positionals": positionals_map,
         # {cmd: {positional: value-cache-key}} — only positionals with a provider.
         "positional_completions": positional_completions,
+        "scope_completions": scope_completions,
     }
+
+
+#: The value-cache slot of a ``config_files=`` command's ``--scope`` values (beside its positionals' slots).
+SCOPE_SLOT = "--scope"
+
+#: The parameter a ``@command(config_files=...)`` command receives its typed ``--scope`` values in. Defined here
+#: (stdlib-only) so core, the help and the tree read ONE name.
+SCOPES_PARAM = "scopes"
+
+
+def _config_files_provider(func: Any) -> Optional[Callable[..., Any]]:
+    provider = getattr(func, "__liquifai_config_files__", None)
+    return provider if callable(provider) else None
+
+
+def _scope_names(files_provider: Callable[..., Any]) -> Callable[[Dict[str, str]], List[str]]:
+    """The ``--scope`` slot's provider: the scopes of the files ``files_provider`` names for the typed words."""
+
+    def names(typed: Dict[str, str]) -> List[str]:
+        from liquifai import config_scopes  # confluid behind it: never on the fast path's import
+
+        return list(config_scopes.offered(config_scopes.files_for(files_provider, typed)))
+
+    return names
 
 
 def _provider_arity(provider: Callable[..., Any]) -> int:
@@ -187,6 +225,16 @@ def _provider_spec(
     this independently — a drift hazard between the tree and the refreshers.
     """
     key = cache.value_cache_key(path, cmd, pos)
+    if pos == SCOPE_SLOT:
+        # The scopes of a command's config files, cached per PREFIX of typed positionals (``{}`` included):
+        # ``pictures --scope`` reads the default files, ``pictures all a --scope`` a's.
+        return {
+            "key": key,
+            "provider": provider,
+            "kind": "scopes",
+            "depends_on": list(pos_list),
+            "prior_keys": {d: cache.value_cache_key(path, cmd, d) for d in pos_list},
+        }
     if _provider_arity(provider) == 0:
         return {"key": key, "provider": provider, "kind": "static", "depends_on": [], "prior_keys": {}}
     idx = pos_list.index(pos) if pos in pos_list else 0
@@ -211,6 +259,11 @@ def iter_completion_providers(app: "LiquifyApp", _path: Tuple[str, ...] = ()) ->
         pos_list = list(getattr(func, "__liquifai_positionals__", []))
         for pos, provider in providers.items():
             yield _provider_spec(_path, cmd, pos, provider, pos_list)
+        files = _config_files_provider(func)
+        if files is not None:  # a provider reading no typed words is cached once, under ``{}``
+            yield _provider_spec(
+                _path, cmd, SCOPE_SLOT, _scope_names(files), pos_list if _provider_arity(files) else []
+            )
     for name, sub in app._sub_apps.items():
         if name in app._sub_app_aliases:
             continue  # canonical only — aliases share the same keys
@@ -227,6 +280,26 @@ def _cross_product(prior: List[Tuple[str, List[str]]], cap: int) -> Iterator[Dic
         if i >= cap:
             return
         yield dict(zip(names, combo))
+
+
+def _prefixes(spec: Dict[str, Any], app_name: str, cap: int) -> Iterator[Dict[str, str]]:
+    """``{}``, then every combination of the first k positionals' cached values, k = 1 … all — up to ``cap`` in all.
+
+    A prefix stops at the first positional with no cached values (a free-text slot): its words cannot be enumerated.
+    """
+    yield {}
+    count = 1
+    prior: List[Tuple[str, List[str]]] = []
+    for dep in spec["depends_on"]:
+        values = cache.read_value_cache(app_name, spec["prior_keys"].get(dep, ""))
+        if not values:
+            return
+        prior.append((dep, values))
+        for inputs in _cross_product(prior, cap - count):
+            yield inputs
+            count += 1
+        if count >= cap:
+            return
 
 
 def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, int]:
@@ -255,6 +328,18 @@ def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, 
         except Exception:
             continue
         written[s["key"]] = len(values)
+    for s in specs:  # a command's config scopes — per prefix of its typed positionals, none typed first
+        if s["kind"] != "scopes":
+            continue
+        total = 0
+        for inputs in _prefixes(s, app.name, max_combos):
+            try:
+                values = [str(v) for v in (s["provider"](inputs) or [])]
+                cache.write_dependent_value_cache(app.name, s["key"], inputs, values)
+            except Exception:
+                continue
+            total += len(values)
+        written[s["key"]] = total
     for s in specs:  # dependent — cross-product of prior positionals' cached values
         if s["kind"] != "dependent":
             continue
@@ -296,7 +381,11 @@ def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Op
     """
     want_dependent = bool(inputs)
     for s in iter_completion_providers(app):
-        if s["key"] != cache_key or (s["kind"] == "dependent") != want_dependent:
+        if s["key"] != cache_key:
+            continue
+        if s["kind"] == "scopes":  # keyed by any prefix of typed words, the empty one included
+            want_dependent = True
+        elif (s["kind"] == "dependent") != want_dependent:
             continue
         try:
             values = [str(v) for v in ((s["provider"](inputs) if want_dependent else s["provider"]()) or [])]

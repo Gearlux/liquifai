@@ -22,6 +22,7 @@ from liquifai.grammar import (
     GLOBAL_FLAGS,
     GLOBAL_VALUE_FLAGS,
     PATH_VALUE_FLAGS,
+    SCOPE_VALUE_FLAGS,
     SHELL_VALUE_FLAGS,
     looks_like_key,
     stops_positional,
@@ -146,6 +147,8 @@ def complete_from_tree(
         return _file_candidates(incomplete, exts=None)
     if prev in SHELL_VALUE_FLAGS:
         return [s for s in SHELLS if s.startswith(incomplete)]
+    if prev in SCOPE_VALUE_FLAGS:
+        return _scope_candidates(tree, parsed, incomplete, app_name, lazy_refresh, force_refresh)
     if prev in GLOBAL_VALUE_FLAGS:
         return []
 
@@ -212,6 +215,42 @@ def complete_from_tree(
         lazy_refresh,
         force_refresh,
     )
+
+
+def _scope_candidates(
+    tree: Dict[str, Any],
+    parsed: List[str],
+    incomplete: str,
+    app_name: str,
+    lazy_refresh: Optional[Callable[..., None]],
+    force_refresh: bool,
+) -> List[str]:
+    """``--scope <TAB>``: the scopes of the config files a command runs (``@command(config_files=...)``).
+
+    Read from the cache for the positionals typed before the flag (``{}`` when none is). Any other command's
+    ``--scope`` activates the app's own config, whose scopes this path cannot know without loading it: nothing is
+    offered, as before. A missing or stale cache self-heals like a dependent positional's.
+    """
+    walk = walk_invocation(tokenize(parsed), _TreeNav(tree), _peek_config)
+    cur = walk.nav.node if isinstance(walk.nav, _TreeNav) else tree
+    cmd_name = walk.cmd_name or ""
+    entry = (cur.get("scope_completions") or {}).get(cmd_name) or {}
+    key = entry.get("key")
+    if not key:
+        return []
+    names = list((cur.get("positionals") or {}).get(cmd_name, [])) if entry.get("typed") else []
+    typed: List[str] = []
+    for tok in parsed[walk.args_index :]:
+        if stops_positional(tok):
+            break
+        typed.append(tok)
+    inputs = dict(zip(names, typed))
+    values = cache.read_dependent_value_cache(app_name, key, inputs)
+    if lazy_refresh is not None:
+        age = cache._dependent_value_cache_age(app_name, key, inputs)
+        if force_refresh or age is None or age > cache.DEPENDENT_REFRESH_TTL:
+            lazy_refresh(key, inputs)
+    return _filter_prefix(list(values or []), incomplete)
 
 
 def _command_candidates(

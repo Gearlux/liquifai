@@ -24,6 +24,7 @@ __all__ = [
     "UnknownCommandError",
     "UnknownFlagError",
     "UnknownOperationError",
+    "UnknownScopeError",
     "UnsupportedShellError",
 ]
 
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
         UnknownCommandError,
         UnknownFlagError,
         UnknownOperationError,
+        UnknownScopeError,
         UnsupportedShellError,
     )
     from liquifai.tools import make_mcp_tools
@@ -80,6 +82,7 @@ def __getattr__(name: str) -> Any:
         "UnknownCommandError",
         "UnknownFlagError",
         "UnknownOperationError",
+        "UnknownScopeError",
         "UnsupportedShellError",
     ):
         from liquifai import exceptions

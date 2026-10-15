@@ -842,3 +842,47 @@ class MyListPolicy:
 **What you may change.** Any policy's `options` set, and the wording of the refusal. Do not
 make an undeclared policy accept every setting again, and do not move the check to call time:
 the point is that a declaration mistake is an author's startup error.
+
+## 12. A command that runs its own config names it, and liquifai reads its scopes (2026-10-15)
+
+**Context.** `--scope` activates a scope of the app's own config. A command that hands a YAML of
+its own choosing to another tool (a runner of steps) has no app config: `tool compile run2 --scope
+onnx` activated `onnx` on nothing, printed nothing, and compiled without it. The only way through
+was a passthrough setting (`--settings "[--scope, onnx]"`) that neither help nor completion knew.
+
+**Decision.** `@app.command(config_files=provider)`: the command names the FILES it runs — the
+provider takes nothing, or the positionals typed so far as `{name: word}` (`{}` when none is) —
+and liquifai reads them (`config_scopes`: raw load, includes followed; bare scopes by name, keyed
+ones as `KEY=VAL`). For such a command `_prepare` takes the typed `--scope` values before dimension
+binding and host facts, refuses one any named file lacks (`UnknownScopeError`), binds them to the
+command's `scopes` parameter like a positional, and activates nothing on the app's config. Help
+reads the files for the words on the help line; completion caches their scopes under the slot
+`--scope` per prefix of typed positionals (kind `scopes`; `{}` first), so `--scope <TAB>` answers
+for the words typed before it.
+
+Rejected: the command listing its scopes itself (a second copy of what the YAML says, which drifts
+— a user ruling: liquifai reads the YAML); hiding the scopes a command's own words already choose
+(the command would have to declare those, a declaration again — it refuses the clash itself); a
+new flag beside `--scope` (two spellings of one idea).
+
+**Consequences.**
+
+- liquifai reads a config's bare scopes through `confluid.discover_boolean_scopes`: its confluid
+  floor is the release that has it.
+- The typed scopes never reach the app's own config for such a command; host facts still do.
+- A provider that raises (an unknown word) skips the check: the command's own refusal names the
+  word better than a missing file would.
+- `CACHE_VERSION` 7: the tree carries `scope_completions` (`{cmd: {key, typed}}`; `typed` false
+  for a provider that reads no words, cached once under `{}`).
+
+**Example.**
+
+```python
+@app.command(positionals=["run"], config_files=lambda: [CONFIGS / "compile.yaml"])
+def compile(run: str = "", scopes: Optional[List[str]] = None) -> None:
+    subprocess.run(["tool", "run", "compile.yaml", *(["--scope", ",".join(scopes)] if scopes else [])])
+```
+
+**What you may change.** The help block's wording, the parameter's name (one constant,
+`completion.tree.SCOPES_PARAM`). Do not let a `config_files=` command's typed scopes activate on
+the app's config as well, and do not read the scopes anywhere but `config_scopes`.

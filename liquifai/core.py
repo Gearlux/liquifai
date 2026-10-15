@@ -11,7 +11,9 @@ from loggair import get_logger
 from rich.console import Console
 from rich.markup import escape
 
-from liquifai import completion_cli, di, flags, host, overrides, report, router
+from liquifai import completion_cli, config_scopes, di, flags, host, overrides, report, router
+from liquifai.completion.tree import SCOPES_PARAM, _provider_arity
+from liquifai.config_scopes import ConfigFiles
 from liquifai.context import LiquifyContext, set_context
 from liquifai.exceptions import (
     CommandDefinitionError,
@@ -118,6 +120,37 @@ def _validated_shorts(func: Callable[..., Any], cmd_name: str, short: Optional[D
             )
         validated[letter] = param
     return validated
+
+
+def _validated_config_files(
+    func: Callable[..., Any], cmd_name: str, config_files: Optional[Callable[..., ConfigFiles]]
+) -> Optional[Callable[..., ConfigFiles]]:
+    """Check a command's ``config_files=`` provider at DECORATION time.
+
+    The provider takes nothing, or one argument (the positionals typed so far, as ``{name: word}``), and the command
+    must have the parameter the typed ``--scope`` values land in — else they would reach nothing, which is the silent
+    swallow the declaration exists to end.
+    """
+    if config_files is None:
+        return None
+    if not callable(config_files):
+        raise CommandDefinitionError(
+            f"{cmd_name}: config_files= takes a callable returning the config files, got {config_files!r}."
+        )
+    if _provider_arity(config_files) > 1:
+        raise CommandDefinitionError(
+            f"{cmd_name}: the config_files= provider takes no argument or one (the typed positionals as a dict)."
+        )
+    try:
+        params = set(inspect.signature(func).parameters)
+    except (ValueError, TypeError):  # pragma: no cover - defensive: unintrospectable callable
+        params = set()
+    if SCOPES_PARAM not in params:
+        raise CommandDefinitionError(
+            f"{cmd_name}: a command declaring config_files= needs a '{SCOPES_PARAM}' parameter "
+            f"(Optional[List[str]] = None) to receive the typed --scope values."
+        )
+    return config_files
 
 
 def expand_shorts(texts: List[str], shorts: Dict[str, str]) -> List[str]:
@@ -295,6 +328,7 @@ class LiquifyApp:
         positionals: Optional[List[str]] = None,
         completions: Optional[Dict[str, Callable[..., Any]]] = None,
         short: Optional[Dict[str, str]] = None,
+        config_files: Optional[Callable[..., ConfigFiles]] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command: the decorated function is the full CLI handler.
 
@@ -328,6 +362,15 @@ class LiquifyApp:
                 repeated, longer than one character, or names no parameter of the decorated
                 function raises :class:`~liquifai.exceptions.CommandDefinitionError` at
                 DECORATION time — an author's startup error, never a user's wrong action.
+            config_files: For a command that RUNS a config of its own choosing (it hands a YAML
+                to another tool): a provider naming those files — called with nothing, or with
+                the positionals typed so far (``{name: word}``; ``{}`` when none is). liquifai
+                reads them: ``--help`` lists their scopes, ``--scope <TAB>`` offers them (cached
+                per typed words, like a dependent positional), and a typed ``--scope`` one of the
+                files does not declare is refused (:class:`~liquifai.exceptions.UnknownScopeError`)
+                before the command runs. The typed values go to the command's ``scopes``
+                parameter (typed order, comma lists split) instead of activating on the app's own
+                config.
         """
 
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
@@ -340,6 +383,9 @@ class LiquifyApp:
             # completion). Read by completion.serialize_app / iter_completion_providers.
             setattr(f, "__liquifai_completions__", dict(completions or {}))
             setattr(f, "__liquifai_short__", _validated_shorts(f, cmd_name, short))
+            # The config files the command runs (None: --scope activates on the app's own config, as ever). Read
+            # by _prepare (the typed scopes go to the command, checked against the files), the help and completion.
+            setattr(f, "__liquifai_config_files__", _validated_config_files(f, cmd_name, config_files))
             if default:
                 self._default_cmd = f
             return f
@@ -558,6 +604,7 @@ class LiquifyApp:
                 inv.target_func,
                 config_path=inv.config_path,
                 layout="lines" if wants_docs else "table",
+                typed=dict(zip(inv.positional_names, inv.positional_values)),
             )
             # Refresh the completion cache so freshly added commands appear under
             # TAB without first requiring a successful real run — a hidden
@@ -611,6 +658,21 @@ class LiquifyApp:
         final_tokens = globals_.remaining
         if globals_.config_path:
             config_path = globals_.config_path
+        # 3a. SCOPES OF THE COMMAND'S CONFIG — a command declaring ``config_files=`` runs a config of its own
+        # choosing: the typed ``--scope`` values are ITS (bound to its ``scopes`` parameter below), never activations
+        # of the app's own config, which would swallow them silently; one its files do not declare is refused here.
+        passed_scopes: List[str] = []
+        files_provider = getattr(inv.target_func, "__liquifai_config_files__", None) if inv.target_func else None
+        if files_provider is not None:
+            passed_scopes, scopes = [s for s in scopes if s], []
+            if passed_scopes:
+                typed = dict(zip(inv.positional_names, inv.positional_values))
+                try:
+                    files = config_scopes.files_for(files_provider, typed)
+                except Exception as unnamed:  # e.g. an unknown word: the command's own refusal says it better
+                    logger.debug(f"config_files= named no files for {typed}: {unnamed}")
+                    files = []
+                config_scopes.check_typed(passed_scopes, files)
         if config_path is not None:
             # Resolve once through confluid's search tiers so the context,
             # the not-found error, and the "Loaded configuration from:" line
@@ -667,6 +729,9 @@ class LiquifyApp:
             bound = dict(zip(inv.positional_names, inv.positional_values))
             self.context.config_data.update(bound)
             self.context.logger.debug(f"Bound positionals: {bound}")
+        if passed_scopes and isinstance(self.context.config_data, dict):
+            self.context.config_data[SCOPES_PARAM] = passed_scopes
+            self.context.logger.debug(f"Scopes passed on to the command: {passed_scopes}")
 
         # 5. APPLY OVERRIDES (the command is known here, so its `short=` map can be expanded)
         self._active_func = inv.target_func
@@ -1052,6 +1117,7 @@ class LiquifyApp:
         target_func: Optional[Callable[..., Any]] = None,
         config_path: Optional[Path] = None,
         layout: HelpLayout = "table",
+        typed: Optional[Dict[str, str]] = None,
     ) -> None:
         """Beautiful help menu via Rich.
 
@@ -1064,9 +1130,9 @@ class LiquifyApp:
         ``"table"`` (default, Rich grid) or ``"lines"`` (one option per line —
         the ``--docs`` rendering).
         """
-        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Framework")
+        console.print(f"\n[bold]{escape(app.name.upper())}[/bold] - Modular Framework")
         if app.description:
-            console.print(f"[dim]{app.description}[/dim]")
+            console.print(f"[dim]{escape(app.description)}[/dim]")
 
         if target_func:
             # A DEFAULT command answers the app's bare ``--help``, so rendering only ITS
@@ -1081,8 +1147,10 @@ class LiquifyApp:
             # `<op>_cmd`, and `@app.command("token-info")` may decorate any function name at all.
             cmd_name = app._command_path(target_func)[-1:] or [target_func.__name__.replace("_", "-")]
             usage = cmd_name[0] + "".join(f" <{p}>" for p in positionals)
-            console.print(f"\n[bold]Command:[/bold] {usage}")
-            console.print(f"[dim]{desc.strip()}[/dim]")
+            console.print(f"\n[bold]Command:[/bold] {escape(usage)}")
+            console.print(f"[dim]{escape(desc.strip())}[/dim]")
+            files_provider = getattr(target_func, "__liquifai_config_files__", None)
+            hidden = [SCOPES_PARAM] if files_provider is not None else []
 
             from liquifai.report import show_configuration
 
@@ -1105,6 +1173,7 @@ class LiquifyApp:
                     layout=layout,
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
+                    hidden=hidden,
                 )
             else:
                 show_configuration(
@@ -1113,7 +1182,10 @@ class LiquifyApp:
                     layout=layout,
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
+                    hidden=hidden,
                 )
+            if files_provider is not None:
+                report.show_config_scopes(files_provider, typed or {}, console=console)
         else:
             report.show_command_index(app, console)
 

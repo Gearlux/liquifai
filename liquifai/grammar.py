@@ -161,6 +161,11 @@ SHELL_VALUE_FLAGS: Set[str] = {
     f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.value_kind == "shell" for f in spec.flags
 }
 
+#: Flags whose value is a scope (completion offers the scopes a command passes on, when it declares any).
+SCOPE_VALUE_FLAGS: Set[str] = {
+    f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.value_kind == "scope" for f in spec.flags
+}
+
 #: Every visible value-taking flag (completion stays silent after these).
 GLOBAL_VALUE_FLAGS: Set[str] = {
     f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.takes_value for f in spec.flags

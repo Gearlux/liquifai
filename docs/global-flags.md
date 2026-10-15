@@ -7,7 +7,7 @@ derive from that single table, so they can never drift apart.
 | Flag | Effect |
 |---|---|
 | `--config PATH`, `-c` | Configuration file (script commands can also take it as their first positional — see [config promotion](commands-and-di.md)). |
-| `--scope NAME` / `--scope KEY=VAL`, `-s` | Activate a confluid [scope](https://github.com/Gearlux/confluid/blob/main/docs/scopes.md); repeatable. Dimension-bound `--KEY VAL` flags (e.g. `--task classification`) are forwarded as `KEY=VAL` scopes automatically. The `os` / `device` [host facts](host-facts.md) are activated on every run without a flag; `--scope os=linux` overrides one. |
+| `--scope NAME` / `--scope KEY=VAL`, `-s` | Activate a confluid [scope](https://github.com/Gearlux/confluid/blob/main/docs/scopes.md); repeatable. Dimension-bound `--KEY VAL` flags (e.g. `--task classification`) are forwarded as `KEY=VAL` scopes automatically. The `os` / `device` [host facts](host-facts.md) are activated on every run without a flag; `--scope os=linux` overrides one. A command declaring [`config_files=`](commands-and-di.md#the-scopes-of-the-config-a-command-runs-config_files) takes the typed values for the config it runs instead, checked against that file. |
 | `--debug`, `-d` | Enable debug mode — expected CLI failures propagate with a full traceback instead of a clean one-line error (see [error handling](error-handling.md)). Also raises the console level to `DEBUG` unless `--console-level` names one. |
 | `--level LEVEL` | Set both console and file log level. Omitted, the levels come from the hierarchy below. |
 | `--console-level LEVEL` | Console log level only; beats `--level` for that sink. |
