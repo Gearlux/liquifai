@@ -91,7 +91,7 @@ def words_from_comp_line(comp_line: str, comp_point: int) -> Tuple[List[str], in
 
     Bash's raw ``$COMP_WORDS`` array splits ``$COMP_LINE`` on ``$COMP_WORDBREAKS``
     (which includes space) WITHOUT honoring quotes or backslash escapes, so a value
-    like ``"Helios Base Model"`` (or ``Helios\\ Base\\ Model``) is shattered into
+    like ``"Raidar Base Model"`` (or ``Raidar\\ Base\\ Model``) is shattered into
     several words — which corrupts positional counting (the shell then falls back to
     filename completion). Re-tokenizing the raw ``$COMP_LINE`` here — as bash's own
     parser would — keeps such a value as ONE token. Tolerant of an unterminated final
@@ -171,7 +171,7 @@ _{prog}_completion() {
     local IFS=$'\\n'
     local raw
     # Pass COMP_LINE/COMP_POINT (the raw line + cursor) so liquifai-complete can
-    # re-tokenize quote-aware — bash's own COMP_WORDS splits "Helios Base Model"
+    # re-tokenize quote-aware — bash's own COMP_WORDS splits "Raidar Base Model"
     # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback. COMP_TYPE
     # (readline completion type) lets liquifai-complete detect a repeated/second
     # TAB and force-refresh a possibly-stale value cache.
@@ -251,7 +251,7 @@ _BASH_HELPERS = r"""
 # Shared body invoked by every per-alias delegator. Delegates to the fast
 # `liquifai-complete` entry as if the app itself had been typed. Prefers a
 # rewritten COMP_LINE (alias token -> `<app> <prefix>`, cursor shifted) so
-# liquifai-complete re-tokenizes quote-aware and a value like "Helios Base
+# liquifai-complete re-tokenizes quote-aware and a value like "Raidar Base
 # Model" stays ONE word; also builds the legacy COMP_WORDS/COMP_CWORD as a
 # fallback (space-joined; shatters spaces — old liquifai-complete only). We
 # iterate COMP_WORDS manually instead of ${arr[*]:n} because bash 3.2 leaks a
@@ -324,7 +324,7 @@ _liquifai_alias_complete() {
     local prefix_len="$2"
     local app="$3"
     # zsh's $words is already quote-aware; NEWLINE-join (prefix words + the typed
-    # rest) so split_comp_words preserves a value with embedded spaces ("Helios
+    # rest) so split_comp_words preserves a value with embedded spaces ("Raidar
     # Base Model") as ONE token — matching the main zsh wrapper's ${(F)words}.
     local -a merged_arr
     merged_arr=(${=prefix_str} "${(@)words[2,-1]}")

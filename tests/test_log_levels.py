@@ -33,7 +33,7 @@ def isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Neutralize every layer BELOW the ones under test.
 
     Without this the suite's verdict depends on the machine it runs on: this
-    workspace really does ship a ``waivefront/loggair.yaml`` and the developer
+    workspace really does ship a project's own ``loggair.yaml`` and the developer
     really does have ``~/.config/loggair/config.yaml``.
     """
     workdir = tmp_path / "work"

@@ -29,7 +29,7 @@ class MockTop:
 
 def test_nested_di_with_overrides(tmp_path: Path, monkeypatch: Any) -> None:
     """
-    Reproduces the Waivefront failure:
+    Reproduces a deeply nested training config's failure:
     Deeply nested component instantiation with scoped dotted-key overrides.
     """
     # 1. Setup Config File
