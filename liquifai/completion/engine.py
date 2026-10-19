@@ -499,7 +499,7 @@ def _filter_prefix(items: List[str], prefix: str) -> List[str]:
     """Keep items that start with ``prefix``, CASE-INSENSITIVELY, preserving order + de-duping.
 
     Case-insensitive so a lowercase prefix matches server-provided values with arbitrary
-    case (typing ``h`` completes ``Helios_…``) — liquifai filters server-side, so the shell's
+    case (typing ``h`` completes ``Raidar_…``) — liquifai filters server-side, so the shell's
     own ``completion-ignore-case`` never gets a chance to apply. Harmless for the lowercase
     command/flag candidates. Placeholders (``<name>``) start with ``<`` so a real prefix drops
     them either way.

@@ -471,7 +471,7 @@ def _introspect_function_hierarchy(func: Any) -> Dict[str, Any]:
     completion and help can never diverge. ``get_hierarchy`` walks the command
     function's signature params, recurses into each ``@configurable`` param, and
     records only LEAF scalars (never the configurable container itself):
-    ``convert-ops-export(converter: TaidalOpsToHeliosConverter)`` yields
+    ``convert-ops-export(converter: OpsToCocoConverter)`` yields
     ``{"converter.class_name": ..., "converter.dst": ..., ...}`` — no bare
     ``converter`` root. A plain ``@command`` like ``run list`` yields its bare
     params (``experiment``, ``status``, ...). It reads ``__init__``/signature

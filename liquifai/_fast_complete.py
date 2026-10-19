@@ -13,7 +13,7 @@ older ``CACHE_VERSION``) → silent exit plus a detached ``<app> --refresh-compl
 repopulates it, so the next TAB is fast.
 
 ``COMP_LINE`` is preferred when present because bash's ``COMP_WORDS`` splits on
-whitespace WITHOUT honoring quotes/escapes — so a value like ``"Helios Base Model"``
+whitespace WITHOUT honoring quotes/escapes — so a value like ``"Raidar Base Model"``
 is shattered into three words. Re-tokenizing ``COMP_LINE`` (quote-aware) keeps it as
 one token; the ``COMP_WORDS`` path stays as a fallback for zsh/fish/old-bash.
 """
@@ -46,7 +46,7 @@ def main() -> None:
         return
 
     # Prefer COMP_LINE/COMP_POINT (bash: quote-aware re-tokenization keeps
-    # "Helios Base Model" as ONE word); fall back to the pre-split COMP_WORDS
+    # "Raidar Base Model" as ONE word); fall back to the pre-split COMP_WORDS
     # (zsh/fish, already quote-aware, and old bash installs not yet re-sourced).
     # escape_candidate emits each candidate so the shell inserts it as a single
     # argument. The lazy-refresh spawner self-heals stale/missing DEPENDENT caches

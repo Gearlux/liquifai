@@ -34,7 +34,7 @@ def _parse(args: List[str], verbatim: Any = _STR_PARAMS) -> Dict[str, Any]:
 class TestStrParamsAreVerbatim:
     def test_embedded_newline_survives(self) -> None:
         """The reported bug: a multi-line description must keep its line break."""
-        text = 'h5 test data for Helios I\ncreated with "python SplitAndConvertToHDF5.py -s v=X"'
+        text = 'h5 test data for Raidar I\ncreated with "python SplitAndConvertToHDF5.py -s v=X"'
         assert _parse(["--description", text])["description"] == text
 
     @pytest.mark.parametrize(
