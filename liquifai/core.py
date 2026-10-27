@@ -73,6 +73,9 @@ class Invocation:
     #: parsers. Tokens, not strings, so those parsers can tell an option from a
     #: post-``--`` literal (which they must never consume).
     remaining_tokens: List[Token]
+    #: A token in the config's place that names a config file resolving to none (``walk.names_a_config``):
+    #: :meth:`LiquifyApp._prepare` refuses it unless ``--config`` names the file instead.
+    missing_config: Optional[str] = None
 
 
 #: Single-dash spellings the global grammar already owns. A command short may not take one:
@@ -677,6 +680,8 @@ class LiquifyApp:
         final_tokens = globals_.remaining
         if globals_.config_path:
             config_path = globals_.config_path
+        if config_path is None and inv.missing_config is not None:
+            raise ConfigNotFoundError(f"Configuration file not found: {inv.missing_config}")
         # 3a. SCOPES OF THE COMMAND'S CONFIG — a command declaring ``config_files=`` runs a config of its own
         # choosing: the typed ``--scope`` values are ITS (bound to its ``scopes`` parameter below), never activations
         # of the app's own config, which would swallow them silently; one its files do not declare is refused here.

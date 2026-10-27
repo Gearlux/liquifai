@@ -56,7 +56,19 @@ name at startup, so `my-app train myexp` finds `~/.config/my-app/myexp.yaml`
 when no local `myexp.yaml` exists. `include:` entries inside a config resolve
 the same way. See confluid's
 [Config-File Search Paths](https://github.com/Gearlux/confluid/blob/main/docs/search-paths.md)
-guide.
+guide. A `pkg://<distribution>/<path>` argument names a config an installed distribution ships
+(`my-app train pkg://shared-configs/config/base.yaml`).
+
+An argument that **names** a config file — a `.yaml` / `.yml` suffix, or `pkg://` — but resolves to
+none stops the command before it runs:
+
+```
+$ my-app train missing.yaml
+Error: Configuration file not found: missing.yaml
+```
+
+An argument with no suffix that finds no file (`my-app train demo`, no `demo.yaml`) is not a file
+name: it is left to the positional and override parsers, as any other argument.
 
 ```python
 @app.script_command()

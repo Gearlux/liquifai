@@ -24,6 +24,8 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **The wheel ships the example configs** (`examples/*.yaml`) under `share/liquifai/examples/`, where
+  `pkg://liquifai/examples/<file>.yaml` names them from any install.
 - **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
   `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
 - **A list's next word completes after a comma** — positionals, option values and `--scope`: `pictures all a,<TAB>`
