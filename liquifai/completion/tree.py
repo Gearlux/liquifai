@@ -23,6 +23,8 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v9: ``option_docs`` ``{cmd: [[path, --flag, help], ...]}`` and ``option_shorts`` ``{cmd: {letter: parameter}}``, so
+# the second TAB lists each option with its help, grouped (``engine.complete_with_listing``).
 # v8: ``flag_completions`` ``{cmd: {option: {key, kind, depends_on}}}`` (``--library <TAB>``); ``scope_completions``
 # entries take the same shape (kind ``prefix``).
 # v7: ``scope_completions`` ``{cmd: {key, typed}}`` for a ``@command(config_files=...)`` command, so
@@ -45,7 +47,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 8
+CACHE_VERSION: int = 9
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -86,6 +88,7 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
     command_paths: Dict[str, List[str]] = {}
     signature_flags: Dict[str, List[str]] = {}
     signature_bool_flags: Dict[str, List[str]] = {}
+    option_docs: Dict[str, List[List[str]]] = {}
     for cmd, func in app._commands.items():
         hierarchy = _introspect_function_hierarchy(func)
         # A positional, and a config_files= command's ``scopes`` (filled from ``--scope``), is never a flag to offer.
@@ -94,6 +97,7 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         command_paths[cmd] = paths
         display = _flag_display_map(paths)
         signature_flags[cmd] = list(dict.fromkeys(display[p] for p in paths))
+        option_docs[cmd] = [[p, display[p], _one_line(hierarchy[p])] for p in paths]
         bools: List[str] = []
         for p in paths:
             type_str = hierarchy[p][0] if isinstance(hierarchy[p], (tuple, list)) else None
@@ -145,6 +149,11 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         # flags; the engine consults this before treating the previous token
         # as a value slot.
         "signature_bool_flags": signature_bool_flags,
+        # {cmd: [[path, --flag, help], ...]} — each option's help, the listing's description column; by path too, so
+        # a config on the line (whose keys re-collapse the spellings) still finds it.
+        "option_docs": option_docs,
+        # {cmd: {letter: parameter}} — the command's declared ``short=`` spellings, shown as ``-b, --background``.
+        "option_shorts": {cmd: dict(getattr(f, "__liquifai_short__", {}) or {}) for cmd, f in app._commands.items()},
         # Ordered positional-argument names per command; used by complete_from_tree
         # to emit ``<name>`` placeholder hints before flags when the cursor is at
         # an unfilled positional slot.
@@ -155,6 +164,12 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "flag_completions": flag_completions,
         "scope_completions": scope_completions,
     }
+
+
+def _one_line(entry: Any) -> str:
+    """An option's help (the third field of a hierarchy entry) on one line: a listing row is one line."""
+    doc = entry[2] if isinstance(entry, (tuple, list)) and len(entry) > 2 else ""
+    return " ".join(str(doc or "").split())
 
 
 #: The value-cache slot of a ``config_files=`` command's ``--scope`` values (beside its positionals' slots).

@@ -24,6 +24,10 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **The second TAB lists the options grouped, with their help** (bash, zsh): `my-app serve --<TAB><TAB>` shows
+  `global options`, then `options of my-app serve`, a row per option with its help, instead of one alphabetical
+  list. `LIQUIFAI_COMPLETION_LIST=plain` brings back the shell's own sorted list. Run `my-app --install-completion`
+  again to get it. Completion-tree cache v9.
 - **The wheel ships the example configs** (`examples/*.yaml`) under `share/liquifai/examples/`, where
   `pkg://liquifai/examples/<file>.yaml` names them from any install.
 - **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →

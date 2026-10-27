@@ -15,9 +15,12 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, get_args
 
 from liquifai.exceptions import UnsupportedShellError
+
+if TYPE_CHECKING:
+    from .engine import Listing
 
 SHELLS: List[str] = ["bash", "zsh", "fish"]
 
@@ -153,6 +156,43 @@ def words_from_comp_line(comp_line: str, comp_point: int) -> Tuple[List[str], in
     return words, len(words) - 1
 
 
+#: How the second TAB lists a command's options (``LIQUIFAI_COMPLETION_LIST``, read on every TAB). ``grouped``:
+#: liquifai prints the global options, then the command's own, each with its help (bash and zsh). ``plain``: the
+#: shell's own list, sorted alphabetically — liquifai-complete's output is then what it was before the listing.
+CompletionList = Literal["grouped", "plain"]
+COMPLETION_LISTS: Tuple[str, ...] = get_args(CompletionList)
+
+#: What a wrapper that reads the listing lines sets ``LIQUIFAI_COMPLETE_WIRE`` to. A wrapper installed before the
+#: listing sets nothing and keeps getting one escaped candidate per line.
+LISTING_WIRE = "2"
+
+#: Starts a group's header line on the wire: the ASCII unit separator, which no flag spelling contains.
+WIRE_HEADER = "\x1f"
+
+
+def completion_list_style(value: Optional[str]) -> CompletionList:
+    """The listing ``LIQUIFAI_COMPLETION_LIST=value`` asks for: ``plain`` by that word, else ``grouped``.
+
+    A TAB cannot report an error, so an unknown value means the default rather than a refusal.
+    """
+    return "plain" if value == "plain" else "grouped"
+
+
+def wire_lines(candidates: List[str], listing: Optional["Listing"]) -> List[str]:
+    """The lines liquifai-complete prints: one escaped candidate each, or — with a listing — its groups.
+
+    A group is a ``WIRE_HEADER + header`` line, then ``candidate<TAB>row`` per candidate (an empty row: completes,
+    shares another spelling's row). The wrappers read a tab only after a header, so a value is never split.
+    """
+    if listing is None:
+        return [escape_candidate(c) for c in candidates]
+    out: List[str] = []
+    for header, rows in listing:
+        out.append(WIRE_HEADER + header.replace("\t", " "))
+        out.extend(f"{escape_candidate(cand)}\t{display.replace(chr(9), ' ')}" for cand, display in rows)
+    return out
+
+
 def escape_candidate(value: str) -> str:
     """Backslash-escape a candidate so the shell inserts it as ONE token.
 
@@ -166,23 +206,28 @@ def escape_candidate(value: str) -> str:
     return _SHELL_SPECIAL.sub(r"\\\1", value)
 
 
-_BASH_TEMPLATE = """\
-_{prog}_completion() {
-    local IFS=$'\\n'
-    local raw
-    # Pass COMP_LINE/COMP_POINT (the raw line + cursor) so liquifai-complete can
-    # re-tokenize quote-aware — bash's own COMP_WORDS splits "Raidar Base Model"
-    # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback. COMP_TYPE
-    # (readline completion type) lets liquifai-complete detect a repeated/second
-    # TAB and force-refresh a possibly-stale value cache.
-    raw=$(env COMP_LINE="$COMP_LINE" COMP_POINT="$COMP_POINT" \\
-        COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD \\
-        COMP_TYPE="$COMP_TYPE" \\
-        liquifai-complete {prog} 2>/dev/null)
+#: The reply half of every bash wrapper (the per-app script and the alias helper carry the same copy): fills
+#: COMPREPLY from liquifai-complete's output and, on the second TAB (``COMP_TYPE`` 63) at a list of options, prints
+#: liquifai's grouped listing itself, redraws the prompt and the line, and leaves bash nothing to list. Each check
+#: that fails leaves bash's own list: the cursor inside the line, a list taller or a line wider than the terminal,
+#: a bash older than 4.4 (no ``${PS1@P}``). The terminal is the one bash reads (/dev/tty).
+_BASH_REPLY = r"""
+_liquifai_reply() {
+    local item grouped=""
+    local -a listing=()
     COMPREPLY=()
-    for item in $raw; do
-        COMPREPLY+=("$item")
-    done
+    while IFS= read -r item; do
+        [[ -z "$item" ]] && continue
+        if [[ "$item" == $'\037'* ]]; then
+            grouped=1
+            listing+=("${item#?}")
+        elif [[ -n "$grouped" && "$item" == *$'\t'* ]]; then
+            COMPREPLY+=("${item%%$'\t'*}")
+            [[ -n "${item#*$'\t'}" ]] && listing+=("${item#*$'\t'}")
+        else
+            COMPREPLY+=("$item")
+        fi
+    done <<< "$1"
     # If the sole auto-insert candidate is a directory (ends in `/`),
     # suppress bash's trailing space so the user can keep tabbing deeper.
     # `compopt` is bash 4+; macOS ships bash 3.2, so guard the call (the
@@ -190,12 +235,85 @@ _{prog}_completion() {
     if [[ ${#COMPREPLY[@]} -eq 1 && "${COMPREPLY[0]}" == */ ]]; then
         command -v compopt >/dev/null 2>&1 && compopt -o nospace
     fi
+    [[ -n "$grouped" && "$COMP_TYPE" == 63 && ${#COMPREPLY[@]} -gt 1 ]] || return 0
+    [[ "$COMP_POINT" == "${#COMP_LINE}" ]] || return 0
+    (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )) || return 0
+    (( ${LINES:-0} >= ${#listing[@]} + 2 )) || return 0
+    local prompt shown
+    eval 'prompt=${PS1@P}'
+    # The prompt's last line as it shows: \[...\] (bytes 001...002) takes no room.
+    shown=$prompt
+    while [[ "$shown" == *$'\001'*$'\002'* ]]; do shown="${shown%%$'\001'*}${shown#*$'\002'}"; done
+    shown=${shown##*$'\n'}
+    (( ${#shown} + ${#COMP_LINE} < ${COLUMNS:-0} )) || return 0
+    prompt=${prompt//$'\001'/}
+    prompt=${prompt//$'\002'/}
+    {
+        printf '\n'
+        printf '%s\n' "${listing[@]}"
+        printf '%s%s' "$prompt" "$COMP_LINE"
+    } >/dev/tty 2>/dev/null || return 0
+    compopt +o default 2>/dev/null
+    COMPREPLY=()
+}
+"""
+
+_BASH_TEMPLATE = (
+    """\
+_{prog}_completion() {
+    local raw
+    # Pass COMP_LINE/COMP_POINT (the raw line + cursor) so liquifai-complete can
+    # re-tokenize quote-aware — bash's own COMP_WORDS splits "Raidar Base Model"
+    # on spaces. COMP_WORDS/COMP_CWORD are forwarded too as a fallback. COMP_TYPE
+    # (readline completion type) lets liquifai-complete detect a repeated/second
+    # TAB and force-refresh a possibly-stale value cache.
+    # LIQUIFAI_COMPLETE_WIRE=2: this wrapper reads the grouped listing (_liquifai_reply); COLUMNS sizes its rows.
+    raw=$(env COMP_LINE="$COMP_LINE" COMP_POINT="$COMP_POINT" \\
+        COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD \\
+        COMP_TYPE="$COMP_TYPE" LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \\
+        liquifai-complete {prog} 2>/dev/null)
+    _liquifai_reply "$raw"
     return 0
 }
 complete -o default -F _{prog}_completion {prog}
 """
+    + _BASH_REPLY
+)
 
-_ZSH_TEMPLATE = """\
+#: The reply half of every zsh wrapper (the per-app script and the alias helper carry the same copy): each
+#: argument one line of liquifai-complete's output. Plain candidates as before; after a header line
+#: ($'\037'<header>), ``candidate<TAB>row`` — zsh's own groups, each under its header, a row per option (an empty
+#: row: completes, not listed).
+_ZSH_REPLY = r"""
+_liquifai_zreply() {
+    local item header="" group=0
+    local -a cands rows hidden
+    for item in "$@" $'\037'; do
+        if [[ "$item" == $'\037'* ]]; then
+            (( ${#cands} )) && compadd -U -V "liquifai-$group" -X "${header//\%/%%}" -l -d rows -- "${cands[@]}"
+            (( ${#hidden} )) && compadd -U -n -V "liquifai-$group" -- "${hidden[@]}"
+            cands=() rows=() hidden=()
+            header="${item#?}"
+            group=$(( group + 1 ))
+        elif (( group )) && [[ "$item" == *$'\t'* ]]; then
+            if [[ -n "${item#*$'\t'}" ]]; then
+                cands+=("${item%%$'\t'*}")
+                rows+=("${item#*$'\t'}")
+            else
+                hidden+=("${item%%$'\t'*}")
+            fi
+        elif [[ "$item" == */ ]]; then
+            # A directory gets `-S ''` so zsh adds no trailing space: the user keeps tabbing into it.
+            compadd -U -S '' -- "$item"
+        else
+            compadd -U -- "$item"
+        fi
+    done
+}
+"""
+
+_ZSH_TEMPLATE = (
+    """\
 #compdef {prog}
 
 # Self-bootstrap compinit so this works even in vanilla zsh setups that
@@ -210,25 +328,18 @@ _{prog}_completion() {
     # `${(F)words}` joins the word array with NEWLINES so a value with embedded
     # spaces (e.g. a name "Test Script VB") survives transport as one token.
     response=("${(@f)$(env COMP_WORDS=\"${(F)words}\" \\
-        COMP_CWORD=$((CURRENT-1)) \\
+        COMP_CWORD=$((CURRENT-1)) LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \\
         liquifai-complete {prog} 2>/dev/null)}")
     if (( ${#response[@]} == 0 )); then
         _files
         return
     fi
-    # Directory candidates (ending in `/`) get `-S ''` so zsh doesn't
-    # add a trailing space — lets the user keep tabbing into the dir.
-    local item
-    for item in "${response[@]}"; do
-        if [[ "$item" == */ ]]; then
-            compadd -U -S '' -- "$item"
-        else
-            compadd -U -- "$item"
-        fi
-    done
+    _liquifai_zreply "${response[@]}"
 }
 compdef _{prog}_completion {prog}
 """
+    + _ZSH_REPLY
+)
 
 _FISH_TEMPLATE = """\
 function __fish_{prog}_complete
@@ -247,7 +358,8 @@ complete -c {prog} -f -a "(__fish_{prog}_complete)"
 # liquifai apps install). `liquifai-bind-alias <alias> <app> [<prefix>...]`
 # wires shell completion for an alias by rewriting COMP_WORDS / CURRENT
 # before delegating to the standard `liquifai-complete` entry.
-_BASH_HELPERS = r"""
+_BASH_HELPERS = (
+    r"""
 # Shared body invoked by every per-alias delegator. Delegates to the fast
 # `liquifai-complete` entry as if the app itself had been typed. Prefers a
 # rewritten COMP_LINE (alias token -> `<app> <prefix>`, cursor shifted) so
@@ -282,7 +394,13 @@ _liquifai_alias_complete() {
     local raw
     raw=$(env COMP_LINE="$line_env" COMP_POINT="$point_env" \
         COMP_WORDS="$words" COMP_CWORD="$cword" COMP_TYPE="$COMP_TYPE" \
+        LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \
         liquifai-complete "$app" 2>/dev/null)
+    # A grouped listing goes through the per-app wrappers' reply; anything else is read as before.
+    if [[ "$raw" == *$'\037'* ]]; then
+        _liquifai_reply "$raw"
+        return 0
+    fi
     COMPREPLY=()
     local line
     while IFS= read -r line; do
@@ -317,8 +435,11 @@ liquifai-bind-alias() {
     "
 }
 """
+    + _BASH_REPLY
+)
 
-_ZSH_HELPERS = r"""
+_ZSH_HELPERS = (
+    r"""
 _liquifai_alias_complete() {
     local prefix_str="$1"
     local prefix_len="$2"
@@ -331,9 +452,16 @@ _liquifai_alias_complete() {
     local merged="${(F)merged_arr}"
     local cword=$((CURRENT + prefix_len - 2))
     local -a response
-    response=("${(@f)$(env COMP_WORDS="$merged" COMP_CWORD="$cword" liquifai-complete "$app" 2>/dev/null)}")
+    response=("${(@f)$(env COMP_WORDS="$merged" COMP_CWORD="$cword" LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \
+        liquifai-complete "$app" 2>/dev/null)}")
     if (( ${#response[@]} == 0 )); then
         _files
+        return
+    fi
+    # A grouped listing goes through the per-app wrappers' reply; anything else is offered as before.
+    local sep=$'\037'
+    if (( ${response[(I)${sep}*]} )); then
+        _liquifai_zreply "${response[@]}"
         return
     fi
     compadd -U -- "${response[@]}"
@@ -365,6 +493,8 @@ liquifai-bind-alias() {
     "
 }
 """
+    + _ZSH_REPLY
+)
 
 _HELPERS_MARKER = "# >>> liquifai shared helpers >>>"
 _HELPERS_END_MARKER = "# <<< liquifai shared helpers <<<"

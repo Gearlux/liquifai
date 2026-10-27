@@ -24,13 +24,17 @@ import os
 import sys
 
 from liquifai.completion import (
+    LISTING_WIRE,
     complete_from_tree,
+    complete_with_listing,
+    completion_list_style,
     escape_candidate,
     make_lazy_refresh_spawner,
     read_cache,
     spawn_tree_refresh,
     split_comp_words,
     wants_forced_refresh,
+    wire_lines,
     words_from_comp_line,
 )
 
@@ -68,10 +72,28 @@ def main() -> None:
             cword = int(os.environ.get("COMP_CWORD", "0"))
         except ValueError:
             cword = 0
-    for cand in complete_from_tree(
-        tree, words, cword, lazy_refresh=make_lazy_refresh_spawner(app_name), force_refresh=force_refresh
+    lazy_refresh = make_lazy_refresh_spawner(app_name)
+    # A wrapper that reads the grouped listing says so (LIQUIFAI_COMPLETE_WIRE); LIQUIFAI_COMPLETION_LIST=plain
+    # (or an older wrapper) gets one escaped candidate per line, as before the listing existed.
+    if os.environ.get("LIQUIFAI_COMPLETE_WIRE") == LISTING_WIRE and (
+        completion_list_style(os.environ.get("LIQUIFAI_COMPLETION_LIST")) == "grouped"
     ):
+        candidates, listing = complete_with_listing(
+            tree, words, cword, width=_columns(), lazy_refresh=lazy_refresh, force_refresh=force_refresh
+        )
+        for line in wire_lines(candidates, listing):
+            print(line)
+        return
+    for cand in complete_from_tree(tree, words, cword, lazy_refresh=lazy_refresh, force_refresh=force_refresh):
         print(escape_candidate(cand))
+
+
+def _columns() -> int:
+    """The terminal's width the wrapper passed (``COLUMNS``), 80 when it passed none."""
+    try:
+        return int(os.environ.get("COLUMNS") or 80)
+    except ValueError:
+        return 80
 
 
 if __name__ == "__main__":

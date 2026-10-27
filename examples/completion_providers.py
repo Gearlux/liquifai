@@ -93,6 +93,21 @@ def demo() -> None:
     print("an option's value (… --format <TAB>):", comp.complete(app, line, cword=4))
     line = ["completion-demo", "download", "cifar10", "--format", "parquet,"]
     print("a list's next word (… --format parquet,<TAB>):", comp.complete(app, line, cword=4))
+    print()
+
+    # The second TAB at an option position (bash, zsh): the global options, then the command's own, with their help.
+    line = ["completion-demo", "download", "rfuav", "v1", "--"]
+    _, listing = comp.complete_with_listing(comp.serialize_app(app), line, cword=4, width=100)
+    assert listing is not None and [header for header, _ in listing] == [
+        "global options",
+        "options of completion-demo download",
+    ]
+    print("the second TAB (download rfuav v1 --<TAB><TAB>):")
+    for header, rows in listing:
+        print(header)
+        for _, row in rows:
+            if row:  # an empty row: a short spelling that shares its long spelling's row
+                print(row)
 
 
 if __name__ == "__main__":

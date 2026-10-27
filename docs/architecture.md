@@ -918,3 +918,48 @@ def compile(run: str = "", scopes: Optional[List[str]] = None) -> None:
 **What you may change.** The help block's wording, the parameter's name (one constant,
 `completion.tree.SCOPES_PARAM`). Do not let a `config_files=` command's typed scopes activate on
 the app's config as well, and do not read the scopes anywhere but `config_scopes`.
+
+## 13. The second TAB lists the options grouped, drawn by the wrapper (2026-10-27)
+
+**Context.** liquifai-complete always sent the global options first and the command's own after them, but bash's
+readline sorts what it lists: `annotaide serve --<TAB><TAB>` printed one alphabetical grid, `--auto_port` beside
+`--config`, and nothing said which options were the command's. Readline has no groups, no headers and no
+descriptions; `compopt -o nosort` keeps the order but lays it out down columns, so the second group starts mid-column.
+
+**Decision.** On the listing TAB (`COMP_TYPE` 63) at a list of options alone, the bash wrapper prints liquifai's
+listing itself — `global options`, then `options of <app> <command>`, a row per option with its help, as
+`report.show_global_options` and the `Args:` docstrings give it — redraws `${PS1@P}` and the line, and leaves
+`COMPREPLY` empty with `compopt +o default`, so readline lists nothing and the line stays readline's. zsh gets the
+same groups through its own listing (`compadd -V <group> -X <header> -l -d <rows>`, short spellings `-n`: completable,
+unlisted). The wire carries it only to a wrapper that sets `LIQUIFAI_COMPLETE_WIRE=2`: a `\x1f<header>` line, then
+`candidate<TAB>row`; a tab is read only after a header, so a value is never split. `LIQUIFAI_COMPLETION_LIST=plain`
+(read on every TAB) gives today's output byte for byte. The engine's `complete_with_listing` returns the same
+candidates as `complete_from_tree` plus the listing; the listing exists only where the candidates are options alone
+and more than one.
+
+Rejected: header entries inside readline's grid (`<global options>` as a display-only candidate, with `nosort`) —
+the second group still starts mid-column and there is no room for help; `print-completions-horizontally` — a
+setting of the user's readline, not liquifai's.
+
+**Consequences.**
+
+- bash draws its own grid instead whenever the drawing could be wrong: the cursor inside the line, a line wider
+  than `COLUMNS`, a list taller than `LINES`, bash older than 4.4 (no `${PS1@P}`), `/dev/tty` not writable. Each is
+  driven in a real terminal by `tests/test_completion_shells.py`.
+- The redraw is the prompt's text: a prompt whose `PROMPT_COMMAND` changes it per line shows its last value.
+- Only the listing TAB is drawn: the first TAB (`COMP_TYPE` 9), `show-all-if-ambiguous` (33) and `menu-complete`
+  (37) stay readline's.
+- `CACHE_VERSION` 9: the tree carries `option_docs` (`{cmd: [[path, --flag, help]]}`) and `option_shorts`.
+- An installed script predating the listing keeps the old list until `--install-completion` runs again.
+
+**Example.**
+
+```python
+candidates, listing = complete_with_listing(tree, ["my-app", "serve", "--b"], cword=2, width=100)
+# listing == [("options of my-app serve", [("--background", "  -b, --background  run detached"), ...])]
+print("\n".join(wire_lines(candidates, listing)))  # what liquifai-complete prints for a v2 wrapper
+```
+
+**What you may change.** The headers' wording (`engine.GLOBAL_HEADER`, the `options of` line), the row layout,
+the limits that hand the list back to readline. Do not let readline list after liquifai has drawn (the stray
+`--` line and a second prompt), and do not draw at a list that is not options alone.
