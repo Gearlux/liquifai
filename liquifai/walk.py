@@ -145,6 +145,9 @@ class Walk:
     config_token: Optional[str] = None
     #: True when a token was consumed as the promoted config.
     consumed_config: bool = False
+    #: The token in the config's place that NAMES a config file (:func:`names_a_config`) but resolves to none; the
+    #: dispatch refuses it (``Configuration file not found``), completion goes on past it.
+    missing_config: Optional[str] = None
     #: Declared positional names for the matched command, in order.
     positional_names: List[str] = field(default_factory=list)
     #: Leading positional tokens actually consumed (may be fewer than names).
@@ -223,6 +226,19 @@ def walk_invocation(
     return walk
 
 
+#: The suffixes that make a token the name of a config file.
+CONFIG_SUFFIXES = (".yaml", ".yml")
+#: The prefix of a config named by the installed distribution that ships it (confluid's ``pkg://``).
+PACKAGE_SCHEME = "pkg://"
+
+
+def names_a_config(text: str) -> bool:
+    """Does ``text`` name a config FILE — a ``.yaml``/``.yml`` path or a ``pkg://`` reference — rather than a
+    positional or an override? Such a token in the config's place that resolves to no file is refused, never read
+    as an override (``Ignoring unrecognized CLI token``) with the command run on no config."""
+    return text.startswith(PACKAGE_SCHEME) or text.endswith(CONFIG_SUFFIXES)
+
+
 def _bind_arguments(
     walk: Walk,
     cur: Nav,
@@ -243,6 +259,9 @@ def _bind_arguments(
             walk.config_path = resolved
             walk.config_token = tokens[i].text
             walk.consumed_config = True
+            i += 1
+        elif names_a_config(tokens[i].text):
+            walk.missing_config = tokens[i].text
             i += 1
     walk.positional_names = list(cur.positionals(cmd))
     for _ in walk.positional_names:

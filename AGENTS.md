@@ -46,8 +46,11 @@ project folder shadows the package.
   resolves to an existing file through `confluid.resolve_config_path` (a bare name gains
   `.yaml`). A leading token that names no command goes to the default command: its config if it
   is a script command, otherwise its first positional. A token that resolves to no file is left
-  for the positional and override parsers. Resolve once; never add a second `.exists()` chain,
-  extend confluid's resolver instead. (`tests/test_config_search_paths.py`, `tests/test_walk.py`)
+  for the positional and override parsers — unless it NAMES a config file (`walk.names_a_config`:
+  a `.yaml`/`.yml` suffix or `pkg://`): then `_prepare` refuses it, `Configuration file not
+  found: <token>` (user request 2026-10-27: it was read as a stray override and the command ran on
+  no config). A `pkg://` token goes to confluid as text, never through `Path`. Resolve once; never add a second `.exists()` chain,
+  extend confluid's resolver instead. (`tests/test_config_search_paths.py`, `tests/test_walk.py`, `tests/test_missing_config.py`)
 - Positionals bind only as leading tokens, as verbatim strings, into the TOP level of the
   config, before overrides, so `--name` wins its slot. (`tests/test_positionals.py`) §5.
 - Host facts: the detected scope activations are PREPENDED, the `platform:` key is merged UNDER
