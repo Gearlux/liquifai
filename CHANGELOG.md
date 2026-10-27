@@ -6,6 +6,16 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A script command handed a config file that does not exist stops with one line** — `my-app train missing.yaml`
+  prints `Error: Configuration file not found: missing.yaml` and exits 1. It used to warn `Ignoring unrecognized CLI
+  token 'missing.yaml'` and run the command with no config. A `pkg://<distribution>/<path>` argument now names a
+  config an installed distribution ships (confluid's spelling).
+- **A command-line key reaches the config's `${…}` placeholders**, as a line written at the end of the file would:
+  with `output_dir: /runs/${run.name}`, `myapp run c.yaml run.name=pilot` now gives `/runs/pilot` (it gave the
+  file's own name: the placeholder was filled in before the key was read).
+
 ### Breaking
 
 - **A `completions=` key that names no parameter of the command is refused when it is decorated**

@@ -483,6 +483,38 @@ arbitration: the longest pattern wins regardless of flag order) is not
 expressible by seating at all; if that is ever wanted, it is a confluid-side
 override channel, not a cleverer seat order.
 
+### Amendment: a flag reaches the file's `${…}` placeholders (2026-10-27)
+
+**Context.** The config was resolved (`confluid.load(until="document")`, every `${…}` filled in) at load time, and
+the flags were merged into that resolved document afterwards. A `!ref:`, resolved later, saw a flag; a `${…}` inside
+a string never did. Measured on a training config whose folder is `output_dir: ${env:RUN_DIR}/…/${run.name}`:
+`--scope smoke run.name=zz` logged the run as `zz` and wrote it into `…/smoke/` — the scope's name, not the one
+typed — while the same document with the line `run.name: zz` appended resolved to `…/zz/`.
+
+**Decision.** When flags are given, the raw document read at load time (`LiquifyContext.raw_document`, the host
+facts merged in) is resolved AGAIN with the bound positionals and then the flags appended as its last lines, in the
+order typed (`LiquifyApp._resolved_with_lines`); `apply_overrides` then runs as before (the merge, the `Fluid`
+kwargs, the deletions). No flags, one load, as before.
+
+**Consequences.** Every `${…}` built from a key a flag sets follows the flag; a scope's value is beaten by a flag, a
+second typing of a key by the later one, as lines in a file. A document not read from a file is left as it is. The
+config is resolved twice when flags are given (milliseconds on the workspace's configs).
+
+**Example.**
+
+```yaml
+run:
+  name: base
+output_dir: /runs/${run.name}
+```
+
+```bash
+myapp where c.yaml run.name=pilot    # output_dir = /runs/pilot (was /runs/base)
+```
+
+**What you may change.** How the second resolve is done, never that a flag reaches a placeholder as a line at the
+end of the file would. Pins: `tests/test_override_interpolation.py`, `examples/overrides_app.py`.
+
 ---
 
 ## 5. Positionals bind as top-level config keys

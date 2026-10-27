@@ -32,6 +32,12 @@ class LiquifyContext:
     # confluid resolves the include graph; consumers (e.g. matrainer's
     # trainer) read this to log the full configuration as a run artifact.
     included_paths: List[Path] = field(default_factory=list)
+    # The config as read (``until="raw"``, the host facts merged in), before confluid resolved it, and the
+    # positionals bound into it (phase 4b). Phase 5 resolves the raw document again with the positionals and the
+    # command-line keys appended as its last lines, so a ``${run.name}`` placeholder sees ``run.name=zz`` as it
+    # would a line written at the end of the file (``core.LiquifyApp._resolved_with_lines``).
+    raw_document: Any = None
+    bound_positionals: Dict[str, Any] = field(default_factory=dict)
 
     # The loaded logger instance
     logger: Any = None
