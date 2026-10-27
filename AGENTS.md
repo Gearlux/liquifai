@@ -91,6 +91,11 @@ project folder shadows the package.
   Never reorder flags relative to each other, and never ask confluid for a "CLI beats YAML" tier.
   (the seating group in `tests/test_override_broadcast.py`, e.g.
   `::test_a_specific_flag_typed_after_a_bare_flag_wins_on_its_class`) §4.
+- A flag reaches the document's `${…}` placeholders as an appended line would: with flags given, the raw document
+  (`LiquifyContext.raw_document`) is resolved AGAIN with the positionals, then the flags, appended last in typed
+  order (`_resolved_with_lines`), before `apply_overrides` — never a merge into the already-resolved document alone
+  (a `${run.name}` folder kept the scope's name while the run took the typed one). (`tests/test_override_interpolation.py`)
+  §4 amendment 2026-10-27.
 - Settability is confluid's question. Dotted `--<name>.<key>` asks `accepts_key`; bare
   `--<key>` asks `accepts_any_key` first and SKIPS such a `**kwargs` target (confluid's broadcast
   delivers it as an attribute), then `accepts_broadcast`. Never reintroduce a local accept list,

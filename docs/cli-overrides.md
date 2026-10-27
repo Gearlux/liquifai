@@ -184,6 +184,20 @@ Trainer:
 lr: 0.9                   # so it now beats this — and 0.1 is what trains
 ```
 
+The file's `${…}` placeholders read a flag as they would a line written at the end of the file — a dotted
+`${a.b}` reads the document, a bare `${NAME}` an environment variable:
+
+```yaml
+run:
+  name: base
+output_dir: /runs/${run.name}
+```
+
+```bash
+myapp where c.yaml                   # output_dir = /runs/base
+myapp where c.yaml run.name=pilot    # output_dir = /runs/pilot
+```
+
 Because flags are appended *in the order typed*, their relative order matters
 exactly like lines in a file — the last flag wins where they overlap:
 

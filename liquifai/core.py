@@ -747,6 +747,7 @@ class LiquifyApp:
         if inv.positional_values and isinstance(self.context.config_data, dict):
             bound = dict(zip(inv.positional_names, inv.positional_values))
             self.context.config_data.update(bound)
+            self.context.bound_positionals = bound
             self.context.logger.debug(f"Bound positionals: {bound}")
         if passed_scopes and isinstance(self.context.config_data, dict):
             self.context.config_data[SCOPES_PARAM] = passed_scopes
@@ -869,6 +870,8 @@ class LiquifyApp:
             # `${platform.os}` / `${platform.device}` resolve in the interpolation pass
             # below — a bare `${os}` cannot, it is an env-var read (confluid/resolver.py:161).
             data = host.inject_facts(data, self.context.host_facts)
+            # Kept for phase 5: command-line keys are appended to THIS and it is resolved again.
+            self.context.raw_document = data
             # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
             # string primitive. Overrides get the same expansion later, in
             # `overrides.apply_overrides`.
@@ -922,8 +925,31 @@ class LiquifyApp:
         self.context.cli_overrides = dict(parsed_overrides)
 
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
+        if parsed_overrides:
+            self.context.config_data = self._resolved_with_lines(parsed_overrides)
         self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
+
+    def _resolved_with_lines(self, parsed_overrides: Dict[str, Any]) -> Any:
+        """The raw document resolved again with the positionals, then the command-line keys, appended as its last
+        lines in the order typed — so every ``${key}`` placeholder sees the value a line at the end of the file
+        would give it (a ``!ref:`` saw it already, being resolved later). ``apply_overrides`` then merges the same
+        keys as before (into the ``Fluid`` kwargs, and the deletions); a document that was not read from a file, or
+        not as a mapping, is left as it is.
+        """
+        assert self.context is not None
+        raw = self.context.raw_document
+        current = self.context.config_data
+        if not isinstance(raw, dict) or not isinstance(current, dict):
+            return current
+        appended = dict(raw)
+        for key, value in [*self.context.bound_positionals.items(), *expand_strings(parsed_overrides).items()]:
+            appended.pop(key, None)  # a key written again moves to the end, as a later line would
+            appended[key] = value
+        loaded = expand_strings(confluid.load(appended, until="document", scopes=self.context.scopes or None))
+        if isinstance(loaded, dict) and SCOPES_PARAM in current:
+            loaded[SCOPES_PARAM] = current[SCOPES_PARAM]
+        return loaded
 
     def _check_strict_flags(self, func: Callable[..., Any]) -> None:
         """Under ``strict_flags``, refuse a bare override that names no parameter of ``func``.
