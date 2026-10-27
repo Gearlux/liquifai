@@ -224,6 +224,14 @@ project folder shadows the package.
   `cache._spawn_throttled`, which honours it.
   (`tests/test_completion.py::test_tree_refresh_is_throttled_and_can_be_opted_out`)
 - A new field in the serialized tree bumps `completion.tree.CACHE_VERSION`.
+- The second TAB at a list of options alone shows `global options`, then `options of <app> <command>`, a row each
+  with its help (`engine.complete_with_listing`): bash's wrapper draws it and redraws the prompt and line
+  (`_liquifai_reply`), zsh shows it as its own groups (`_liquifai_zreply`). It reaches only a wrapper that sets
+  `LIQUIFAI_COMPLETE_WIRE=2`; `LIQUIFAI_COMPLETION_LIST=plain` keeps liquifai-complete's output byte for byte as
+  before. bash hands the list back to readline whenever its drawing could be wrong (cursor inside the line, a line
+  wider or a list taller than the terminal, bash < 4.4); never let readline list after liquifai drew, never draw
+  beside command names, values or files. Pin the behaviour in a real terminal, never by reading the script text.
+  (`tests/test_completion_listing.py`, `tests/test_completion_shells.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on

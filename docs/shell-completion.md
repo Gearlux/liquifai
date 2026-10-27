@@ -79,6 +79,44 @@ After installing, restart your shell (or `source ~/.zshrc` / `~/.bashrc`).
 For fish the script is written to `~/.config/fish/completions/<app>.fish`
 and auto-loads in the next session.
 
+## The second TAB lists the options grouped, with their help
+
+In bash and zsh, listing a command's options shows the global options first, then the command's own, each with
+its help, like `--help` does:
+
+```console
+$ my-app serve --<TAB><TAB>
+global options
+  -c, --config PATH             Configuration file.
+  -d, --debug                   Enable debug mode.
+  --level LEVEL                 Set log level for both sinks (TRACE, DEBUG, INFO).
+  …
+options of my-app serve
+  -b, --background              run detached
+  --port PORT                   the port to serve on
+$ my-app serve --
+```
+
+The line stays as you typed it; keep typing or TAB again. Only the groups the typed word matches are listed
+(`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command
+option's help is its `Args:` docstring line; a config's own keys are listed without one. The first TAB is
+unchanged: it still fills in the part the matches share.
+
+bash shows its own list instead (sorted alphabetically) whenever liquifai cannot draw its own reliably: the cursor
+is inside the line, the line is wider than the terminal, the list is taller than it, or bash is older than 4.4
+(macOS's `/bin/bash`). Command names, a positional's values, config files and an option's values are always
+bash's list. zsh shows the same groups through its own completion listing, so no such limits apply there. fish
+lists the options as before.
+
+To go back to the shell's own sorted list everywhere, set:
+
+```bash
+export LIQUIFAI_COMPLETION_LIST=plain   # grouped (the default) or plain; read on every TAB
+```
+
+An installed completion script predating this listing keeps the old list: run `my-app --install-completion`
+again to get it.
+
 ## Aliases
 
 Shell aliases don't inherit completion automatically (bash and zsh bind
@@ -300,4 +338,5 @@ scopes belong to the app's config.
 [`examples/completion_providers.py`](../examples/completion_providers.py) wires
 a static and a dependent provider onto a command's positionals and prints the
 candidates each would contribute. Shell interaction itself (TAB, wrappers,
-caches) can't run in CI — install the app and try `download <TAB>` live.
+caches) can't run in CI — install the app and try `download <TAB>` live. It also
+prints the grouped listing the second TAB shows for `download rfuav v1 --`.
