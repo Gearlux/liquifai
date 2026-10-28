@@ -79,34 +79,75 @@ After installing, restart your shell (or `source ~/.zshrc` / `~/.bashrc`).
 For fish the script is written to `~/.config/fish/completions/<app>.fish`
 and auto-loads in the next session.
 
-## The second TAB lists the options grouped, with their help
+## The second TAB lists the candidates grouped, with their help
 
-In bash and zsh, listing a command's options shows the global options first, then the command's own, each with
-its help, like `--help` does:
+In bash and zsh, the second TAB groups what can be typed next, each with its help, like `--help` does: the
+commands, the command's arguments, the command's own options, then the global options:
 
 ```console
-$ my-app serve --<TAB><TAB>
+$ my-app <TAB><TAB>
+commands of my-app
+  open                          Serve a workspace.
+  stop                          Stop the server.
+arguments of my-app open
+▸ <workspace>                   the workspace file to serve
+options of my-app open
+  -b, --background              run detached
+  --port PORT                   the port to serve on (8787)
 global options
   -c, --config PATH             Configuration file.
   -d, --debug                   Enable debug mode.
-  --level LEVEL                 Set log level for both sinks (TRACE, DEBUG, INFO).
   …
-options of my-app serve
-  -b, --background              run detached
-  --port PORT                   the port to serve on
-$ my-app serve --
+$ my-app
 ```
 
-The line stays as you typed it; keep typing or TAB again. Only the groups the typed word matches are listed
-(`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command
-option's help is its `Args:` docstring line; a config's own keys are listed without one. The first TAB is
-unchanged: it still fills in the part the matches share.
+The arguments group says each argument's state: one you typed shows its value, one still missing shows as
+`<name>` with its help, and the next one's values — or a script command's config files — are listed under it. It
+stays above the options, so after `--` you still see what is missing:
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+▸ <version>                     its version
+global options
+  …
+$ my-app fetch alpha --
+```
+
+The line stays as you typed it; keep typing or TAB again. Only the candidates the typed word matches are listed
+(`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command's
+help is the first line of its docstring, an argument's or option's its `Args:` line; a config's own keys are listed
+without one. The first TAB is unchanged: it still fills in the part the matches share. An option's values
+(`--port <TAB>`) are listed as before.
 
 bash shows its own list instead (sorted alphabetically) whenever liquifai cannot draw its own reliably: the cursor
 is inside the line, the line is wider than the terminal, the list is taller than it, or bash is older than 4.4
-(macOS's `/bin/bash`). Command names, a positional's values, config files and an option's values are always
-bash's list. zsh shows the same groups through its own completion listing, so no such limits apply there. fish
-lists the options as before.
+(macOS's `/bin/bash`). zsh shows the same groups through its own completion listing, so no such limits apply there.
+fish lists the candidates as before.
+
+In zsh, which measures a row's colour codes as characters, a long coloured row is cut a little earlier so it never
+runs past the terminal's edge.
+
+In a colour terminal the listing is coloured: the group titles bold cyan, command names blue, options bold with
+their value's placeholder (`PATH`) dim cyan, a typed argument green, a missing one yellow, help dim. An option that
+takes a value shows its default after its help (`the port to serve on (8787)`), and the argument to type next is
+marked `▸`:
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+▸ <version>                     its version
+```
+
+The colour follows `LIQUIFAI_COMPLETION_COLOR`, read on every TAB:
+
+```bash
+export LIQUIFAI_COMPLETION_COLOR=never   # auto (the default), always or never
+```
+
+`auto` colours it unless `NO_COLOR` is set or the terminal is `dumb`.
 
 To go back to the shell's own sorted list everywhere, set:
 

@@ -36,6 +36,15 @@ def _app() -> LiquifyApp:
             browser: open a browser window
         """
 
+    @app.command("fetch", positionals=["name", "version"])
+    def fetch(name: str = "", version: str = "") -> None:
+        """Fetch one version of an item.
+
+        Args:
+            name: the item
+            version: its version
+        """
+
     return app
 
 
@@ -57,13 +66,16 @@ ZSH = shutil.which("zsh")
 needs_bash = pytest.mark.skipif(BASH is None, reason="no bash 4.4 or newer on this machine")
 needs_zsh = pytest.mark.skipif(ZSH is None, reason="no zsh on this machine")
 
+#: The last global row: the listing's last line, the global options coming last.
+GLOBAL_LAST_ROW = "  --refresh-completions         Run positional completion providers and refresh their value caches."
+
 #: The rows the second TAB shows after ``listdemo serve --`` (the global rows are the grammar table's).
 COMMAND_BLOCK = (
     "options of listdemo serve\n"
     "  -b, --background              run detached\n"
     "  --browser                     open a browser window\n"
     "  --label LABEL\n"
-    "  --port PORT                   the port to serve on\n"
+    "  --port PORT                   the port to serve on (8787)\n"
 )
 
 
@@ -135,15 +147,14 @@ def _ran(term: Terminal, keys: str, expected: str) -> None:
 
 
 @needs_bash
-def test_bash_lists_the_global_options_then_the_commands_own_and_keeps_the_line(
+def test_bash_lists_the_commands_own_options_then_the_global_ones_and_keeps_the_line(
     home: Path, terminals: List[Terminal]
 ) -> None:
     term = _bash(terminals, home)
     term.send("listdemo serve --\t\t")
-    text = term.wait_for(COMMAND_BLOCK + "$ listdemo serve --")
-    listing = text[text.index("global options\n") :]
-    assert listing.startswith("global options\n  -c, --config PATH             Configuration file.\n")
-    assert listing.index("global options") < listing.index("options of listdemo serve")
+    text = term.wait_for(COMMAND_BLOCK + "global options\n  -c, --config PATH             Configuration file.\n")
+    term.wait_for(GLOBAL_LAST_ROW + "\n$ listdemo serve --")
+    assert text.index("options of listdemo serve") < text.index("global options")
     _ran(term, "port 1", "serve --port 1")
 
 
@@ -207,7 +218,8 @@ def test_bash_keeps_its_own_list_when_the_line_is_wider_than_the_screen(home: Pa
 def test_an_alias_bound_with_liquifai_bind_alias_lists_the_same_groups(home: Path, terminals: List[Terminal]) -> None:
     term = _bash(terminals, home, helpers=True)
     term.send("lds --\t\t")
-    term.wait_for(COMMAND_BLOCK + "$ lds --")
+    term.wait_for(COMMAND_BLOCK + "global options\n")
+    term.wait_for(GLOBAL_LAST_ROW + "\n$ lds --")
     _ran(term, "port 1", "serve --port 1")
 
 
@@ -239,13 +251,13 @@ def _zsh(terminals: List[Terminal], home: Path, *, helpers: bool = False, **env:
 
 
 @needs_zsh
-def test_zsh_lists_the_global_options_then_the_commands_own(home: Path, terminals: List[Terminal]) -> None:
+def test_zsh_lists_the_commands_own_options_then_the_global_ones(home: Path, terminals: List[Terminal]) -> None:
     term = _zsh(terminals, home)
     term.send("listdemo serve --\t")
-    text = term.wait_for("  --port PORT                   the port to serve on")
-    listing = text[text.index("global options\n") :]
-    assert listing.startswith("global options\n  -c, --config PATH             Configuration file.\n")
-    assert COMMAND_BLOCK.rstrip("\n") in listing
+    text = term.wait_for("  --refresh-completions         Run positional completion providers")  # cut to fit
+    assert b"\x1b[ \x08" not in term.raw  # zsh measures the colour codes too: no row runs past the edge
+    listing = text[text.index("options of listdemo serve\n") :]
+    assert listing.startswith(COMMAND_BLOCK + "global options\n  -c, --config PATH             Configuration file.\n")
     _ran(term, "port 1", "serve --port 1")
 
 
@@ -271,6 +283,79 @@ def test_a_zsh_alias_bound_with_liquifai_bind_alias_lists_the_same_groups(
 ) -> None:
     term = _zsh(terminals, home, helpers=True)
     term.send("lds --\t")
-    term.wait_for("  --port PORT                   the port to serve on")
+    term.wait_for("  --port PORT                   the port to serve on (8787)")
     assert "options of listdemo serve" in term.text
     _ran(term, "port 1", "serve --port 1")
+
+
+# ------------------------------------------------------------- commands and arguments -----------------------
+
+
+@needs_bash
+def test_bash_lists_the_commands_at_a_bare_prompt(home: Path, terminals: List[Terminal]) -> None:
+    term = _bash(terminals, home)
+    term.send("listdemo \t\t")
+    term.wait_for(
+        "commands of listdemo\n"
+        "  serve                         Serve.\n"
+        "  fetch                         Fetch one version of an item.\n"
+        "$ listdemo "
+    )
+    _ran(term, "fetch a 1", "fetch a 1")
+
+
+@needs_bash
+def test_bash_lists_each_argument_typed_and_missing_before_the_options(home: Path, terminals: List[Terminal]) -> None:
+    term = _bash(terminals, home)
+    term.send("listdemo fetch alpha \t\t")
+    text = term.wait_for("$ listdemo fetch alpha ", 20) and term.wait_for("global options")
+    term.wait_for("\n$ listdemo fetch alpha ")
+    listing = text[text.index("arguments of listdemo fetch") :]
+    assert listing.startswith(
+        "arguments of listdemo fetch\n"
+        "  name                          alpha\n"
+        "▸ <version>                     its version\n"
+        "global options\n"
+    )
+    _ran(term, "2.0", "fetch alpha 2.0")
+
+
+@needs_zsh
+def test_zsh_lists_each_argument_typed_and_missing(home: Path, terminals: List[Terminal]) -> None:
+    term = _zsh(terminals, home)
+    term.send("listdemo fetch alpha \t")
+    text = term.wait_for("▸ <version>                     its version")
+    assert "arguments of listdemo fetch\n  name                          alpha\n" in text
+    _ran(term, "2.0", "fetch alpha 2.0")
+
+
+# ------------------------------------------------------------------- colour ---------------------------------
+
+
+@needs_bash
+def test_bash_draws_the_listing_in_colour_on_a_colour_terminal(home: Path, terminals: List[Terminal]) -> None:
+    term = _bash(terminals, home)
+    term.send("listdemo \t\t")
+    term.wait_for("commands of listdemo")
+    term.wait_for("\n$ listdemo ")
+    assert b"\x1b[1;36mcommands of listdemo\x1b[0m" in term.raw  # a title: bold cyan
+    assert b"  \x1b[34mserve\x1b[0m" in term.raw  # a command: blue
+    _ran(term, "fetch a 1", "fetch a 1")
+
+
+@needs_bash
+def test_no_color_draws_it_without_colour(home: Path, terminals: List[Terminal]) -> None:
+    term = _bash(terminals, home, NO_COLOR="1")
+    term.send("listdemo \t\t")
+    term.wait_for("commands of listdemo")
+    term.wait_for("\n$ listdemo ")
+    assert b"\x1b[34m" not in term.raw and b"\x1b[1;36m" not in term.raw
+
+
+@needs_zsh
+def test_zsh_shows_the_listing_in_colour(home: Path, terminals: List[Terminal]) -> None:
+    term = _zsh(terminals, home)
+    term.send("listdemo fetch alpha \t")
+    term.wait_for("its version")
+    assert b"\x1b[1;36marguments of listdemo fetch\x1b[0m" in term.raw
+    assert b"\x1b[33m<version>\x1b[0m" in term.raw  # the missing argument: yellow

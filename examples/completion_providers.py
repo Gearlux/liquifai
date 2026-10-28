@@ -95,13 +95,16 @@ def demo() -> None:
     print("a list's next word (… --format parquet,<TAB>):", comp.complete(app, line, cword=4))
     print()
 
-    # The second TAB at an option position (bash, zsh): the global options, then the command's own, with their help.
+    # The second TAB (bash, zsh): the arguments — typed ones with their value — then the command's own options, the
+    # global ones last, each with its help.
     line = ["completion-demo", "download", "rfuav", "v1", "--"]
     _, listing = comp.complete_with_listing(comp.serialize_app(app), line, cword=4, width=100)
     assert listing is not None and [header for header, _ in listing] == [
-        "global options",
+        "arguments of completion-demo download",
         "options of completion-demo download",
+        "global options",
     ]
+    assert [row.split() for _, row in listing[0][1]] == [["name", "rfuav"], ["version", "v1"]]
     print("the second TAB (download rfuav v1 --<TAB><TAB>):")
     for header, rows in listing:
         print(header)

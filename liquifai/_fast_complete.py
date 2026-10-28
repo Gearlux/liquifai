@@ -27,6 +27,7 @@ from liquifai.completion import (
     LISTING_WIRE,
     complete_from_tree,
     complete_with_listing,
+    completion_colour,
     completion_list_style,
     escape_candidate,
     make_lazy_refresh_spawner,
@@ -79,7 +80,15 @@ def main() -> None:
         completion_list_style(os.environ.get("LIQUIFAI_COMPLETION_LIST")) == "grouped"
     ):
         candidates, listing = complete_with_listing(
-            tree, words, cword, width=_columns(), lazy_refresh=lazy_refresh, force_refresh=force_refresh
+            tree,
+            words,
+            cword,
+            width=_columns(),
+            lazy_refresh=lazy_refresh,
+            force_refresh=force_refresh,
+            colour=completion_colour(os.environ.get("LIQUIFAI_COMPLETION_COLOR"), os.environ),
+            # zsh measures a row's colour codes as characters (its wrapper says it is zsh): count them too.
+            codes_count=os.environ.get("LIQUIFAI_COMPLETE_SHELL") == "zsh",
         )
         for line in wire_lines(candidates, listing):
             print(line)

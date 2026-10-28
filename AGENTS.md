@@ -224,13 +224,26 @@ project folder shadows the package.
   `cache._spawn_throttled`, which honours it.
   (`tests/test_completion.py::test_tree_refresh_is_throttled_and_can_be_opted_out`)
 - A new field in the serialized tree bumps `completion.tree.CACHE_VERSION`.
-- The second TAB at a list of options alone shows `global options`, then `options of <app> <command>`, a row each
-  with its help (`engine.complete_with_listing`): bash's wrapper draws it and redraws the prompt and line
-  (`_liquifai_reply`), zsh shows it as its own groups (`_liquifai_zreply`). It reaches only a wrapper that sets
-  `LIQUIFAI_COMPLETE_WIRE=2`; `LIQUIFAI_COMPLETION_LIST=plain` keeps liquifai-complete's output byte for byte as
-  before. bash hands the list back to readline whenever its drawing could be wrong (cursor inside the line, a line
-  wider or a list taller than the terminal, bash < 4.4); never let readline list after liquifai drew, never draw
-  beside command names, values or files. Pin the behaviour in a real terminal, never by reading the script text.
+- The second TAB shows `commands of <app> <sub-app…>`, `arguments of <app> <command>`, `options of <app> <command>`,
+  then `global options` LAST — in that order (user correction 2026-10-28: the global options never come before the
+  command's own), a row each with its help
+  (`engine.complete_with_listing`) — wherever more than one candidate is offered but at an option's value. The
+  arguments group lists EVERY positional (a script command's config first): typed → its value, given as its flag →
+  said, missing → `<name>` and its help, the next one's values or config files under it; it stays above the options
+  so the user sees what is missing (user request 2026-10-28). A line that is no candidate is `("", row)` in the
+  listing and `\x1e<row>` on the wire; zsh puts those lines into its group's header. bash's wrapper draws the
+  listing and redraws the prompt and line (`_liquifai_reply`), zsh shows it as its own groups (`_liquifai_zreply`).
+  It reaches only a wrapper that sets `LIQUIFAI_COMPLETE_WIRE=2`; `LIQUIFAI_COMPLETION_LIST=plain` keeps
+  liquifai-complete's output byte for byte as before. bash hands the list back to readline whenever its drawing
+  could be wrong (cursor inside the line, a line wider or a list taller than the terminal, bash < 4.4); never let
+  readline list after liquifai drew. Colour (user choices 2026-10-28): `engine.COLOURS` per role — titles bold cyan,
+  commands BLUE, options bold, placeholders dim cyan, typed arguments green, missing ones yellow, help dim — the
+  next argument marked `▸` (`NEXT_MARK`), a value option's default after its help (a flag shows none);
+  `LIQUIFAI_COMPLETION_COLOR=auto|always|never` (`shells.completion_colour`; auto: no `NO_COLOR`, a named, non-dumb
+  `TERM`); widths and the cut are measured on the visible text, and the text is the same with the codes taken out.
+  zsh passes the codes through in rows and titles but measures them as characters: its wrapper sets
+  `LIQUIFAI_COMPLETE_SHELL=zsh` and the cut counts the codes too (`codes_count`), else a row near the edge garbles
+  (`\x1b[ \x08`). Pin the behaviour in a real terminal, never by reading the script text.
   (`tests/test_completion_listing.py`, `tests/test_completion_shells.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);

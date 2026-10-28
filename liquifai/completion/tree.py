@@ -23,6 +23,10 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v11: ``option_docs`` rows carry a fourth field, the option's default as shown (``8787``; ``""`` for a flag
+# or an empty default).
+# v10: ``description`` (the node's), ``command_docs`` ``{cmd: first docstring line}`` and ``positional_docs``
+# ``{cmd: {positional: help}}``, so the listing names the commands and says which arguments are missing.
 # v9: ``option_docs`` ``{cmd: [[path, --flag, help], ...]}`` and ``option_shorts`` ``{cmd: {letter: parameter}}``, so
 # the second TAB lists each option with its help, grouped (``engine.complete_with_listing``).
 # v8: ``flag_completions`` ``{cmd: {option: {key, kind, depends_on}}}`` (``--library <TAB>``); ``scope_completions``
@@ -47,7 +51,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 9
+CACHE_VERSION: int = 11
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -89,6 +93,7 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
     signature_flags: Dict[str, List[str]] = {}
     signature_bool_flags: Dict[str, List[str]] = {}
     option_docs: Dict[str, List[List[str]]] = {}
+    positional_docs: Dict[str, Dict[str, str]] = {}
     for cmd, func in app._commands.items():
         hierarchy = _introspect_function_hierarchy(func)
         # A positional, and a config_files= command's ``scopes`` (filled from ``--scope``), is never a flag to offer.
@@ -97,7 +102,8 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         command_paths[cmd] = paths
         display = _flag_display_map(paths)
         signature_flags[cmd] = list(dict.fromkeys(display[p] for p in paths))
-        option_docs[cmd] = [[p, display[p], _one_line(hierarchy[p])] for p in paths]
+        option_docs[cmd] = [[p, display[p], _one_line(hierarchy[p]), _default_text(hierarchy[p])] for p in paths]
+        positional_docs[cmd] = {p: _one_line(hierarchy[p]) if p in hierarchy else "" for p in positionals_map[cmd]}
         bools: List[str] = []
         for p in paths:
             type_str = hierarchy[p][0] if isinstance(hierarchy[p], (tuple, list)) else None
@@ -130,6 +136,10 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
             scope_completions[cmd] = _slot_info(_provider_spec(_path, cmd, SCOPE_SLOT, _scope_names(files), pos_list))
     return {
         "name": app.name,
+        # The node's own description, the commands' first docstring lines: the listing's "commands of …" rows.
+        "description": " ".join(str(app.description or "").split()),
+        "command_docs": {cmd: _first_line(func.__doc__) for cmd, func in app._commands.items()},
+        "positional_docs": positional_docs,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
         # The default command by name (None when the app has none): the walk binds
@@ -164,6 +174,20 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "flag_completions": flag_completions,
         "scope_completions": scope_completions,
     }
+
+
+def _default_text(entry: Any) -> str:
+    """An option's default as the listing shows it after the help — ``8787`` — or ``""``: a flag (bool) shows none,
+    nor does a default of ``None`` or ``""``."""
+    if not isinstance(entry, (tuple, list)) or len(entry) < 2 or entry[0] == "bool":
+        return ""
+    default = entry[1]
+    return "" if default is None or default == "" else " ".join(str(default).split())
+
+
+def _first_line(doc: Optional[str]) -> str:
+    """A docstring's first line, as the command index of ``--help`` shows it."""
+    return doc.strip().split("\n")[0].strip() if doc and doc.strip() else ""
 
 
 def _one_line(entry: Any) -> str:

@@ -15,7 +15,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, get_args
+from typing import TYPE_CHECKING, List, Literal, Mapping, Optional, Tuple, get_args
 
 from liquifai.exceptions import UnsupportedShellError
 
@@ -168,6 +168,24 @@ LISTING_WIRE = "2"
 
 #: Starts a group's header line on the wire: the ASCII unit separator, which no flag spelling contains.
 WIRE_HEADER = "\x1f"
+#: Starts a line of a group that is no candidate (an argument typed or still missing): the record separator.
+WIRE_NOTE = "\x1e"
+
+
+#: Whether the listing is in colour (``LIQUIFAI_COMPLETION_COLOR``, read on every TAB): ``auto`` — unless ``NO_COLOR``
+#: is set or the terminal is ``dumb`` or unnamed —, ``always``, ``never``.
+CompletionColour = Literal["auto", "always", "never"]
+COMPLETION_COLOURS: Tuple[str, ...] = get_args(CompletionColour)
+
+
+def completion_colour(value: Optional[str], environ: Mapping[str, str]) -> bool:
+    """Whether ``LIQUIFAI_COMPLETION_COLOR=value`` asks for colour in ``environ``; an unknown word means ``auto`` (a
+    TAB cannot report an error)."""
+    if value == "never":
+        return False
+    if value == "always":
+        return True
+    return not environ.get("NO_COLOR") and environ.get("TERM", "") not in ("", "dumb")
 
 
 def completion_list_style(value: Optional[str]) -> CompletionList:
@@ -182,14 +200,17 @@ def wire_lines(candidates: List[str], listing: Optional["Listing"]) -> List[str]
     """The lines liquifai-complete prints: one escaped candidate each, or — with a listing — its groups.
 
     A group is a ``WIRE_HEADER + header`` line, then ``candidate<TAB>row`` per candidate (an empty row: completes,
-    shares another spelling's row). The wrappers read a tab only after a header, so a value is never split.
+    shares another spelling's row) and ``WIRE_NOTE + row`` per line that is no candidate. The wrappers read a tab
+    only after a header, so a value is never split.
     """
     if listing is None:
         return [escape_candidate(c) for c in candidates]
     out: List[str] = []
     for header, rows in listing:
         out.append(WIRE_HEADER + header.replace("\t", " "))
-        out.extend(f"{escape_candidate(cand)}\t{display.replace(chr(9), ' ')}" for cand, display in rows)
+        for cand, display in rows:
+            shown = display.replace("\t", " ")
+            out.append(f"{escape_candidate(cand)}\t{shown}" if cand else WIRE_NOTE + shown)
     return out
 
 
@@ -220,6 +241,8 @@ _liquifai_reply() {
         [[ -z "$item" ]] && continue
         if [[ "$item" == $'\037'* ]]; then
             grouped=1
+            listing+=("${item#?}")
+        elif [[ -n "$grouped" && "$item" == $'\036'* ]]; then
             listing+=("${item#?}")
         elif [[ -n "$grouped" && "$item" == *$'\t'* ]]; then
             COMPREPLY+=("${item%%$'\t'*}")
@@ -290,11 +313,17 @@ _liquifai_zreply() {
     local -a cands rows hidden
     for item in "$@" $'\037'; do
         if [[ "$item" == $'\037'* ]]; then
-            (( ${#cands} )) && compadd -U -V "liquifai-$group" -X "${header//\%/%%}" -l -d rows -- "${cands[@]}"
+            if (( ${#cands} )); then
+                compadd -U -V "liquifai-$group" -X "${header//\%/%%}" -l -d rows -- "${cands[@]}"
+            elif (( group )) && [[ "$header" == *$'\n'* ]]; then
+                compadd -U -V "liquifai-$group" -x "${header//\%/%%}"  # notes alone: what is typed, what is missing
+            fi
             (( ${#hidden} )) && compadd -U -n -V "liquifai-$group" -- "${hidden[@]}"
             cands=() rows=() hidden=()
             header="${item#?}"
             group=$(( group + 1 ))
+        elif (( group )) && [[ "$item" == $'\036'* ]]; then
+            header+=$'\n'"${item#?}"
         elif (( group )) && [[ "$item" == *$'\t'* ]]; then
             if [[ -n "${item#*$'\t'}" ]]; then
                 cands+=("${item%%$'\t'*}")
@@ -328,7 +357,7 @@ _{prog}_completion() {
     # `${(F)words}` joins the word array with NEWLINES so a value with embedded
     # spaces (e.g. a name "Test Script VB") survives transport as one token.
     response=("${(@f)$(env COMP_WORDS=\"${(F)words}\" \\
-        COMP_CWORD=$((CURRENT-1)) LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \\
+        COMP_CWORD=$((CURRENT-1)) LIQUIFAI_COMPLETE_WIRE=2 LIQUIFAI_COMPLETE_SHELL=zsh COLUMNS="$COLUMNS" \\
         liquifai-complete {prog} 2>/dev/null)}")
     if (( ${#response[@]} == 0 )); then
         _files
@@ -452,7 +481,9 @@ _liquifai_alias_complete() {
     local merged="${(F)merged_arr}"
     local cword=$((CURRENT + prefix_len - 2))
     local -a response
-    response=("${(@f)$(env COMP_WORDS="$merged" COMP_CWORD="$cword" LIQUIFAI_COMPLETE_WIRE=2 COLUMNS="$COLUMNS" \
+    response=("${(@f)$(env COMP_WORDS="$merged" COMP_CWORD="$cword" \
+        LIQUIFAI_COMPLETE_WIRE=2 LIQUIFAI_COMPLETE_SHELL=zsh \
+        COLUMNS="$COLUMNS" \
         liquifai-complete "$app" 2>/dev/null)}")
     if (( ${#response[@]} == 0 )); then
         _files
