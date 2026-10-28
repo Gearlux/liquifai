@@ -15,9 +15,9 @@ from __future__ import annotations
 import io
 import os
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Set, Tuple
 
 from liquifai.grammar import (
     GLOBAL_FLAG_SPECS,
@@ -111,16 +111,44 @@ def complete(app: "LiquifyApp", words: List[str], cword: int) -> List[str]:
     return complete_from_tree(tree.serialize_app(app), words, cword)
 
 
-#: One row of the option listing: a candidate and the line shown for it — ``""`` for a spelling that completes but
-#: shares another spelling's row (``-c`` beside ``-c, --config PATH``).
+#: One row of the listing: a candidate and the line shown for it. A spelling that completes but shares another
+#: spelling's row (``-c`` beside ``-c, --config PATH``) has the line ``""``; a line that is no candidate (an argument
+#: already typed, or still missing) has the candidate ``""``.
 ListingRow = Tuple[str, str]
 #: A group of the listing: its header and its rows.
 ListingGroup = Tuple[str, List[ListingRow]]
-#: The groups a second TAB shows at an option position: the global options, then the command's own.
+#: The groups a second TAB shows: the commands, the command's arguments, the command's own options, the global ones.
 Listing = List[ListingGroup]
 
-#: The header of the global options' group; the command's group is ``options of <app> <command path>``.
+#: The header of the global options' group; the others are ``commands of <app> <sub-app …>``, ``arguments of <app>
+#: <command path>`` and ``options of <app> <command path>``.
 GLOBAL_HEADER = "global options"
+#: The help of a script command's config slot (``<config>``) in the arguments group.
+CONFIG_HELP = "the YAML config it runs"
+#: Marks the argument to type next, in place of the row's two-space indent.
+NEXT_MARK = "▸ "
+
+#: What a piece of a row is, which decides its colour.
+Role = Literal["title", "command", "option", "metavar", "given", "missing", "help"]
+#: Each role's terminal colour (SGR codes): titles bold cyan, commands blue, options bold in the terminal's own
+#: colour, a value's placeholder dim cyan, a typed argument green, a missing one yellow, help dim (user choice
+#: 2026-10-28; the palette of ``--help``, commands set apart in blue).
+COLOURS: Dict[Role, str] = {
+    "title": "1;36",
+    "command": "34",
+    "option": "1",
+    "metavar": "2;36",
+    "given": "32",
+    "missing": "33",
+    "help": "2",
+}
+#: A run of text and its role (None: no colour).
+_Piece = Tuple[str, Optional[Role]]
+
+
+def _paint(text: str, role: Optional[Role], colour: bool) -> str:
+    return f"\x1b[{COLOURS[role]}m{text}\x1b[0m" if colour and role is not None and text else text
+
 
 #: A listing row's spelling column is as wide as the widest spelling, but never wider than this.
 _LEFT_MAX = 40
@@ -128,16 +156,24 @@ _LEFT_MAX = 40
 
 @dataclass
 class _OptionList:
-    """What the walk knew when its candidates are options alone: whose, and each spelling's dotted path."""
+    """What the walk knew when it made the candidates: the node and command they belong to, what was typed."""
 
     #: The tree node the command lives in.
     node: Dict[str, Any]
     #: The command, or None before one is typed (the global options alone).
     cmd_name: Optional[str] = None
-    #: ``<app> <sub-app ...> <command>``, the command group's name.
+    #: ``<app> <sub-app ...> <command>``, the command's groups' name.
     path: str = ""
     #: ``--flag`` → dotted path, for a config on the line whose keys re-collapse the spellings; None: the cache's.
     flag_paths: Optional[Dict[str, str]] = None
+    #: ``<app> <sub-app ...>`` when the node's command and sub-app names are among the candidates (a bare prompt).
+    commands_of: Optional[str] = None
+    #: The positionals typed, in order (a script command's config left out).
+    typed: List[str] = field(default_factory=list)
+    #: The positionals given in their ``--flag`` / ``key=value`` spelling.
+    given_by_flag: Set[str] = field(default_factory=set)
+    #: A script command's config on the line, as typed; None while it is still to come.
+    config: Optional[str] = None
 
 
 def complete_with_listing(
@@ -147,20 +183,26 @@ def complete_with_listing(
     width: int = 80,
     lazy_refresh: Optional[Callable[..., None]] = None,
     force_refresh: bool = False,
+    colour: bool = False,
+    codes_count: bool = False,
 ) -> Tuple[List[str], Optional[Listing]]:
     """The candidates :func:`complete_from_tree` returns, and the grouped listing a second TAB shows for them.
 
-    The listing exists only where the candidates are options alone and more than one — never beside command names,
-    a positional's values, config files or an option's value. Its groups hold exactly the candidates, in their
-    order: the global options (``grammar.GLOBAL_FLAG_SPECS``, one row per option, its help beside it), then the
-    command's own (its signature's ``Args:`` help; a config's keys with none). Rows are cut to ``width - 1``.
+    The listing exists wherever more than one candidate is offered but at an option's value. Its groups hold exactly
+    the candidates: the commands and sub-apps (their first docstring line), the command's arguments — each typed one
+    with its value, each missing one with its help, the next one's values or config files under it — the command's
+    own options (its signature's ``Args:`` help and its default; a config's keys with none), then the global options
+    (``grammar.GLOBAL_FLAG_SPECS``, one row per option, its help beside it). Rows are cut to ``width - 1`` visible
+    characters. With ``colour`` each title and piece of a row carries its colour (:data:`COLOURS`); the text is the
+    same once the codes are taken out. ``codes_count`` (zsh, which measures a row's codes as characters) counts the
+    codes against ``width`` too, so the row still fits where zsh measures it.
     """
     width = max(width, 20)
     found: List[_OptionList] = []
     candidates = _complete(tree, words, cword, lazy_refresh, force_refresh, found)
-    if not found or len(candidates) < 2 or not all(c.startswith("-") for c in candidates):
+    if not found or len(candidates) < 2:
         return candidates, None
-    return candidates, _listing(candidates, found[0], width)
+    return candidates, _listing(candidates, found[0], width, colour, codes_count)
 
 
 def complete_from_tree(
@@ -254,7 +296,9 @@ def _complete(
         # argument hint / config files / flags first, the names after.
         default = cur.get("default")
         takes_args = bool(default) and (default in cur["script_cmds"] or (cur.get("positionals") or {}).get(default))
+        level = _command_path(tree, parsed[: walk.args_index], None)
         if takes_args and len(parsed) == walk.args_index:
+            mine: Optional[List[_OptionList]] = [] if found is not None else None
             own = _command_candidates(
                 cur,
                 str(default),
@@ -267,9 +311,14 @@ def _complete(
                 app_name,
                 lazy_refresh,
                 force_refresh,
-                None,
+                None if mine is None else (mine, f"{level} {default}"),
             )
+            if found is not None:
+                found += mine or [_OptionList(node=cur)]
+                found[-1].commands_of = level
             return own + [n for n in names if n not in own]
+        if found is not None:
+            found.append(_OptionList(node=cur, commands_of=level))
         return names
 
     return _command_candidates(
@@ -288,8 +337,9 @@ def _complete(
     )
 
 
-def _command_path(tree: Dict[str, Any], leading: List[str], cmd_name: str) -> str:
-    """``<app> <sub-app ...> <command>``: the canonical names of the sub-apps ``leading`` enters, then the command."""
+def _command_path(tree: Dict[str, Any], leading: List[str], cmd_name: Optional[str]) -> str:
+    """``<app> <sub-app ...> <command>``: the canonical names of the sub-apps ``leading`` enters, then the command
+    (none: the level alone)."""
     names = [str(tree.get("name", ""))]
     node = tree
     for tok in leading:
@@ -297,7 +347,7 @@ def _command_path(tree: Dict[str, Any], leading: List[str], cmd_name: str) -> st
         if sub is not None:
             node = sub
             names.append(str(sub.get("name", tok)))
-    return " ".join([*names, cmd_name])
+    return " ".join([*names, cmd_name] if cmd_name else names)
 
 
 def _typed_positionals(cur: Dict[str, Any], cmd_name: str, parsed: List[str], args_index: int) -> Dict[str, str]:
@@ -468,9 +518,36 @@ def _command_candidates(
     # is typing a path (no flag starts with a path prefix), so the flags
     # surface only for an empty word. A plain @command has no config positional
     # and skips straight to its option flags below.
+    def listed(flag_paths: Optional[Dict[str, str]] = None) -> None:
+        """Hand the listing what this command's candidates are made of: what was typed, whose they are."""
+        if found is None:
+            return
+        tokens = list(parsed[args_index:])
+        if consumed_config and tokens:
+            tokens = tokens[1:]  # the config, shown in its own row
+        typed: List[str] = []
+        for tok in tokens:
+            if stops_positional(tok):
+                break
+            typed.append(tok)
+        names = list((cur.get("positionals") or {}).get(cmd_name, []))
+        config = (parsed[args_index] if args_index < len(parsed) else str(config_path)) if consumed_config else None
+        found[0].append(
+            _OptionList(
+                node=cur,
+                cmd_name=cmd_name,
+                path=found[1],
+                flag_paths=flag_paths,
+                typed=typed,
+                given_by_flag={p for p in names if p in used_keys},
+                config=config,
+            )
+        )
+
     if is_script_cmd and not consumed_config and not incomplete.startswith("-"):
         files = _file_candidates(incomplete, exts=["yaml", "yml"])
         flags = list(GLOBAL_FLAGS) + [f for f in signature_flags if _not_used(f)]
+        listed()
         return files + _filter_prefix(flags, incomplete)
 
     # Positional hints: when the cursor is at an unfilled positional slot, emit
@@ -576,64 +653,145 @@ def _command_candidates(
         flag_paths = {flag: path for path, flag in _flag_display_map(signature_paths + yaml_paths).items()}
     else:
         candidates.extend(f for f in signature_flags if _not_used(f))
-    if found is not None:
-        found[0].append(_OptionList(node=cur, cmd_name=cmd_name, path=found[1], flag_paths=flag_paths))
     # Prepend positional hint (if any) before flag candidates; _filter_prefix
     # naturally drops it when the user has started typing a non-matching prefix.
     if "," in incomplete and positional_hint and not positional_hint[-1].startswith("<"):
         return _list_candidates([v for v in positional_hint if not v.startswith("<")], incomplete)
+    listed(flag_paths)
     return _filter_prefix(positional_hint + candidates, incomplete)
 
 
-def _listing(candidates: List[str], options: _OptionList, width: int) -> Listing:
-    """Group ``candidates`` (options alone) into the global options and the command's own, a row each.
+def _listing(
+    candidates: List[str], options: _OptionList, width: int, colour: bool = False, codes_count: bool = False
+) -> Listing:
+    """Group ``candidates`` into the commands, the command's arguments, the command's own options and the global ones.
 
     A global option's spellings share one row (``-c, --config PATH``), shown at the first of them that is a
-    candidate; the others complete but show nothing. A command option's row carries its declared short spelling
-    and, when it takes a value, its name as the placeholder (``--port PORT``); a config's own key shows bare. The
-    spelling column is as wide as the widest spelling the command could offer, so rows keep their place as the
-    word is typed.
+    candidate; the others complete but show nothing. A command option's row carries its declared short spelling,
+    when it takes a value its name as the placeholder (``--port PORT``), and its default after the help; a config's
+    own key shows bare. The arguments group says each argument's state: a typed one with its value, a missing one as
+    ``<name>`` with its help, the next one marked ``▸`` with its values (or a script command's config files) indented
+    under it. The spelling column is as wide as the widest spelling the command could offer, so rows keep their place
+    as the word is typed.
     """
     visible = [spec for spec in GLOBAL_FLAG_SPECS if not spec.hidden]
     spec_of = {flag: spec for spec in visible for flag in spec.flags}
     cmd = options.cmd_name or ""
     node = options.node
-    docs = list((node.get("option_docs") or {}).get(cmd, []))
-    doc_of_path = {str(path): str(doc) for path, _flag, doc in docs}
-    flag_paths = options.flag_paths if options.flag_paths is not None else {str(f): str(p) for p, f, _d in docs}
+    docs = [list(entry) + ["", ""][len(entry) - 2 :] for entry in (node.get("option_docs") or {}).get(cmd, [])]
+    doc_of_path = {str(entry[0]): str(entry[2]) for entry in docs}
+    default_of_path = {str(entry[0]): str(entry[3]) for entry in docs if len(entry) > 3}
+    flag_paths = options.flag_paths if options.flag_paths is not None else {str(e[1]): str(e[0]) for e in docs}
     short_of = {param: letter for letter, param in ((node.get("option_shorts") or {}).get(cmd) or {}).items()}
     bools = set((node.get("signature_bool_flags") or {}).get(cmd, []))
+    aliases = set(node.get("sub_app_aliases") or [])
+    sub_apps = {name: sub for name, sub in (node.get("sub_apps") or {}).items() if name not in aliases}
+    command_help = {
+        **{n: str(s.get("description") or "") for n, s in sub_apps.items()},
+        **(node.get("command_docs") or {}),
+    }
+    names = set(node.get("commands") or []) | set(sub_apps) if options.commands_of is not None else set()
+    positional_help = (node.get("positional_docs") or {}).get(cmd, {})
+    is_script = bool(cmd) and cmd in (node.get("script_cmds") or [])
+    slots = (["config"] if is_script else []) + list((node.get("positionals") or {}).get(cmd, []))
 
-    def command_left(flag: str) -> str:
+    def command_left(flag: str) -> List[_Piece]:
         key = flag[2:]
-        left = f"-{short_of[key]}, {flag}" if key in short_of else flag
+        pieces: List[_Piece] = [(f"-{short_of[key]}, {flag}" if key in short_of else flag, "option")]
         path = flag_paths.get(flag)
         if path in doc_of_path and flag not in bools:
-            left += " " + key.rsplit(".", 1)[-1].upper().replace("-", "_")
-        return left
+            pieces.append((" " + key.rsplit(".", 1)[-1].upper().replace("-", "_"), "metavar"))
+        return pieces
 
-    lefts = [flag_display(spec) for spec in visible] + [command_left(str(f)) for _p, f, _d in docs]
+    def global_left(spec: Any) -> List[_Piece]:
+        spellings = ", ".join(sorted(spec.flags, key=len))
+        return [(spellings, "option"), (f" {spec.metavar}", "metavar")] if spec.metavar else [(spellings, "option")]
+
+    def option_help(flag: str) -> str:
+        path = flag_paths.get(flag, "")
+        help_text, default = doc_of_path.get(path, ""), default_of_path.get(path, "")
+        return f"{help_text} ({default})".strip() if default else help_text
+
+    lefts = [flag_display(spec) for spec in visible] + ["".join(t for t, _ in command_left(str(e[1]))) for e in docs]
+    lefts += list(names) + [f"<{slot}>" for slot in slots]
     left_w = min(max(len(left) for left in lefts), _LEFT_MAX)
 
-    def row(left: str, doc: str) -> str:
-        text = f"  {left:<{left_w}}  {doc}".rstrip()
-        return text if len(text) <= width - 1 else text[: width - 2] + "…"
+    def row(left: List[_Piece], doc: str = "", doc_role: Optional[Role] = "help", lead: str = "  ") -> str:
+        """``lead``, the spelling column padded to ``left_w``, two spaces, ``doc``: cut to ``width - 1`` visible
+        characters, each piece painted by its role."""
+        lead_role: Optional[Role] = "missing" if lead == NEXT_MARK else None
+        shown = sum(len(t) for t, _ in left)
+        pieces: List[_Piece] = [(lead, lead_role), *left]
+        if doc:
+            pieces += [(" " * max(left_w - shown, 0) + "  ", None), (doc, doc_role)]
+        out: List[str] = []
+        room = width - 1
+        for text, role in pieces:
+            codes = len(_paint(text, role, colour)) - len(text) if codes_count else 0
+            if len(text) + codes > room:  # cut: the row ends in "…", in the colour of the piece it cuts
+                keep = room - codes - 1
+                if keep >= 0:
+                    out.append(_paint(text[:keep] + "…", role, colour))
+                break
+            out.append(_paint(text, role, colour))
+            room -= len(text) + codes
+        return "".join(out).rstrip()
 
-    global_rows: List[ListingRow] = []
     command_rows: List[ListingRow] = []
-    shown: Set[str] = set()
+    values: List[str] = []
+    global_rows: List[ListingRow] = []
+    option_rows: List[ListingRow] = []
+    shown_specs: Set[str] = set()
     for cand in candidates:
         spec = spec_of.get(cand)
         if spec is not None:
-            global_rows.append((cand, "" if spec.dest in shown else row(flag_display(spec), spec.help)))
-            shown.add(spec.dest)
+            global_rows.append((cand, "" if spec.dest in shown_specs else row(global_left(spec), spec.help)))
+            shown_specs.add(spec.dest)
+        elif cand in names:
+            command_rows.append((cand, row([(cand, "command")], str(command_help.get(cand, "")))))
+        elif cand.startswith("-"):
+            option_rows.append((cand, row(command_left(cand), option_help(cand))))
         else:
-            command_rows.append((cand, row(command_left(cand), doc_of_path.get(flag_paths.get(cand, ""), ""))))
+            values.append(cand)
+
+    hints = [v for v in values if v.startswith("<") and v.endswith(">")]
+    offered = [v for v in values if v not in hints]
+    argument_rows: List[ListingRow] = []
+    typed = list(options.typed)
+    current_done = False
+    for slot in slots:
+        is_config = slot == "config" and is_script and not argument_rows
+        help_text = CONFIG_HELP if is_config else str(positional_help.get(slot, ""))
+        if is_config and options.config is not None:
+            argument_rows.append(("", row([(slot, "given")], options.config, "given")))
+        elif not is_config and slot in options.given_by_flag:
+            argument_rows.append(("", row([(slot, "given")], f"given as --{slot}", "given")))
+        elif not is_config and typed:
+            argument_rows.append(("", row([(slot, "given")], typed.pop(0), "given")))
+        elif not current_done:  # the next argument, marked: its hint, or its values under it
+            current_done = True
+            own = [h for h in hints if h == f"<{slot}>"]
+            marked = row([(f"<{slot}>", "missing")], help_text, lead=NEXT_MARK)
+            argument_rows.append((own[0], marked) if own else ("", marked))
+            argument_rows += [(h, row([(h, "missing")])) for h in hints if h not in own]
+            argument_rows += [(v, row([(f"  {v}", None)])) for v in offered]
+            hints, offered = [], []
+        else:
+            argument_rows.append(("", row([(f"<{slot}>", "missing")], help_text)))
+    argument_rows += [(v, row([(v, None)])) for v in hints + offered]  # values no slot claimed: still offered
+
+    def title(text: str) -> str:
+        return _paint(text, "title", colour)
+
     groups: Listing = []
-    if global_rows:
-        groups.append((GLOBAL_HEADER, global_rows))
     if command_rows:
-        groups.append((f"options of {options.path}", command_rows))
+        groups.append((title(f"commands of {options.commands_of}"), command_rows))
+    if argument_rows:
+        groups.append((title(f"arguments of {options.path}"), argument_rows))
+    if option_rows:
+        groups.append((title(f"options of {options.path}"), option_rows))
+    if global_rows:  # last: what every command takes (user correction 2026-10-28)
+        groups.append((title(GLOBAL_HEADER), global_rows))
     return groups
 
 

@@ -71,7 +71,9 @@ from .cache import (  # noqa: F401
 )
 from .discover import declared_liquifai_apps, discover_liquifai_apps  # noqa: F401
 from .engine import (  # noqa: F401
+    COLOURS,
     GLOBAL_HEADER,
+    NEXT_MARK,
     Listing,
     ListingGroup,
     ListingRow,
@@ -87,11 +89,14 @@ from .install import (  # noqa: F401
     install_script,
 )
 from .shells import (  # noqa: F401
+    COMPLETION_COLOURS,
     COMPLETION_LISTS,
     LISTING_WIRE,
     SHELLS,
     WIRE_HEADER,
+    CompletionColour,
     CompletionList,
+    completion_colour,
     completion_list_style,
     detect_shell,
     escape_candidate,

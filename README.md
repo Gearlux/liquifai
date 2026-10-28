@@ -24,7 +24,7 @@ Each topic has its own guide, and every guide has a runnable companion script in
 | [Global Flags](https://github.com/Gearlux/liquifai/blob/main/docs/global-flags.md) | Log control (`--level`, `--log-dir`, …), `--scope` / dimension flags, `--debug`, `--docs` | `global_flags_app.py` |
 | [Host Facts](https://github.com/Gearlux/liquifai/blob/main/docs/host-facts.md) | The `os` / `device` scopes and the injected `platform` namespace — `!scope:os=darwin` blocks and `${platform.os}` values | `host_facts_app.py` |
 | [Error Handling](https://github.com/Gearlux/liquifai/blob/main/docs/error-handling.md) | The typed `LiquifaiError` hierarchy and the CLI failure contract | `failure_contract.py` |
-| [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md) | Install, the grouped option listing, aliases, workspace-local setup, dynamic & dependent positional values | `completion_providers.py` |
+| [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md) | Install, the grouped listing of commands, arguments and options, aliases, workspace-local setup, dynamic & dependent positional values | `completion_providers.py` |
 | [Architecture Decisions](https://github.com/Gearlux/liquifai/blob/main/docs/architecture.md) | Why liquifai is shaped this way: the hand-rolled parser, out-of-process completion, the shared argv walk, who owns settability | — (records carry inline examples) |
 
 For everything at once, [`examples/pypeek/`](https://github.com/Gearlux/liquifai/tree/main/examples/pypeek)
@@ -239,7 +239,8 @@ They tune shell completion; none is needed to run an app.
 |---|---|---|
 | `LIQUIFAI_NO_LAZY_COMPLETE` | unset (refresh on) | `1`: stop a TAB from starting a background refresh. Without it, a TAB that finds a completion cache missing, outdated or stale detaches `<app> --refresh-completions` or `<app> --refresh-completion-value …`, and those run your value providers — a provider that queries a server queries it then. |
 | `LIQUIFAI_BG_REFRESH` | unset (off) | `1`: refresh stale value caches in the background after every successful command. |
-| `LIQUIFAI_COMPLETION_LIST` | `grouped` | `plain`: the second TAB shows the shell's own sorted list instead of the global options, then the command's own, each with its help (bash, zsh). |
+| `LIQUIFAI_COMPLETION_LIST` | `grouped` | `plain`: the second TAB shows the shell's own sorted list instead of the commands, arguments and options grouped, each with its help (bash, zsh). |
+| `LIQUIFAI_COMPLETION_COLOR` | `auto` | `never`: the grouped listing without colour; `always`: in colour even where `auto` would not. `auto` colours it unless `NO_COLOR` is set or the terminal is `dumb`. |
 
 ```bash
 export LIQUIFAI_NO_LAZY_COMPLETE=1   # TAB reads the caches and never starts anything

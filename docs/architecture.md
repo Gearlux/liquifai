@@ -963,3 +963,48 @@ print("\n".join(wire_lines(candidates, listing)))  # what liquifai-complete prin
 **What you may change.** The headers' wording (`engine.GLOBAL_HEADER`, the `options of` line), the row layout,
 the limits that hand the list back to readline. Do not let readline list after liquifai has drawn (the stray
 `--` line and a second prompt), and do not draw at a list that is not options alone.
+
+**Amendment (2026-10-28): every candidate list, and the arguments' state.** The user's first try was
+`annotaide <TAB><TAB>`: a bare prompt mixes command names, the default command's `<workspace>` and the options, and
+the listing — options alone — handed it to readline's sorted grid. The listing now exists wherever more than one
+candidate is offered but at an option's value, in the order the user chose: `commands of <app> <sub-app…>` (each
+command's first docstring line, each sub-app's description), `arguments of <app> <command>`, `global options`,
+`options of <app> <command>`. At the user's request the arguments group lists every positional — a typed one with
+its value, one given as its flag said so, a missing one as `<name>` with its `Args:` help, the next one's values or a
+script command's config files indented under it — and stays above the options, so the missing ones show after `--`
+too. Such a line is no candidate: `("", row)` in the listing, `\x1e<row>` on the wire; zsh folds those lines into its
+group's header (`compadd -X`, or `-x` for a group of notes alone). `CACHE_VERSION` 10 adds the node's
+`description`, `command_docs` and `positional_docs`.
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+  <version>                     its version
+global options
+  …
+```
+
+**Amendment (2026-10-28): colour, defaults, the next argument.** The user asked for colour, chose the palette of
+`--help` with the commands set apart in blue after seeing it on a dark and a light background, and asked for each
+value option's default and a mark on the next argument. A row is built from pieces, each with a role
+(`engine.Role`); `_paint` wraps a piece in its SGR code from `COLOURS` only when the listing is in colour, so the
+padding stays plain, the width and the cut at `width - 1` are counted on the visible text, and the listing with the
+codes removed equals the plain one (pinned). Colour is decided per TAB by `shells.completion_colour`:
+`LIQUIFAI_COMPLETION_COLOR=always|never`, else `auto` — no `NO_COLOR` (no-color.org) and a `TERM` that is set and not
+`dumb`; the wrapper's output goes to the terminal bash reads, so `TERM` is the terminal's. zsh prints the codes in
+`compadd -d` rows and `-X` titles as they are (measured), so both shells get the same rows. A flag (a `bool`) shows
+no `(False)` and an empty default nothing: they add noise, not information. `CACHE_VERSION` 11 adds the default to
+each `option_docs` row.
+
+```python
+complete_with_listing(tree, ["my-app", "fetch", "alpha", "--"], cword=3, colour=True)
+# arguments: "  \x1b[32mname\x1b[0m … \x1b[32malpha\x1b[0m", "\x1b[33m▸ \x1b[0m\x1b[33m<version>\x1b[0m …"
+```
+
+**Amendment (2026-10-28): the global options last; zsh's width.** The user corrected the order: the global options
+come after the command's own (`commands`, `arguments`, `options of …`, `global options`) — the first request had
+been read as an order. And zsh, measured, counts a row's colour codes as characters: a coloured row near the edge
+made it write `\x1b[ \x08` and garble the line. Its wrapper now says `LIQUIFAI_COMPLETE_SHELL=zsh`, and the cut counts
+the codes (`codes_count`), so a long row ends in `…` about twenty characters earlier in zsh; bash measures the visible
+text and keeps the full width.
