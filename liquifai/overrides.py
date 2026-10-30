@@ -17,7 +17,16 @@ import inspect
 import os
 from typing import AbstractSet, Any, Dict, List, Optional, Set, Tuple
 
-from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
+from confluid import (
+    accepts_any_key,
+    accepts_broadcast,
+    accepts_key,
+    deep_merge,
+    discover_boolean_scopes,
+    expand_dotted_keys,
+    load,
+    parse_value,
+)
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
 from confluid.report import ConfigurationReport
@@ -357,7 +366,9 @@ def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None
             data[head] = data.pop(head)
 
 
-def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> None:
+def warn_unused_overrides(
+    overrides: Dict[str, Any], report: ConfigurationReport, config_path: Optional["os.PathLike[str]"] = None
+) -> None:
     """Warn for each CLI override the materialization REPORT says matched nothing.
 
     This asks confluid instead of guessing: ``report.unused`` is authoritative
@@ -374,6 +385,15 @@ def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport
     expands to a top-level ``opt:`` mapping), a bare override is the key
     itself. A command that materializes nothing registers no candidates, so
     the check degrades to silence rather than to guessing.
+
+    A bare key that names a bare scope of the file at ``config_path``
+    (``--quick`` beside a ``!scope:quick`` block) is a scope the user meant to
+    switch on: its warning names ``--scope quick`` instead of the spelling
+    advice. Only a keyed dimension binds to ``--KEY VAL``; a bare scope gets no
+    flag of its own, because a ``--quick`` would then stop reaching a class's
+    ``quick`` parameter the moment the document gains a ``!scope:quick`` block
+    (``docs/architecture.md`` → host facts). The file is read raw only when a
+    bare key matched nothing, so a run whose overrides all landed pays nothing.
 
     Called from ``core.run_command`` after DI materializes and BEFORE the
     command body runs — a doomed multi-hour run gets its warning up front.
@@ -394,12 +414,24 @@ def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport
                 f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
                 f"('--{tail} <value>') or set it inside that object's config block."
             )
+        elif not dot and key in _bare_scopes(config_path):
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object accepts {key!r}. "
+                f"The configuration declares a scope {key!r}: to activate it, use `--scope {key}` (`-s {key}`)."
+            )
         else:
             logger.warning(
                 f"Override {key!r} matched nothing and was ignored: no configured object accepts "
                 f"{(tail or key)!r}. Check the spelling against the declared parameters "
                 f"(`--help` lists them)."
             )
+
+
+def _bare_scopes(config_path: Optional["os.PathLike[str]"]) -> Set[str]:
+    """The bare scopes (``!scope:NAME``) of ``config_path``, includes followed; none without a readable file."""
+    if config_path is None or not os.path.isfile(config_path):
+        return set()
+    return discover_boolean_scopes(load(config_path, until="raw"))
 
 
 def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:

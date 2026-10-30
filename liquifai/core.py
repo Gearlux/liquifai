@@ -1072,7 +1072,7 @@ class LiquifyApp:
         if context.cli_overrides:
             with confluid.collect_report() as report:
                 kwargs = _materialize_kwargs()
-            overrides.warn_unused_overrides(context.cli_overrides, report)
+            overrides.warn_unused_overrides(context.cli_overrides, report, context.config_path)
         else:
             kwargs = _materialize_kwargs()
         self._check_missing_arguments(func, kwargs)

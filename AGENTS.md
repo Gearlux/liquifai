@@ -116,6 +116,10 @@ project folder shadows the package.
 - An override that reached nothing is a WARNING, judged by `confluid.collect_report()` around DI
   and emitted before the command body runs. Never a local heuristic, never debug/trace.
   (`tests/test_override_broadcast.py::test_end_to_end_a_doomed_override_warns_from_the_real_run`)
+- A bare scope (`!scope:NAME`) gets NO implicit `--NAME` flag (only keyed dimensions bind, `--KEY VAL`): a
+  `--NAME` would stop reaching a class's `NAME` parameter once the document gains the block (§8's reason for
+  `--os`/`--device`). An unused bare `--NAME` naming one instead warns with `--scope NAME`, the file read raw
+  only on that path (user choice 2026-10-30). (`tests/test_unused_override_scope_hint.py`)
 - A token that matches no override form gets one warning per token (an `UnknownFlagError` under
   `strict_flags`). Making it an error by default needs the user's sign-off (TASKS.md).
   (`tests/test_override_grammar.py`)
