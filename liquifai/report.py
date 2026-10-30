@@ -76,6 +76,10 @@ def show_configuration(
         hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
         hierarchy = _fold_list_items(hierarchy, config_map)
         skip = {key.path for key in config_help.focused} if config_help is not None else set()
+        if config_help is not None and config_help.fed:  # a parameter a top-level key feeds is that key's row
+            hierarchy = {
+                path: entry for path, entry in hierarchy.items() if tuple(path.split(".")[-2:]) not in config_help.fed
+            }
         if layout == "lines":
             _render_lines(hierarchy, title, flowed=True, skip=skip, root=config_map)
         else:

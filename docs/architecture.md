@@ -1038,3 +1038,15 @@ titled by the keys that reach it and its class (`runnable.render (RenderViews)`)
 read_config_help(Path("catalog.yaml")).blocks
 # [('render_views', 'RenderViews'), ('runnable', 'BuildSignalStudioCatalog')]
 ```
+
+**Amendment (2026-10-30, last): a parameter is listed once.** With every parameter of a block listed, the catalog
+showed `--setup_datasets` with the config and `--datasets` with `runnable` — one setting under two names, since
+`datasets: !ref:setup_datasets`. The user ruled that the listing, not the YAML, removes the second: a block parameter
+a top-level key feeds — written as `!ref:<key>`, or not written by the block and named like a top-level key (which
+is broadcast into it) — is neither a candidate nor a row of its block (`ConfigHelp.fed`); `--help` drops it from its
+object's table by `(class, parameter)`. A parameter the block writes itself stays with the block.
+
+```python
+read_config_help(Path("catalog.yaml")).fed
+# {('BuildSignalStudioCatalog', 'datasets'), ('RenderViews', 'modes'), …}
+```
