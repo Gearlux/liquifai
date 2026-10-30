@@ -1548,7 +1548,7 @@ def test_run_docs_flag_renders_lines(iso_cache: Path, capsys: Any, monkeypatch: 
     root.run()
     out = capsys.readouterr().out
     assert "--path" in out and "Destination directory." in out
-    assert "Current/Default Value" not in out  # lines layout, not the table
+    assert "Current Value" not in out  # lines layout, not the table
 
 
 def test_background_refresh_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

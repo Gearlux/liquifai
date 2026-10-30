@@ -20,6 +20,7 @@ __all__ = [
     "LiquifaiError",
     "CommandDefinitionError",
     "ConfigNotFoundError",
+    "InvalidChoiceError",
     "MissingArgumentError",
     "MissingOptionValueError",
     "UnknownCommandError",
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
     from liquifai.exceptions import (
         CommandDefinitionError,
         ConfigNotFoundError,
+        InvalidChoiceError,
         LiquifaiError,
         MissingArgumentError,
         MissingOptionValueError,
@@ -80,6 +82,7 @@ def __getattr__(name: str) -> Any:
         "LiquifaiError",
         "CommandDefinitionError",
         "ConfigNotFoundError",
+        "InvalidChoiceError",
         "MissingArgumentError",
         "MissingOptionValueError",
         "UnknownCommandError",

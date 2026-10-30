@@ -11,6 +11,10 @@ All notable changes to liquifai are documented here. The format follows
 - **`script_command(config_keys=fn)`: keys a command adds to its configuration** — `fn` gets the loaded document
   (command-line keys applied) and returns `{key: value}`, merged in after the typed keys, before `--dump-config` /
   `--save-config` and before the objects are built. A command that forces a setting shows it in the dumped file.
+- **A choice parameter refuses a value outside its choices** — a command parameter typed `Literal["text", "json"]`
+  (or `Optional[...]` of one, or a union of `Literal`s) given `xml`, from the command line or a config key, stops the
+  command with `Error: my-app show: --plan_format must be one of text, json; got 'xml'` (`InvalidChoiceError`, exit
+  1) before it runs. It used to reach the command as typed. A type mixing a choice with an open type is not judged.
 - **`--dump-config` and `--save-config`: the configuration a run resolves to** — every setting of every class, the
   defaults the file leaves out included. `my-app run.yaml --dump-config` prints it and runs nothing;
   `--dump-config=PATH` writes it to `PATH` instead; `--save-config PATH` writes it and then runs. Includes, scopes,
@@ -30,10 +34,24 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **A bare `--scope NAME` the config does not declare is refused** — `my-app run cfg.yaml --scope vla` printed
+  nothing and ran as if no scope were typed (the default split); it now stops with `Error: cfg.yaml has no scope
+  'vla' (its scopes: quick, val)` before anything runs. A `--scope KEY=VAL` of a dimension the config never declares
+  still changes nothing.
 - **`--quick` beside a `!scope:quick` block names `--scope quick`** — a bare scope has no flag of its own, so
   `my-app run catalog.yaml --quick` ran the whole catalog with only the generic "Check the spelling" warning.
   The warning now ends "The configuration declares a scope 'quick': to activate it, use `--scope quick`
   (`-s quick`)."
+- **`--help` with a config lists the command's own options** — `my-app run job.yaml --help` shows `Options of run`
+  (`--dry_run  bool  False  …`) between the config's options and the objects' tables, in the same columns. They
+  were in no table: only the raw `Args:` text under the description named them. That `Args:` block is no longer
+  printed (the tables carry each parameter's help), a type reads `text | json` instead of `Literal` (confluid's
+  `type_label`), and a script command's `Any` parameter — the object its config binds, `runnable` — is not listed
+  as a `--runnable` flag, with or without a config.
+- **`--help` without a config titles and heads its table as with one** — `Options of <command>` with the columns
+  `Option`, `Type`, `Current Value`, `Description`, a text value quoted (`'text'`). It said `Command Configuration
+  Options` over `Option (Shortest Unique)`, `Current/Default Value` and `Documentation`.
+
 - **An app typed alone prints its help when its default command has nothing to run** — a default command whose
   argument only the command line can give (a config runner's `runnable`) used to end a bare `my-app` in
   `Error: my-app run: missing required argument 'runnable' — pass it as `--runnable <value>``. Anything typed

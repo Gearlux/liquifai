@@ -11,6 +11,7 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 | `UnknownFlagError` | `ValueError` | an app built with `strict_flags=True` got a CLI token that names no parameter of the command (and no top-level config key), or that matches no override form |
 | `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
 | `MissingOptionValueError` | `ValueError` | an option the command declares with a type other than `bool` was given without a value (`--name` alone, or another option right after it) |
+| `InvalidChoiceError` | `ValueError` | a parameter typed as a closed set (`Literal["text", "json"]`) got a value outside it, from the command line or a config key of its name |
 | `ConfigNotFoundError` | `FileNotFoundError` | the configuration file named on the CLI does not exist |
 | `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
 
@@ -47,6 +48,7 @@ When a command runs via `app.run()`:
 | Unknown flag under `strict_flags=True` | `UnknownFlagError` -> ``Error: myapp: unknown option 'custom_nod' — it names no parameter of the 'launch' command …`` | 1 |
 | Missing required argument | `MissingArgumentError` -> ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
 | Option without its value | `MissingOptionValueError` -> ``Error: myapp show: --name needs a value — pass it as `--name <value>` or `name=<value>` `` | 1 |
+| Value outside a choice | `InvalidChoiceError` -> ``Error: myapp show: --plan_format must be one of text, json; got 'xml'`` | 1 |
 | Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
 
 ## Runnable example
