@@ -138,6 +138,10 @@ project folder shadows the package.
   `layout="lines"`: same data. Help for an app's default command lists the other commands first.
   (`tests/test_core_extended.py::test_bare_help_lists_the_commands_even_when_a_default_command_answers_it`,
   `tests/test_completion.py::test_run_docs_flag_renders_lines`)
+- The app typed ALONE (empty argv) shows the help instead of running its default command when that command
+  has a parameter with no default that is not `@configurable` (`core.needs_typed_argument`, read on the
+  signature before bootstrap — nothing is built, no log folder made). Anything typed keeps the
+  `MissingArgumentError`. (`tests/test_missing_argument.py::TestABareDefaultCommand`)
 - Every text an app's author wrote reaches Rich ESCAPED (`rich.markup.escape`): the description,
   a docstring, every table cell, the command index — `[epochs=1]` is otherwise a style tag and
   vanishes. (`tests/test_command_scopes.py::test_help_text_keeps_square_brackets`)

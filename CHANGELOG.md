@@ -8,6 +8,10 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **An app typed alone prints its help when its default command has nothing to run** — a default command whose
+  argument only the command line can give (a config runner's `runnable`) used to end a bare `my-app` in
+  `Error: my-app run: missing required argument 'runnable' — pass it as `--runnable <value>``. Anything typed
+  (`my-app run`, a flag) still gets that error; a default command whose arguments have defaults still runs alone.
 - **A script command handed a config file that does not exist stops with one line** — `my-app train missing.yaml`
   prints `Error: Configuration file not found: missing.yaml` and exits 1. It used to warn `Ignoring unrecognized CLI
   token 'missing.yaml'` and run the command with no config. A `pkg://<distribution>/<path>` argument now names a
