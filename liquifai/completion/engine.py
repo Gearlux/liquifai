@@ -7,14 +7,12 @@ the :mod:`liquifai.completion.cache` MODULE (attribute access, so tests can
 patch ``cache.DEPENDENT_REFRESH_TTL`` etc. and this module sees it).
 
 Pure-stdlib module on the hot path; confluid is imported only inside
-``_resolve_override_keys`` (the config-present branch).
+:func:`~liquifai.completion.config_help.read_config_help` (the config-present branch).
 """
 
 from __future__ import annotations
 
-import io
 import os
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Set, Tuple
@@ -33,6 +31,7 @@ from liquifai.grammar import (
 from liquifai.walk import Nav, tokenize, walk_invocation
 
 from . import cache, tree
+from .config_help import ConfigHelp, read_config_help
 from .shells import SHELLS
 
 if TYPE_CHECKING:
@@ -174,6 +173,8 @@ class _OptionList:
     given_by_flag: Set[str] = field(default_factory=set)
     #: A script command's config on the line, as typed; None while it is still to come.
     config: Optional[str] = None
+    #: What that config says about its settings (its own keys and scopes first); None without a config.
+    config_help: Optional[ConfigHelp] = None
 
 
 def complete_with_listing(
@@ -518,7 +519,7 @@ def _command_candidates(
     # is typing a path (no flag starts with a path prefix), so the flags
     # surface only for an empty word. A plain @command has no config positional
     # and skips straight to its option flags below.
-    def listed(flag_paths: Optional[Dict[str, str]] = None) -> None:
+    def listed(flag_paths: Optional[Dict[str, str]] = None, config_help: Optional[ConfigHelp] = None) -> None:
         """Hand the listing what this command's candidates are made of: what was typed, whose they are."""
         if found is None:
             return
@@ -541,6 +542,7 @@ def _command_candidates(
                 typed=typed,
                 given_by_flag={p for p in names if p in used_keys},
                 config=config,
+                config_help=config_help,
             )
         )
 
@@ -638,6 +640,7 @@ def _command_candidates(
     # collapsed at serialize time (the stdlib-only fast path — no confluid).
     candidates = list(GLOBAL_FLAGS)
     flag_paths: Optional[Dict[str, str]] = None
+    config_help: Optional[ConfigHelp] = None
     resolved_config = _resolve_config_path(config_path) if (is_script_cmd and config_path is not None) else None
     if resolved_config is not None:
         # Local import: the module-level ``tree`` name is shadowed here by the
@@ -645,10 +648,15 @@ def _command_candidates(
         # already left the stdlib-only fast path (it reads the YAML).
         from .tree import _collapse_to_flags, _flag_display_map
 
+        # The command's own parameters and positionals are never the file's settings (``runnable`` is what ``run``
+        # takes); the docs are read only for a listing.
         try:
-            yaml_paths = _resolve_override_keys(resolved_config)
+            config_help = read_config_help(
+                resolved_config, exclude=signature_paths + cmd_positionals, with_docs=found is not None
+            )
         except Exception:
-            yaml_paths = []
+            config_help = None
+        yaml_paths = config_help.keys if config_help is not None else []
         candidates.extend(f for f in _collapse_to_flags(signature_paths + yaml_paths) if _not_used(f))
         flag_paths = {flag: path for path, flag in _flag_display_map(signature_paths + yaml_paths).items()}
     else:
@@ -657,7 +665,7 @@ def _command_candidates(
     # naturally drops it when the user has started typing a non-matching prefix.
     if "," in incomplete and positional_hint and not positional_hint[-1].startswith("<"):
         return _list_candidates([v for v in positional_hint if not v.startswith("<")], incomplete)
-    listed(flag_paths)
+    listed(flag_paths, config_help)
     return _filter_prefix(positional_hint + candidates, incomplete)
 
 
@@ -707,13 +715,32 @@ def _listing(
         spellings = ", ".join(sorted(spec.flags, key=len))
         return [(spellings, "option"), (f" {spec.metavar}", "metavar")] if spec.metavar else [(spellings, "option")]
 
+    config_help = options.config_help
+    focused = {key.path: key for key in config_help.focused} if config_help is not None else {}
+    config_docs = config_help.docs if config_help is not None else {}
+    config_values = config_help.values if config_help is not None else {}
+    switches = config_help.switches if config_help is not None else set()
+    blocks = [path for path, _ in config_help.blocks] if config_help is not None else []
+
+    def block_of(path: str) -> Optional[str]:
+        """The deepest ``!class:`` block ``path`` is a parameter of, or None."""
+        owners = [block for block in blocks if path.startswith(block + ".")]
+        return max(owners, key=len) if owners else None
+
+    scope_lefts = [f"-s {scope.activation}" for scope in config_help.scopes] if config_help is not None else []
+
     def option_help(flag: str) -> str:
         path = flag_paths.get(flag, "")
-        help_text, default = doc_of_path.get(path, ""), default_of_path.get(path, "")
+        if path in focused:
+            help_text, default = focused[path].help, focused[path].value
+        else:
+            help_text = doc_of_path.get(path) or config_docs.get(path, "")
+            default = default_of_path.get(path, "") or ("" if path in switches else config_values.get(path, ""))
         return f"{help_text} ({default})".strip() if default else help_text
 
     lefts = [flag_display(spec) for spec in visible] + ["".join(t for t, _ in command_left(str(e[1]))) for e in docs]
-    lefts += list(names) + [f"<{slot}>" for slot in slots]
+    lefts += list(names) + [f"<{slot}>" for slot in slots] + scope_lefts
+    lefts += [flag for flag, path in flag_paths.items() if path in focused]
     left_w = min(max(len(left) for left in lefts), _LEFT_MAX)
 
     def row(left: List[_Piece], doc: str = "", doc_role: Optional[Role] = "help", lead: str = "  ") -> str:
@@ -741,6 +768,8 @@ def _listing(
     values: List[str] = []
     global_rows: List[ListingRow] = []
     option_rows: List[ListingRow] = []
+    focused_rows: Dict[str, ListingRow] = {}
+    block_rows: Dict[str, List[ListingRow]] = {}
     shown_specs: Set[str] = set()
     for cand in candidates:
         spec = spec_of.get(cand)
@@ -749,6 +778,11 @@ def _listing(
             shown_specs.add(spec.dest)
         elif cand in names:
             command_rows.append((cand, row([(cand, "command")], str(command_help.get(cand, "")))))
+        elif cand.startswith("-") and flag_paths.get(cand) in focused:
+            focused_rows[str(flag_paths[cand])] = (cand, row(command_left(cand), option_help(cand)))
+        elif cand.startswith("-") and block_of(flag_paths.get(cand, "")) is not None:
+            owner = str(block_of(flag_paths[cand]))
+            block_rows.setdefault(owner, []).append((cand, row(command_left(cand), option_help(cand))))
         elif cand.startswith("-"):
             option_rows.append((cand, row(command_left(cand), option_help(cand))))
         else:
@@ -788,8 +822,19 @@ def _listing(
         groups.append((title(f"commands of {options.commands_of}"), command_rows))
     if argument_rows:
         groups.append((title(f"arguments of {options.path}"), argument_rows))
+    if config_help is not None:  # the settings the config's author wrote first, in the file's order
+        source = options.config or config_help.source
+        own_rows = [focused_rows[key] for key in focused if key in focused_rows]
+        if own_rows:
+            groups.append((title(f"options of {source}"), own_rows))
+        scope_rows = [("", row([(f"-s {scope.activation}", "option")], scope.help)) for scope in config_help.scopes]
+        if scope_rows:
+            groups.append((title(f"scopes of {source}"), scope_rows))
     if option_rows:
         groups.append((title(f"options of {options.path}"), option_rows))
+    for path, name in config_help.blocks if config_help is not None else []:  # a group per !class: block, by depth
+        if block_rows.get(path):
+            groups.append((title(f"{path} ({name})"), block_rows[path]))
     if global_rows:  # last: what every command takes (user correction 2026-10-28)
         groups.append((title(GLOBAL_HEADER), global_rows))
     return groups
@@ -840,41 +885,3 @@ def _file_candidates(incomplete: str, exts: Optional[List[str]]) -> List[str]:
         if exts is None or any(entry.endswith("." + e) for e in exts):
             out.append(full)
     return out
-
-
-def _resolve_override_keys(config_path: Path) -> List[str]:
-    """Walk ``config_path`` and return dotted keys for ``--<key>`` overrides.
-
-    Also surfaces scope-dimension keys (any ``KEY`` mentioned by a
-    ``!scope:KEY=VAL`` block) so the implicit ``--KEY VAL`` activation form
-    completes alongside config overrides.
-
-    Lazily imports confluid so the fast path stays ~stdlib-only when no
-    config is on the command line.
-    """
-    import confluid
-
-    buf_out, buf_err = io.StringIO(), io.StringIO()
-    with redirect_stdout(buf_out), redirect_stderr(buf_err):
-        raw = confluid.load(config_path, until="raw")
-        dimensions = confluid.discover_dimensions(raw)
-        cfg = confluid.load(raw, until="document")
-    keys: List[str] = list(dimensions)
-    _walk_keys(cfg, prefix="", out=keys)
-    return sorted(set(keys))
-
-
-def _walk_keys(obj: Any, prefix: str, out: List[str], depth: int = 0, max_depth: int = 8) -> None:
-    if depth > max_depth:
-        return
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if not isinstance(k, str) or k.startswith("_"):
-                continue
-            full = f"{prefix}.{k}" if prefix else k
-            out.append(full)
-            _walk_keys(v, full, out, depth + 1, max_depth)
-        return
-    kwargs = getattr(obj, "kwargs", None)
-    if isinstance(kwargs, dict):
-        _walk_keys(kwargs, prefix, out, depth + 1, max_depth)

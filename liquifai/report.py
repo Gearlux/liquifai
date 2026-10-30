@@ -1,9 +1,10 @@
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
 
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from liquifai.completion.config_help import ConfigHelp
 from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
 
 #: How a command's options are rendered: the Rich grid (``--help``) or one
@@ -20,6 +21,7 @@ def show_configuration(
     positionals: Optional[List[str]] = None,
     shorts: Optional[Dict[str, str]] = None,
     hidden: Optional[List[str]] = None,
+    config_help: Optional[ConfigHelp] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
@@ -56,19 +58,28 @@ def show_configuration(
 
     Every text a command's author wrote (docs, types, values) is printed ESCAPED: help is
     rendered through Rich markup, where ``[epochs=1]`` reads as a style tag and vanishes.
+
+    ``config_help`` (what the config on the command line says about its settings) puts the
+    file's own top-level keys and its scopes first, each in a block of its own, in file order —
+    the groups a TAB listing shows; a flowed option those keys spell is left out of the table
+    below them. A list of objects is one row (``--datasets``), never a row per field of each item.
     """
     from confluid import get_hierarchy, get_hierarchy_from_instance
 
     pos_names = list(positionals or [])
     _render_positionals(target, pos_names, layout)
     pos_names += list(hidden or [])
+    if config_help is not None:
+        _render_config_help(config_help, layout)
 
     if _looks_like_flowed_graph(config_map):
         hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
+        hierarchy = _fold_list_items(hierarchy, config_map)
+        skip = {key.path for key in config_help.focused} if config_help is not None else set()
         if layout == "lines":
-            _render_lines(hierarchy, title, flowed=True)
+            _render_lines(hierarchy, title, flowed=True, skip=skip, root=config_map)
         else:
-            _render_flowed_table(hierarchy, title)
+            _render_flowed_table(hierarchy, title, skip=skip, root=config_map)
         return
 
     if layout == "lines":
@@ -157,36 +168,156 @@ def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout)
     console.print(table)
 
 
-def _render_flowed_table(hierarchy: Dict[str, Any], title: str) -> None:
-    """Render the flowed-instance hierarchy with shortest-unique paths and a host-class column."""
+def _render_config_help(config_help: ConfigHelp, layout: HelpLayout) -> None:
+    """The config's own top-level keys, then its scopes — each with its help, in the file's order."""
+    console = Console()
+    source = config_help.source
+    if layout == "lines":
+        if config_help.focused:
+            console.print(f"\n[bold cyan]Options of {escape(source)}[/bold cyan]")
+            flag_w = max(len(key.path) + 2 for key in config_help.focused)
+            for key in config_help.focused:
+                value = f"[green]= {escape(key.value)}[/green]  " if key.value else ""
+                console.print(
+                    f"  [bold white]{f'--{key.path}'.ljust(flag_w)}[/bold white]  {value}[dim]{escape(key.help)}[/dim]"
+                )
+        if config_help.scopes:
+            console.print(f"\n[bold cyan]Scopes of {escape(source)}[/bold cyan]")
+            scope_w = max(len(scope.activation) + 3 for scope in config_help.scopes)
+            for scope in config_help.scopes:
+                spelling = f"-s {scope.activation}".ljust(scope_w)
+                console.print(f"  [bold white]{escape(spelling)}[/bold white]  [dim]{escape(scope.help)}[/dim]")
+        return
+    if config_help.focused:
+        table = Table(title=f"Options of {escape(source)}", box=None, show_header=True, header_style="bold cyan")
+        table.add_column("Option", style="bold white")
+        table.add_column("Current Value", style="green")
+        table.add_column("Description", style="dim white")
+        for key in config_help.focused:
+            table.add_row(escape(f"--{key.path}"), escape(key.value), escape(key.help))
+        console.print(table)
+    if config_help.scopes:
+        table = Table(title=f"Scopes of {escape(source)}", box=None, show_header=True, header_style="bold cyan")
+        table.add_column("Scope", style="bold white")
+        table.add_column("Description", style="dim white")
+        for scope in config_help.scopes:
+            table.add_row(escape(f"-s {scope.activation}"), escape(scope.help))
+        console.print(table)
+
+
+def _fold_list_items(hierarchy: Dict[str, Any], root: Any) -> Dict[str, Any]:
+    """Each list (or dict) of objects as ONE row — the parameter holding it, its value and its help.
+
+    The instance walk reports a field per item (``….datasets.0.MelodyDatasetFiles.dataset``); the
+    option a user types is the parameter (``--datasets``), whose help is its class's docstring.
+    """
+    from confluid import parse_param_docs
+
+    folded: Dict[str, Any] = {}
+    for path, entry in hierarchy.items():
+        parts = path.split(".")
+        cut = next((i for i, part in enumerate(parts) if i >= 2 and part.isdigit()), None)
+        if cut is None:
+            folded[path] = entry
+            continue
+        head = ".".join(parts[:cut])
+        if head in folded:
+            continue
+        host, value = _live_parameter(root, parts[:cut])
+        doc = parse_param_docs(type(host)).get(parts[cut - 1], "") if host is not None else ""
+        folded[head] = (type(value).__name__, value, doc)
+    return folded
+
+
+def _live_parameter(root: Any, parts: List[str]) -> Tuple[Any, Any]:
+    """``(the object holding the parameter, its value)`` at an instance-walk path, or ``(None, None)``.
+
+    A segment naming the object itself (its class or instance name, as the walk writes it) is
+    skipped; every other one steps into a mapping key, a list index or an attribute.
+    """
+    host: Any = None
+    current = root
+    for part in parts:
+        if isinstance(current, dict):
+            host, current = None, current.get(part)
+        elif isinstance(current, (list, tuple)) and part.isdigit():
+            host, current = None, current[int(part)] if int(part) < len(current) else None
+        elif current is None:
+            return None, None
+        elif part in (type(current).__name__, getattr(current, "name", None)) and host is not current:
+            host = current
+        else:
+            host, current = current, getattr(current, part, None)
+    return host, current
+
+
+def _render_flowed_table(
+    hierarchy: Dict[str, Any], title: str, skip: Optional[Set[str]] = None, root: Any = None
+) -> None:
+    """Render the flowed-instance hierarchy with shortest-unique paths: a table per object, the shallowest first.
+
+    Each table is titled by the object's path and class (``runnable (Builder)``), as the TAB listing's groups are.
+    A path whose shortest spelling is in ``skip`` (a key the config's own block shows) is left out."""
     from confluid import shortest_unique_paths
 
-    all_paths = list(hierarchy.keys())
-    display_map = shortest_unique_paths(all_paths)
+    display_map = shortest_unique_paths(list(hierarchy.keys()))
+    all_paths = [path for path in hierarchy if display_map[path] not in (skip or set())]
 
     console = Console()
-    table = Table(title=title, box=None, show_header=True, header_style="bold cyan")
-    table.add_column("Option", style="bold white")
-    table.add_column("Applies to", style="cyan")
-    table.add_column("Type", style="dim cyan")
-    table.add_column("Current Value", style="green")
-    table.add_column("Description", style="dim white")
+    console.print(f"[bold cyan]{escape(title)}[/bold cyan]")
+    for owner, paths in _by_owner(all_paths, display_map, root):
+        table = Table(title=escape(owner), box=None, show_header=True, header_style="bold cyan")
+        table.add_column("Option", style="bold white")
+        table.add_column("Type", style="dim cyan")
+        table.add_column("Current Value", style="green")
+        table.add_column("Description", style="dim white")
+        for path in paths:
+            type_str, value, doc = hierarchy[path]
+            table.add_row(
+                escape(f"--{display_map[path]}"), escape(str(type_str)), escape(_short_repr(value)), escape(doc or "")
+            )
+        console.print(table)
 
-    sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
 
-    for path in sorted_paths:
-        short_path = display_map[path]
-        type_str, value, doc = hierarchy[path]
-        # Host class is the second-to-last segment of the full path. For a
-        # path like "processor.DatasetProcessor.show_progress" the host is
-        # "DatasetProcessor".
-        parts = path.split(".")
-        host = parts[-2] if len(parts) >= 2 else ""
-        val_str = _short_repr(value)
-        table.add_row(
-            escape(f"--{short_path}"), escape(host), escape(str(type_str)), escape(val_str), escape(doc or "")
-        )
-    console.print(table)
+def _by_owner(paths: List[str], display_map: Dict[str, str], root: Any) -> List[Tuple[str, List[str]]]:
+    """``paths`` grouped by the object each is a parameter of — ``(title, paths)``, the shallowest object first,
+    then in the walk's order; each group's paths in flag order."""
+    groups: Dict[str, List[str]] = {}
+    depth: Dict[str, int] = {}
+    for path in paths:
+        owner, keys = _owner_title(root, path.split(".")[:-1])
+        groups.setdefault(owner, []).append(path)
+        depth.setdefault(owner, keys)
+    order = {owner: index for index, owner in enumerate(groups)}
+    return [
+        (owner, sorted(groups[owner], key=lambda p: display_map[p]))
+        for owner in sorted(groups, key=lambda o: (depth[o], order[o]))
+    ]
+
+
+def _owner_title(root: Any, parts: List[str]) -> Tuple[str, int]:
+    """``("<path> (<class>)", depth)`` of the object at an instance-walk path, its class segments taken out.
+
+    The walk writes an object's class (or instance) name after the key that holds it
+    (``runnable.Builder.render.RenderViews``); the title is the keys a config writes, ``runnable.render
+    (RenderViews)``, and the depth is how many there are."""
+    keys: List[str] = []
+    name = ""
+    current = root
+    for part in parts:
+        if isinstance(current, dict):
+            keys.append(part)
+            current = current.get(part)
+        elif isinstance(current, (list, tuple)) and part.isdigit():
+            keys.append(part)
+            current = current[int(part)] if int(part) < len(current) else None
+        elif current is not None and (part == type(current).__name__ or not hasattr(current, part)):
+            name = part  # the object's own segment
+        else:
+            keys.append(part)
+            current = getattr(current, part, None)
+    path = ".".join(keys)
+    return (f"{path} ({name})" if path and name else path or name), len(keys)
 
 
 def _render_lines(
@@ -195,30 +326,53 @@ def _render_lines(
     *,
     flowed: bool,
     config_map: Optional[Dict[str, Any]] = None,
+    skip: Optional[Set[str]] = None,
+    root: Any = None,
 ) -> None:
     """Render code-extracted option docs one option per line (the ``--docs`` view).
 
     Same data as the tables (``confluid.get_hierarchy`` → type / default-or-value /
     docstring), shortest-unique flag form, value/markup escaped. Aligned columns
     keep it readable while staying a single physical line per option (greppable).
+    A flowed graph (``root``) is listed per object under its title, as the tables are.
     """
     from confluid import shortest_unique_paths
 
     console = Console()
     console.print(f"\n[bold cyan]{title}[/bold cyan]")
 
-    all_paths = list(hierarchy.keys())
+    display_map = shortest_unique_paths(list(hierarchy.keys()))
+    all_paths = [path for path in hierarchy if display_map[path] not in (skip or set())]
     if not all_paths:
         console.print("[dim]  (no configurable options)[/dim]")
         return
 
-    display_map = shortest_unique_paths(all_paths)
-    sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
-    flags = {p: f"--{display_map[p]}" for p in sorted_paths}
+    if root is not None:
+        grouped = _by_owner(all_paths, display_map, root)
+    else:
+        grouped = [("", sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p])))]
+    flags = {p: f"--{display_map[p]}" for p in all_paths}
     flag_w = max(len(f) for f in flags.values())
-    type_w = max((len(hierarchy[p][0]) for p in sorted_paths), default=0)
+    type_w = max((len(hierarchy[p][0]) for p in all_paths), default=0)
 
-    for path in sorted_paths:
+    for owner, group in grouped:
+        if owner:
+            console.print(f"[cyan]{escape(owner)}[/cyan]")
+        _render_line_rows(console, hierarchy, group, flags, flag_w, type_w, flowed, config_map)
+
+
+def _render_line_rows(
+    console: Console,
+    hierarchy: Dict[str, Any],
+    paths: List[str],
+    flags: Dict[str, str],
+    flag_w: int,
+    type_w: int,
+    flowed: bool,
+    config_map: Optional[Dict[str, Any]],
+) -> None:
+    """One ``--docs`` line per path: the flag, its type, its value, its help."""
+    for path in paths:
         type_str, default_or_value, doc = hierarchy[path]
         if flowed:
             value: Any = default_or_value

@@ -1008,3 +1008,33 @@ been read as an order. And zsh, measured, counts a row's colour codes as charact
 made it write `\x1b[ \x08` and garble the line. Its wrapper now says `LIQUIFAI_COMPLETE_SHELL=zsh`, and the cut counts
 the codes (`codes_count`), so a long row ends in `…` about twenty characters earlier in zsh; bash measures the visible
 text and keeps the full width.
+
+**Amendment (2026-10-30): a config's own settings first, with their help.** The user asked for the settings a
+config's author put at the top of the file — `setup_datasets`, `catalog_csv`, the `quick` scope — to come first,
+with help written as comments in the YAML. With a config on the line the listing adds `options of <config>` (the
+top-level keys written in that file, in file order, the command's own parameters left out) and `scopes of <config>`
+(its scope blocks, `-s <activation>`, rows that complete nothing) between the arguments and the command's options;
+`--help` and `--docs` render the same blocks before the flowed table, and fold a list of objects into one row
+(`--datasets`, its class's help) where the instance walk reported a field per item. The help is
+`completion.config_help.read_config_help`: a key's comment (`confluid.document_notes`), else the docstring of the
+parameter it feeds (`!ref:` or its name), read from source (`confluid.source_param_docs`) — importing the class took
+2.7 s, the whole TAB now takes 0.3 s. The TAB still imports confluid only once a config is on the line.
+
+```python
+read_config_help(Path("catalog.yaml"), exclude=["runnable"]).focused[0]
+# FocusedKey(path='setup_folders', help='The folders searched (below them too) …', value='[]')
+```
+
+**Amendment (2026-10-30, later): a group per `!class:` block, every parameter of its class.** The shortened flags
+(`runnable.workers` → `--workers`) hid which block a flag belongs to, and a parameter the config never writes
+(`overwrite`) was not offered at all. The user chose a group per block, titled `<path> (<Class>)`, the shallowest
+first, then in document order (one of three shown: per block, one indented group, depth-sorted flat), and the
+unwritten parameters too: `read_config_help` adds every constructor parameter of each block's class from its source
+(`confluid.source_params` — still no import; the catalog TAB stays at 0.28 s), with the written value or the
+literal default; a yes/no parameter shows none. `--help` splits its flowed table the same way, a table per object
+titled by the keys that reach it and its class (`runnable.render (RenderViews)`), the "Applies to" column gone.
+
+```python
+read_config_help(Path("catalog.yaml")).blocks
+# [('render_views', 'RenderViews'), ('runnable', 'BuildSignalStudioCatalog')]
+```

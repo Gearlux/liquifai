@@ -6,6 +6,19 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A config's own settings come first, with their help** — in the second TAB's listing and in `--help`. With
+  `my-app run catalog.yaml`, `options of catalog.yaml` lists the top-level keys written in that file and `scopes of
+  catalog.yaml` its scope blocks (`-s quick`), before the command's own options. A key's help is the comment above
+  it (or ending its line), else the help of the class parameter it feeds; a marker's keys show their class's
+  `Args:` help, which the listing used to leave blank. `--help` lists a list of objects as one row (`--datasets`)
+  instead of a row per field of each item.
+- **A group per `!class:` block, with every parameter of its class** — the listing's `runnable (BuildCatalog)`
+  group offers `--overwrite` even when the config never writes `overwrite:`, each parameter with its help and its
+  value or default. `--help` shows a table per object, titled by its path and class, instead of one table with an
+  "Applies to" column.
+
 ### Fixed
 
 - **An app typed alone prints its help when its default command has nothing to run** — a default command whose

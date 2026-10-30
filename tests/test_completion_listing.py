@@ -185,13 +185,16 @@ def test_a_row_wider_than_the_terminal_is_cut_with_an_ellipsis() -> None:
     assert _row("--console-level LEVEL", "Set console log level (overrides --level).")[:48] + "…" in lines
 
 
-def test_a_config_on_the_line_adds_its_keys_to_the_commands_group(tmp_path: Path) -> None:
+def test_a_config_on_the_line_lists_its_own_keys_first_and_the_commands_parameters_with_the_command(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "run.yaml"
-    config.write_text("layers: 3\nepochs: 5\n")
+    config.write_text("layers: 3\nepochs: 5  # how many passes\n")
     text = _text(_listing(f"listdemo train {config} --"))
-    assert text[text.index("options of listdemo train") : text.index("global options")] == [
+    assert text[text.index(f"options of {config}") : text.index("global options")] == [
+        f"options of {config}",
+        _row("--epochs", "how many passes (5)"),
         "options of listdemo train",
-        _row("--epochs"),
         _row("--layers LAYERS", "how many layers (1)"),
     ]
 
