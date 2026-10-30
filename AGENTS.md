@@ -21,7 +21,7 @@ Three ways to register:
 Modules: `core.py` (`LiquifyApp`, phase orchestration) · `walk.py` (tokenizer, the one argv
 walk) · `router.py` (its live-app adapter) · `flags.py` (global-flag parsing) · `grammar.py`
 (the flag table, token rules) · `overrides.py` · `di.py` · `host.py` (`os`/`device`) ·
-`context.py` · `report.py` (all Rich help) · `exceptions.py` · `introspection.py` (signature
+`context.py` · `dump.py` (the resolved configuration, `--dump-config`) · `report.py` (all Rich help) · `exceptions.py` · `introspection.py` (signature
 surgery for CLI and MCP wrappers) · `tools.py` (`make_mcp_tools`) · `completion/` (stdlib-only)
 · `completion_cli.py` (Rich glue for the completion flags) · `_fast_complete.py`
 (`liquifai-complete`) · `bridge/` (provisional SDK bridge, §6).
@@ -35,7 +35,8 @@ project folder shadows the package.
 - No app writes bootstrap code: `run()` configures loggair and loads the config.
 - `run()` runs in this order, and nothing is skipped or reordered: completion flags
   short-circuit → route (the walk) → help → parse globals → bind dimension flags → host facts →
-  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → execute.
+  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → write the resolved
+  configuration (`--dump-config` stops here) → execute.
   Logging is live only after `_bootstrap`, so a routing diagnostic is logged from `_prepare`
   (`_log_promotion_source`), never from the router.
 - `walk.walk_invocation` is the ONE descent, used by dispatch (`router._AppNav`) and completion
@@ -91,6 +92,11 @@ project folder shadows the package.
   not unannotated) given without a value raises `MissingOptionValueError`, named by `_command_path` in `core`
   — never the implicit `True` (user approval 2026-10-30). A switch, a config key and an unannotated parameter keep
   it. (`tests/test_option_values.py`)
+- `--dump-config[=PATH]` prints (or writes) the resolved configuration and runs NOTHING; `--save-config PATH` writes it
+  and runs (user choice 2026-10-30). Both write `dump.resolved_config_text`: the document after overrides, built as DI
+  builds it, never solidified, dumped `qualified=True`, the `platform:` block dropped when it holds only the detected
+  facts. `--dump-config`'s path is taken only after `=` (never the next token), and neither flag ever reaches the config; a missing
+  config, an empty `=` or a `--save-config` without a file is refused. (`tests/test_dump_config.py`) §14.
 - `strict_flags` stays OFF by default. When on, it judges only BARE keys, against the command's
   parameters plus the config's top-level keys MINUS the override keys themselves; dotted keys are
   left to `warn_unused_overrides`. (`tests/test_strict_flags.py`)

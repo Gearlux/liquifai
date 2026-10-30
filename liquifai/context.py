@@ -38,6 +38,11 @@ class LiquifyContext:
     # would a line written at the end of the file (``core.LiquifyApp._resolved_with_lines``).
     raw_document: Any = None
     bound_positionals: Dict[str, Any] = field(default_factory=dict)
+    # ``--dump-config[=PATH]`` / ``--save-config PATH`` (:mod:`liquifai.dump`): write the resolved configuration —
+    # printed when ``dump_config`` names no path — and, for ``--dump-config``, run nothing.
+    dump_config: bool = False
+    dump_config_path: Optional[Path] = None
+    save_config: Optional[Path] = None
 
     # The loaded logger instance
     logger: Any = None

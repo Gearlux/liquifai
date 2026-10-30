@@ -91,6 +91,29 @@ def demo() -> None:
         assert resolved[2] == 0, "--level must beat LOGGAIR_CONSOLE_LEVEL"
 
     print()
+    # --dump-config prints every setting of every class the config builds — the defaults it leaves out too — and
+    # runs nothing; --save-config PATH writes the same text and then runs the command.
+    with tempfile.TemporaryDirectory() as workdir:
+        config = os.path.join(workdir, "job.yaml")
+        with open(config, "w") as handle:
+            handle.write("job: !class:Job\n  name: nightly\n")
+        argv = ["run", "--config", config, "--retries", "5", "--dump-config"]
+        proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True, env=env)
+        assert "RESULT" not in proc.stdout, "--dump-config must not run the command"
+        assert "name: nightly" in proc.stdout and "retries: 5" in proc.stdout, proc.stdout
+        print("$ global-flags-demo run --config job.yaml --retries 5 --dump-config")
+        for ln in proc.stdout.splitlines():
+            print(f"  {ln}")
+
+        saved = os.path.join(workdir, "saved.yaml")
+        argv = ["run", "--config", config, "--save-config", saved]
+        proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True, env=env)
+        assert "RESULT job='nightly' retries=2" in proc.stdout, proc.stdout
+        with open(saved) as handle:
+            assert "retries: 2" in handle.read()
+        print("$ global-flags-demo run --config job.yaml --save-config saved.yaml   -> saved, then ran")
+
+    print()
     # --docs renders the same code-extracted option docs as --help, one per line.
     proc = subprocess.run(
         [sys.executable, __file__, "run", "--docs"], capture_output=True, text=True, check=True, env=env
