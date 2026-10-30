@@ -16,6 +16,7 @@ from liquifai.completion.config_help import ConfigHelp, read_config_help
 from liquifai.completion.tree import SCOPES_PARAM, _provider_arity
 from liquifai.config_scopes import ConfigFiles
 from liquifai.context import LiquifyContext, set_context
+from liquifai.dump import resolved_config_text, write_config_text
 from liquifai.exceptions import (
     CommandDefinitionError,
     ConfigNotFoundError,
@@ -677,6 +678,8 @@ class LiquifyApp:
         # OTHER exception is a bug and always propagates with its traceback.
         try:
             self._prepare(inv)
+            if self._write_resolved_config():
+                return None
             return self._execute(inv)
         except (LiquifaiError, confluid.ConfluidError) as exc:
             if flags & {"--debug", "-d"} or (self.context is not None and self.context.debug):
@@ -767,6 +770,9 @@ class LiquifyApp:
             debug=debug,
             included_paths=included_paths,
             host_facts=facts,
+            dump_config=globals_.dump_config,
+            dump_config_path=globals_.dump_config_path,
+            save_config=globals_.save_config,
             **log_overrides,
         )
         set_context(self.context)
@@ -794,6 +800,37 @@ class LiquifyApp:
         self._active_func = inv.target_func
         self._apply_overrides(final_tokens)
         self._warn_unbound_literals(inv)
+
+    def _write_resolved_config(self) -> bool:
+        """Phase 5b: ``--dump-config[=PATH]`` / ``--save-config PATH`` write the resolved configuration.
+
+        Runs after the overrides, so the text is what the command would build (:mod:`liquifai.dump`). ``--dump-config``
+        prints it (or writes ``PATH``) and returns True: the command does NOT run. ``--save-config`` writes its file and
+        returns False, so the run goes on; given both, both are written and nothing runs. A dump that stops judges the
+        command-line keys as a run would — one that reached nothing is warned about — since no run follows to do it;
+        a saved run leaves that to :meth:`run_command`, so the warning is not given twice.
+        """
+        context = self.context
+        if context is None or not (context.dump_config or context.save_config):
+            return False
+        flag = "--dump-config" if context.dump_config else "--save-config"
+        if context.config_path is None:
+            raise ConfigNotFoundError(
+                f"{flag}: no configuration file was given — name one (`{self.name} <config.yaml> {flag}`)."
+            )
+        if context.dump_config and context.cli_overrides:
+            with confluid.collect_report() as delivery:
+                text = resolved_config_text(context.config_data, context.host_facts)
+            overrides.warn_unused_overrides(context.cli_overrides, delivery, context.config_path)
+        else:
+            text = resolved_config_text(context.config_data, context.host_facts)
+        for path in (context.save_config, context.dump_config_path):
+            if path is not None:
+                context.logger.info(f"Wrote the resolved configuration to: {write_config_text(text, path)}")
+        if context.dump_config and context.dump_config_path is None:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        return context.dump_config
 
     def _log_promotion_source(self, inv: "Invocation", config_path: Optional[Path]) -> None:
         """Record WHERE a promoted config token was resolved from.

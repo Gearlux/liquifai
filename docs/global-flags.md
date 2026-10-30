@@ -13,6 +13,8 @@ derive from that single table, so they can never drift apart.
 | `--console-level LEVEL` | Console log level only; beats `--level` for that sink. |
 | `--file-level LEVEL` | File log level only; beats `--level` for that sink. |
 | `--log-dir DIR` | Redirect the log file directory. Omitted, `LOGGAIR_DIR` and the config files apply. |
+| `--dump-config`, `--dump-config=PATH` | Print the resolved configuration — every setting of every class — and stop; the command does not run. With `=PATH` it is written to `PATH` instead. See [below](#--dump-config-and---save-config--the-resolved-configuration). |
+| `--save-config PATH` | Write the resolved configuration to `PATH`, then run the command as usual. |
 | `--help` | Rich options table extracted from the command signature + docstrings. With a config named, also the **Scope Dimensions** block — see below. |
 | `--docs` | The same code-extracted documentation as `--help`, one option per line. |
 | `--install-completion [SHELL]` / `--show-completion [SHELL]` / `--refresh-completions` | Shell completion management (see [shell completion](shell-completion.md)). |
@@ -51,6 +53,49 @@ this resolution; liquifai only forwards the flags you typed. Run
 `python -m loggair` to see which layers a machine actually has and what they
 resolve to.
 
+## `--dump-config` and `--save-config` — the resolved configuration
+
+A config writes a few keys; a run uses every setting of every class it builds. `--dump-config` shows them all:
+
+```yaml
+# run.yaml
+epochs: 3
+runnable: !class:mypkg.Trainer
+  optimizer: !class:mypkg.Optimizer
+    lr: 0.01
+```
+
+```console
+$ my-app run.yaml --lr 0.05 --dump-config
+epochs: 3
+runnable:
+  _target_: mypkg.Trainer
+  optimizer:
+    _target_: mypkg.Optimizer
+    lr: 0.05
+    momentum: 0.9
+    nesterov: false
+  epochs: 3
+  seed: 0
+  run_name: demo
+lr: 0.05
+```
+
+The text is the document after its includes, the active scopes, the positionals and the command-line keys, every
+object built and listed with each constructor parameter, written or defaulted. Objects are built without
+`solidify()`, so nothing is downloaded or loaded. Each class is named by its importable path, so the file runs again
+as written: `my-app resolved.yaml` runs the same configuration. The `platform:` block of
+[host facts](host-facts.md) is left out unless the config wrote a value into it.
+
+| Command | What it does |
+|---|---|
+| `my-app run.yaml --dump-config` | prints the configuration, runs nothing |
+| `my-app run.yaml --dump-config=resolved.yaml` | writes `resolved.yaml` (its folder created), runs nothing |
+| `my-app run.yaml --save-config resolved.yaml` | writes `resolved.yaml`, then runs |
+
+A deferred slot (`_partial_: true`, built later by the run) shows only what it was given. A command with no config
+file refuses both flags: `Error: --dump-config: no configuration file was given — name one (...)`.
+
 ## `--help` with a config — the Scope Dimensions block
 
 When the command has a config (`my-app train cfg.yaml --help`), help also lists
@@ -82,4 +127,5 @@ data, different layout (`liquifai.report.show_configuration(..., layout="lines")
 ## Runnable example
 
 [`examples/global_flags_app.py`](../examples/global_flags_app.py) runs one app
-under different log levels and finishes with the greppable `--docs` layout.
+under different log levels, dumps and saves its resolved configuration, and finishes with the greppable `--docs`
+layout.

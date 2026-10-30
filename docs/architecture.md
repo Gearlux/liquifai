@@ -1050,3 +1050,53 @@ object's table by `(class, parameter)`. A parameter the block writes itself stay
 read_config_help(Path("catalog.yaml")).fed
 # {('BuildSignalStudioCatalog', 'datasets'), ('RenderViews', 'modes'), …}
 ```
+
+## 14. The resolved configuration is written by the run itself — `--dump-config`, `--save-config` (2026-10-30)
+
+**Context.** A config sets a few keys; the run uses many more — every constructor default, the values its includes
+and scopes supply, the top-level keys broadcast into classes, the command-line keys. Nothing showed that whole set
+before a run, and `--dump-config` typed anyway became the config key `dump_config: true` while the command ran.
+
+**Decision.** Two global flags (user choice 2026-10-30, of: dump and stop / dump and run / both as two flags).
+`--dump-config` prints the resolved configuration and stops; `--dump-config=PATH` writes it to `PATH` instead (the
+`=` form only, so the walk never takes a positional for its path). `--save-config PATH` writes it and runs the
+command. Both write the text of `dump.resolved_config_text`, made after the overrides (phase 5b,
+`LiquifyApp._write_resolved_config`): the document is built as DI builds a node (`confluid.load(document,
+context=document)`), without `solidify()`, and dumped with `confluid.dump(..., qualified=True)` — each class by its
+importable path, every declared parameter written or defaulted. The `platform:` block is dropped when it holds only
+the detected host facts. The text is the same whatever the command's `flow_mode`: a manual command (a config runner)
+builds its objects itself, so liquifai builds its own copy to dump.
+
+Rejected: dumping the command's DI kwargs (a manual command's are unbuilt markers, and a reload loses the top-level
+keys a run broadcasts); `--dump-config PATH` with a space (the path is indistinguishable from a positional or a
+stray override); writing the file from the command (each app would repeat it).
+
+**Consequences.**
+
+- A config runner builds its objects twice under `--save-config` — once to dump, once to run. Constructors only
+  store values (the lazy-initialization rule), so that is cheap; a class that breaks the rule pays it twice.
+- A dump that stops warns about a command-line key that reached nothing, as the run would; `--save-config` leaves
+  that to the run, so it is said once.
+- A deferred slot (`_partial_: true`) shows only what it was given: it is built later, by the run.
+- A parameter DI builds from its type annotation alone, with no key in the document, is not in the file.
+- Without a config file both flags are refused (`ConfigNotFoundError`): there is nothing to resolve.
+
+**Example.**
+
+```console
+$ my-app run.yaml --lr 0.05 --dump-config
+epochs: 3
+runnable:
+  _target_: mypkg.Trainer
+  optimizer:
+    _target_: mypkg.Optimizer
+    lr: 0.05
+    momentum: 0.9
+    nesterov: false
+  epochs: 3
+  seed: 0
+lr: 0.05
+```
+
+**What you may change.** The flags' help wording; where the written-file line is logged. Do not make the text depend
+on the command (it is the document's), do not solidify while dumping, and do not let either flag reach the config.

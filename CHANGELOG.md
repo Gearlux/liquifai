@@ -8,6 +8,11 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **`--dump-config` and `--save-config`: the configuration a run resolves to** — every setting of every class, the
+  defaults the file leaves out included. `my-app run.yaml --dump-config` prints it and runs nothing;
+  `--dump-config=PATH` writes it to `PATH` instead; `--save-config PATH` writes it and then runs. Includes, scopes,
+  positionals and command-line keys are applied, classes are named by their importable path, and the file runs again
+  as written. `--dump-config` used to become the config key `dump_config: true` while the command ran.
 - **A config's own settings come first, with their help** — in the second TAB's listing and in `--help`. With
   `my-app run catalog.yaml`, `options of catalog.yaml` lists the top-level keys written in that file and `scopes of
   catalog.yaml` its scope blocks (`-s quick`), before the command's own options. A key's help is the comment above

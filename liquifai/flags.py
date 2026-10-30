@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import confluid
 
+from liquifai.exceptions import MissingOptionValueError
 from liquifai.grammar import GLOBAL_FLAG_SPECS
 from liquifai.walk import Token
 
@@ -37,7 +38,9 @@ _PATH_DESTS = frozenset({"config_path", "log_dir"})
 
 #: The dests phase 3 actually consumes. Help/completion flags are handled by
 #: their own short-circuits in ``run()`` and must fall through to ``remaining``.
-_BOOTSTRAP_DESTS = frozenset({"config_path", "scopes", "log_level", "console_level", "file_level", "log_dir"})
+_BOOTSTRAP_DESTS = frozenset(
+    {"config_path", "scopes", "log_level", "console_level", "file_level", "log_dir", "save_config"}
+)
 
 
 @dataclass
@@ -57,6 +60,12 @@ class GlobalFlags:
     debug: bool = False
     #: Log knobs, keyed by their spec ``dest`` — passed straight to LiquifyContext.
     log_overrides: Dict[str, Any] = field(default_factory=dict)
+    #: ``--dump-config``: write the resolved configuration and run nothing.
+    dump_config: bool = False
+    #: ``--dump-config=PATH``: the file it goes to; ``None`` prints it.
+    dump_config_path: Path | None = None
+    #: ``--save-config PATH``: write the resolved configuration there, then run the command.
+    save_config: Path | None = None
     #: Tokens phase 3 did not consume, literals included, in order.
     remaining: List[Token] = field(default_factory=list)
 
@@ -85,6 +94,8 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
         for flag in spec.flags
     }
     debug_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "debug" for flag in spec.flags}
+    dump_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "dump_config" for flag in spec.flags}
+    save_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "save_config" for flag in spec.flags}
 
     i, n = 0, len(tokens)
     while i < n:
@@ -94,10 +105,27 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
             i += 1
             continue
 
+        flag, equals, path = tok.text.partition("=")
+        if flag in dump_flags:
+            if equals and not path:
+                raise MissingOptionValueError(
+                    f"{flag}= names no file — write `{flag}=PATH` to write it there, or `{flag}` alone to print it."
+                )
+            out.dump_config = True
+            out.dump_config_path = Path(path) if path else None
+            i += 1
+            continue
+        if tok.text in save_flags and (i + 1 == n or tokens[i + 1].literal or tokens[i + 1].is_flag_like()):
+            # Read as an override, a bare `--save-config` would become the config key `save_config: true` and the
+            # command would run with nothing saved.
+            raise MissingOptionValueError(f"{tok.text} needs a file: `{tok.text} PATH`.")
+
         spec = value_specs.get(tok.text)
         if spec is not None and i + 1 < n and not tokens[i + 1].literal:
             value = tokens[i + 1].text
-            if spec.dest == "config_path":
+            if spec.dest == "save_config":
+                out.save_config = Path(value)
+            elif spec.dest == "config_path":
                 out.config_path = Path(value)
             elif spec.dest == "scopes":
                 out.scopes.extend(value.split(","))
