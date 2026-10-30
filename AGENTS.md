@@ -83,6 +83,10 @@ project folder shadows the package.
 - A value for a bare key the active command declares `str` or `Optional[str]` is kept verbatim;
   everything else keeps YAML typing (`confluid.parse_value`). Do not grow this into a per-type
   coercion table or a new value spelling. (`tests/test_override_str_verbatim.py`)
+- A bare key the active command declares `bool` or `Optional[bool]` is a switch (`overrides.bool_param_names`, user
+  approval 2026-10-30): it takes the next word only when that word is a yes/no value (`true`/`false`/`yes`/`no`/
+  `on`/`off`/`0`/`1`), else it is `True` and the word is read on its own — the parser agrees with completion's
+  `signature_bool_flags`. Dotted keys and every other parameter keep `--key value`. (`tests/test_bool_flag_values.py`)
 - `strict_flags` stays OFF by default. When on, it judges only BARE keys, against the command's
   parameters plus the config's top-level keys MINUS the override keys themselves; dotted keys are
   left to `warn_unused_overrides`. (`tests/test_strict_flags.py`)

@@ -23,6 +23,7 @@ from confluid.registry import resolve_class
 from confluid.report import ConfigurationReport
 from loggair import get_logger
 
+from liquifai.exceptions import MissingOptionValueError
 from liquifai.grammar import looks_like_arg, looks_like_key
 
 logger = get_logger(__name__)
@@ -74,8 +75,77 @@ def str_param_names(func: Any) -> Set[str]:
     return names
 
 
+def bool_param_names(func: Any) -> Set[str]:
+    """Parameter names ``func`` annotates as ``bool`` (or ``Optional[bool]``): the command's switches.
+
+    A switch takes the word after it only when that word is a yes/no value (:func:`_takes_the_word`):
+    ``--dry-run name=x`` is ``dry_run=True`` plus the ``name`` override, never ``dry_run='name=x'`` — completion
+    already offers no value slot after a bool flag. Best-effort like :func:`str_param_names`.
+    """
+    if func is None:
+        return set()
+    try:
+        params = inspect.signature(func).parameters
+    except (ValueError, TypeError):  # pragma: no cover - defensive
+        return set()
+    names: Set[str] = set()
+    for name, param in params.items():
+        annotation = param.annotation
+        if annotation is bool or annotation == "bool":
+            names.add(name)
+            continue
+        args = getattr(annotation, "__args__", ())
+        if args and all(a is bool or a is type(None) for a in args) and bool in args:
+            names.add(name)
+    return names
+
+
+def valued_param_names(func: Any) -> Set[str]:
+    """Parameter names ``func`` declares with a type other than ``bool`` (``str``, ``int``, a list, …): an option of
+    one needs a value — ``--name`` alone would give it ``True`` (:func:`parse_override_args` refuses it). An
+    unannotated or ``Any`` parameter declares no type and keeps the implicit ``True``.
+    """
+    if func is None:
+        return set()
+    try:
+        params = inspect.signature(func).parameters
+    except (ValueError, TypeError):  # pragma: no cover - defensive
+        return set()
+    switches = bool_param_names(func)
+    return {
+        name
+        for name, param in params.items()
+        if param.annotation is not inspect.Parameter.empty
+        and param.annotation is not Any
+        and param.annotation != "Any"
+        and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in switches
+    }
+
+
+def _without_a_value(spelled: str, key: str, value_keys: AbstractSet[str]) -> Any:
+    """What ``--key`` with no value sets: ``True`` — but for a bare key naming an option that needs a value
+    (``value_keys``), which is refused."""
+    if "." not in key and key in value_keys:
+        raise MissingOptionValueError(f"{spelled} needs a value — pass it as `{spelled} <value>` or `{key}=<value>`")
+    return True
+
+
+def _takes_the_word(key: str, word: str, flag_keys: AbstractSet[str]) -> bool:
+    """Whether ``--key word`` gives ``key`` the value ``word``: always, but for a bare key naming a switch
+    (``flag_keys``), which takes it only when it reads as a yes/no value — ``true``/``false``/``yes``/``no``/
+    ``on``/``off`` or ``0``/``1``."""
+    if "." in key or key not in flag_keys:
+        return True
+    value = parse_value(word)
+    return isinstance(value, bool) or (isinstance(value, int) and value in (0, 1))
+
+
 def parse_override_args(
-    args: List[str], verbatim_keys: AbstractSet[str] = frozenset()
+    args: List[str],
+    verbatim_keys: AbstractSet[str] = frozenset(),
+    flag_keys: AbstractSet[str] = frozenset(),
+    value_keys: AbstractSet[str] = frozenset(),
 ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Tokenize ``args`` into an ``(overrides, deletions, dropped)`` triple.
 
@@ -99,6 +169,14 @@ def parse_override_args(
     exactly as typed instead of being coerced through ``confluid.parse_value`` — YAML
     typing is right for an untyped config override and wrong for declared text. A DOTTED
     key is never verbatim: it addresses a nested config object, not the signature.
+
+    ``flag_keys`` names the parameters the active command declares as ``bool`` (see :func:`bool_param_names`).
+    Such a BARE key takes the word after it only when that word is a yes/no value; otherwise the key is ``True``
+    and the word is read as a token of its own (``--dry-run name=x``).
+
+    ``value_keys`` names the parameters the active command declares with another type (see
+    :func:`valued_param_names`): such a BARE key given without a value raises
+    :class:`~liquifai.exceptions.MissingOptionValueError` instead of becoming ``True``.
 
     Any token that doesn't match a recognised form is collected into
     ``dropped`` (it is NOT applied). Callers surface these — a typo'd
@@ -137,11 +215,16 @@ def parse_override_args(
                 k, v = body.split("=", 1)
                 if k:
                     overrides[_normalize_key(k)] = _coerce(_normalize_key(k), v)
-            elif body and i + 1 < len(args) and not looks_like_arg(args[i + 1]):
+            elif (
+                body
+                and i + 1 < len(args)
+                and not looks_like_arg(args[i + 1])
+                and _takes_the_word(_normalize_key(body), args[i + 1], flag_keys)
+            ):
                 overrides[_normalize_key(body)] = _coerce(_normalize_key(body), args[i + 1])
                 i += 1
             elif body:
-                overrides[_normalize_key(body)] = True
+                overrides[_normalize_key(body)] = _without_a_value(arg, _normalize_key(body), value_keys)
             i += 1
             continue
 
@@ -162,11 +245,15 @@ def parse_override_args(
                 overrides[_normalize_key(key[:-1])] = False
                 i += 1
                 continue
-            if i + 1 < len(args) and not looks_like_arg(args[i + 1]):
+            if (
+                i + 1 < len(args)
+                and not looks_like_arg(args[i + 1])
+                and _takes_the_word(_normalize_key(key), args[i + 1], flag_keys)
+            ):
                 overrides[_normalize_key(key)] = _coerce(_normalize_key(key), args[i + 1])
                 i += 2
                 continue
-            overrides[_normalize_key(key)] = True
+            overrides[_normalize_key(key)] = _without_a_value(arg, _normalize_key(key), value_keys)
             i += 1
             continue
 

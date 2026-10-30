@@ -54,6 +54,11 @@ class MissingArgumentError(LiquifaiError, TypeError):
     """
 
 
+class MissingOptionValueError(LiquifaiError, ValueError):
+    """An option of a declared type other than ``bool`` was given without a value (``--name`` alone, or another
+    option right after it) — it would otherwise have received ``True``."""
+
+
 class ConfigNotFoundError(LiquifaiError, FileNotFoundError):
     """The requested configuration file does not exist.
 

@@ -26,6 +26,19 @@ a parameter under any spelling. Only **keys** are normalised — a URL or a nega
 keeps its hyphens, and the polarity suffix is read first, so `--default-nodes-` still means
 *false* rather than a key ending in a separator.
 
+**A `bool` parameter is a switch.** A parameter the command declares `bool` (or `Optional[bool]`) takes the word
+after it only when that word is a yes/no value — `true`, `false`, `yes`, `no`, `on`, `off`, `0` or `1`; any other
+word is read on its own, so a switch can stand anywhere on the line:
+
+```text
+my-app run c.yaml --dry-run name=x      ->  dry_run=True, and name=x applied
+my-app run c.yaml --dry-run false       ->  dry_run=False
+my-app run c.yaml --dry-run x           ->  dry_run=True, and the warning: Ignoring unrecognized CLI token 'x'
+```
+
+Every other key keeps the `--key value` form: `--count 3`, and a config key, which has no declared type
+(`--trainer.fast x` sets `trainer.fast` to `x`).
+
 ## How a value is typed
 
 An override value is read as YAML, so it arrives as the type it looks like:
