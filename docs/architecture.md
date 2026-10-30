@@ -1101,3 +1101,36 @@ lr: 0.05
 
 **What you may change.** The flags' help wording; where the written-file line is logged. Do not make the text depend
 on the command (it is the document's), do not solidify while dumping, and do not let either flag reach the config.
+
+## 15. A command adds keys to its configuration — `config_keys=` (2026-10-30)
+
+**Context.** `--dump-config` writes the configuration after the command line (§14), but a command may force a
+setting in its body: a trainer's `evaluate` verb sets `runnable.task = "test"` on the built object, so the dump
+showed the file's `task: fit`. Writing the key on the command line instead (`--runnable.task test`) is right only
+where the runnable takes a `task`; on one that does not, it is an undeclared attribute, warned about on every run.
+
+**Decision.** `script_command(config_keys=fn)` (user choice 2026-10-30, of: this / the consumer reading the config
+itself first / leave it documented). `_apply_command_keys` runs after `_apply_overrides` and before
+`_write_resolved_config`: it calls `fn` with the loaded document — the one the run builds, scopes resolved, so the
+function sees the class `--framework` picks — and merges the returned keys through `overrides.apply_overrides`.
+The function decides where a key belongs (`confluid.accepts_key`), so no key lands where nothing takes it.
+
+Rejected: the consumer loading the config before liquifai (a second load, and a second scope resolution that can
+drift from this one); appending the keys to the typed ones (they would be judged by the unused-override warning,
+which is about what the user typed).
+
+**Consequences.**
+
+- An added key wins over the same key typed: it is merged after them.
+- A `${…}` placeholder already resolved does not see an added key — the document is not resolved again.
+- A consumer using it needs a liquifai that has it: its floor rises with the release.
+
+**Example.**
+
+```python
+@app.script_command(name="evaluate", config_keys=lambda doc: {"runnable.task": "test"})
+def evaluate(runnable: Any = None) -> None: ...
+```
+
+**What you may change.** The function's signature may grow a second, optional argument (the typed positionals) if a
+command needs them. Do not merge the keys before the typed ones, and do not report them as typed keys.

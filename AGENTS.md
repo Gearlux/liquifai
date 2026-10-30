@@ -35,8 +35,8 @@ project folder shadows the package.
 - No app writes bootstrap code: `run()` configures loggair and loads the config.
 - `run()` runs in this order, and nothing is skipped or reordered: completion flags
   short-circuit → route (the walk) → help → parse globals → bind dimension flags → host facts →
-  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → write the resolved
-  configuration (`--dump-config` stops here) → execute.
+  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → the command's own keys
+  (`config_keys=`) → write the resolved configuration (`--dump-config` stops here) → execute.
   Logging is live only after `_bootstrap`, so a routing diagnostic is logged from `_prepare`
   (`_log_promotion_source`), never from the router.
 - `walk.walk_invocation` is the ONE descent, used by dispatch (`router._AppNav`) and completion
@@ -63,6 +63,10 @@ project folder shadows the package.
   the provider names for the typed words (`config_scopes`, the one reader) — never a list the
   command declares — and refuses one a file lacks before the body runs (`UnknownScopeError`).
   (`tests/test_command_scopes.py`) §12.
+- `script_command(config_keys=fn)` (user choice 2026-10-30): `_apply_command_keys` calls `fn` with the document after
+  the typed keys and merges what it returns through `overrides.apply_overrides` — after the typed keys, never into
+  `cli_overrides`, never re-resolving placeholders, never without a config file. A non-callable is refused at
+  decoration, a non-mapping result at run time (`CommandDefinitionError`). (`tests/test_command_config_keys.py`) §15.
 - A log flag the user did not type is forwarded as `None`. Never restate loggair's defaults and
   never read a `LOGGAIR_*` variable here.
   (`tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`) §9.
