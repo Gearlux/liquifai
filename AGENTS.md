@@ -87,6 +87,10 @@ project folder shadows the package.
   approval 2026-10-30): it takes the next word only when that word is a yes/no value (`true`/`false`/`yes`/`no`/
   `on`/`off`/`0`/`1`), else it is `True` and the word is read on its own — the parser agrees with completion's
   `signature_bool_flags`. Dotted keys and every other parameter keep `--key value`. (`tests/test_bool_flag_values.py`)
+- A bare key naming a parameter with a declared type other than `bool` (`overrides.valued_param_names`; not `Any`,
+  not unannotated) given without a value raises `MissingOptionValueError`, named by `_command_path` in `core`
+  — never the implicit `True` (user approval 2026-10-30). A switch, a config key and an unannotated parameter keep
+  it. (`tests/test_option_values.py`)
 - `strict_flags` stays OFF by default. When on, it judges only BARE keys, against the command's
   parameters plus the config's top-level keys MINUS the override keys themselves; dotted keys are
   left to `warn_unused_overrides`. (`tests/test_strict_flags.py`)

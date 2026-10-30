@@ -10,6 +10,7 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 | `UnknownScopeError` | `ValueError` | a typed `--scope` names no scope of a config file the command runs (`@command(config_files=...)`): the message names the file, the scope and the scopes it declares |
 | `UnknownFlagError` | `ValueError` | an app built with `strict_flags=True` got a CLI token that names no parameter of the command (and no top-level config key), or that matches no override form |
 | `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
+| `MissingOptionValueError` | `ValueError` | an option the command declares with a type other than `bool` was given without a value (`--name` alone, or another option right after it) |
 | `ConfigNotFoundError` | `FileNotFoundError` | the configuration file named on the CLI does not exist |
 | `UnsupportedShellError` | `ValueError` | a completion shell is not one of bash / zsh / fish |
 
@@ -45,6 +46,7 @@ When a command runs via `app.run()`:
 | Unknown command/group | `UnknownCommandError` -> `Unknown command or group` (or help when no default command exists) | 1 |
 | Unknown flag under `strict_flags=True` | `UnknownFlagError` -> ``Error: myapp: unknown option 'custom_nod' — it names no parameter of the 'launch' command …`` | 1 |
 | Missing required argument | `MissingArgumentError` -> ``Error: pypeek versions: missing required argument 'package' — pass it as `pypeek versions <package>` or `--package <value>`.`` | 1 |
+| Option without its value | `MissingOptionValueError` -> ``Error: myapp show: --name needs a value — pass it as `--name <value>` or `name=<value>` `` | 1 |
 | Any other exception | A bug — always propagates with its traceback, never converted to a clean exit | (Python default) |
 
 ## Runnable example

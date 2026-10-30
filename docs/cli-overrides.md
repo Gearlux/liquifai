@@ -9,7 +9,7 @@ config override. All forms interoperate in one invocation:
 | `--key=value` | `--trainer.lr=0.001` | equals form; dotted keys target nested blocks |
 | `key=value` | `model.dropout=0.2` | bare form, no dashes |
 | `--key+` / `--key-` | `--debug+` | polarity: explicit `True` / `False` |
-| `--key` | `--verbose` | implicit `True` |
+| `--key` | `--verbose` | implicit `True` — a switch or a config key; an option of another declared type needs a value |
 | `+key=value` | `+new_feature=true` | add a new key |
 | `~key` | `~trainer.stale` | delete the dotted key from the config |
 
@@ -38,6 +38,16 @@ my-app run c.yaml --dry-run x           ->  dry_run=True, and the warning: Ignor
 
 Every other key keeps the `--key value` form: `--count 3`, and a config key, which has no declared type
 (`--trainer.fast x` sets `trainer.fast` to `x`).
+
+**An option of another declared type needs a value.** `--name` alone — or `--name --dry-run`, another option right
+after it — would put `True` where the command declared text, a number or a list, so the command stops before it
+runs:
+
+```text
+Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>`
+```
+
+A switch, a config key and a parameter without a type annotation keep the implicit `True` (`--verbose`).
 
 ## How a value is typed
 

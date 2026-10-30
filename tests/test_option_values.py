@@ -18,14 +18,14 @@ from liquifai.overrides import parse_override_args, valued_param_names
 
 
 def test_the_options_that_need_a_value_are_the_typed_parameters_but_the_switches() -> None:
-    def command(
+    def command(  # type: ignore[no-untyped-def]  # `untyped` has no annotation on purpose
         dry_run: bool = False,
         name: str = "",
         label: Optional[str] = None,
         count: int = 0,
         nodes: Optional[List[str]] = None,
         anything: Any = None,
-        untyped=None,  # type: ignore[no-untyped-def]
+        untyped=None,
     ) -> None:
         return None
 
