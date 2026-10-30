@@ -186,6 +186,16 @@ def test_dump_config_builds_without_solidifying(
     assert SOLIDIFIED == []
 
 
+def test_dump_config_shows_the_defaults_of_a_slot_the_run_builds_later(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write(tmp_path, f"runnable: !class:{TRAINER}\n  optimizer: !lazy:{OPTIMIZER}\n    lr: 0.02\n")
+    app, _ = _app()
+    assert _run(app, monkeypatch, "run.yaml", "--dump-config") == 0
+    optimizer = yaml.safe_load(capsys.readouterr().out)["runnable"]["optimizer"]
+    assert optimizer == {"_target_": OPTIMIZER, "_partial_": True, "lr": 0.02, "momentum": 0.9, "nesterov": False}
+
+
 def test_dump_config_with_a_path_writes_the_file_and_runs_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
