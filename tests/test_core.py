@@ -27,7 +27,7 @@ def test_global_context_extraction(tmp_path: Path, monkeypatch: Any) -> None:
 
     # Create dummy config
     config_file = tmp_path / "test.yaml"
-    config_file.write_text("val: 1")
+    config_file.write_text("val: 1\ndebug: !scope:debug\n  val: 2\n")  # a typed bare scope must be declared
 
     @app.command()
     def check() -> None:

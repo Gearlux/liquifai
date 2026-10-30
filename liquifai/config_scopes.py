@@ -53,6 +53,30 @@ def offered(files: Sequence[Path]) -> Dict[str, List[str]]:
     return dict(sorted(found.items()))
 
 
+def check_declared(typed: Sequence[str], raw: object, path: Path) -> None:
+    """Refuse a typed BARE scope the config at ``path`` (read raw: ``raw``) does not declare.
+
+    A bare name must be a bare scope of the config or the name of one of its keyed dimensions (whose own bare-use
+    refusal is confluid's). A keyed ``dim=value`` is not judged here: an undeclared dimension is an inert no-op, so a
+    CLI can pass one to every config (confluid's §1), and a declared dimension's value is confluid's check.
+
+    Raises:
+        UnknownScopeError: naming the file, the scope and the scopes the file does declare.
+    """
+    import confluid
+
+    bare = [scope for scope in typed if scope and "=" not in scope]
+    if not bare:
+        return
+    values = confluid.discover_dimension_values(raw)
+    names = set(confluid.discover_boolean_scopes(raw)) | set(values)
+    for scope in bare:
+        if scope not in names:
+            keyed = {f"{key}={value}" for key, found in values.items() for value in found}
+            listed = ", ".join(sorted(set(confluid.discover_boolean_scopes(raw)) | keyed)) or "none"
+            raise UnknownScopeError(f"{display(path)} has no scope '{scope}' (its scopes: {listed})")
+
+
 def check_typed(typed: Sequence[str], files: Sequence[Path]) -> None:
     """Refuse a typed scope one of ``files`` does not declare — the command runs every one of them with it.
 

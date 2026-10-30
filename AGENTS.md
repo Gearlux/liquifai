@@ -58,7 +58,7 @@ project folder shadows the package.
   the document, and only the detected copy is filtered against the document's declared values,
   so a typed `--scope` keeps confluid's typo error. `--os`/`--device` stay ordinary overrides,
   never implicit dimension flags. No environment variable is set or read. (`tests/test_host.py`) §8.
-- A typed bare `--scope NAME` (no `=`) the script command's config does not declare — a bare scope or a keyed
+- A typed bare `--scope NAME` (no `=`) the config on the line (`<config>` or `-c`) does not declare — a bare scope or a keyed
   dimension's name, includes followed — is refused in `_prepare` right after the raw load
   (`config_scopes.check_declared`, `UnknownScopeError`, the file's scopes listed); a keyed `--scope KEY=VAL` of an
   undeclared dimension stays inert (confluid §1: matrainer passes `--scope framework=<name>` to every config). Host
