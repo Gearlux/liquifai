@@ -35,6 +35,10 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Breaking
 
+- **An option of a declared type other than `bool` needs a value** — `my-app show --name --dry-run` ran with
+  `name=True`, a text option holding `True` (an `int` or a list option the same); it now stops with
+  `Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>``, exit 1
+  (`MissingOptionValueError`). A switch, a config key and an unannotated parameter keep the implicit `True`.
 - **A `bool` parameter takes the word after it only when it is a yes/no value** (`true`/`false`/`yes`/`no`/`on`/
   `off`/`0`/`1`). `my-app run c.yaml --dry-run name=x` used to bind `dry_run='name=x'` and lose the `name` override
   without a warning; it now gives `dry_run=True` and applies `name=x`. Any other word after a switch is read on its
