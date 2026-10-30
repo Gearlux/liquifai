@@ -218,6 +218,22 @@ and a default command that declares no positionals and is not a script command
 behaves as before. TAB completion hints the positional at a bare prompt
 (`my-app <TAB>` → `<workspace>` beside the command names).
 
+The app typed alone runs its default command — unless that command needs an argument only the
+command line can give (a parameter with no default and no `@configurable` annotation for dependency
+injection to build). Then it prints the help, as an app without a default command does:
+
+```python
+@app.script_command(name="run", default=True)
+def run(runnable: Any) -> None:   # only a config can supply `runnable`
+    ...
+```
+
+```bash
+my-app                        # the help (exit 0) — nothing to run
+my-app run                    # Error: my-app run: missing required argument 'runnable' — …
+my-app experiment.yaml        # runs the config
+```
+
 ## The scopes of the config a command runs (`config_files=`)
 
 `--scope NAME` activates a scope of the app's OWN config. A command that runs a config of its own

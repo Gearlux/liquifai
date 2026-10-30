@@ -43,6 +43,22 @@ console = Console()
 logger = get_logger("liquifai.core")
 
 
+def needs_typed_argument(func: Callable[..., Any]) -> bool:
+    """Whether ``func`` has a parameter that, with nothing typed, nothing supplies.
+
+    With no token there is no config, so only dependency injection could fill a parameter without a default: a
+    ``@configurable``-annotated one is built with its defaults, any other is left missing
+    (:meth:`LiquifyApp._check_missing_arguments` would refuse it). Read on the signature only — nothing is built.
+    """
+    registry = confluid.get_registry()
+    return any(
+        param.default is inspect.Parameter.empty
+        and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and not registry.is_configurable(param.annotation)
+        for param in inspect.signature(func).parameters.values()
+    )
+
+
 @dataclass
 class Invocation:
     """The routed result of phase 1 of the bootstrap lifecycle.
@@ -620,7 +636,15 @@ class LiquifyApp:
         # documentation one option per line (greppable / pipe-friendly) instead of
         # a Rich table.
         wants_docs = "--docs" in flags
-        if flags & HELP_FLAGS or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
+        # The app typed ALONE shows its help when its default command needs an argument only the command line can
+        # give (a config runner's ``runnable``): it would otherwise end in a missing-argument error.
+        bare_with_nothing_to_run = not argv and inv.target_func is not None and needs_typed_argument(inv.target_func)
+        if (
+            flags & HELP_FLAGS
+            or wants_docs
+            or (not inv.target_func and not inv.target_app._default_cmd)
+            or bare_with_nothing_to_run
+        ):
             self._show_help(
                 inv.target_app,
                 inv.target_func,
