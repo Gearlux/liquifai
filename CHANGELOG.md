@@ -35,9 +35,10 @@ All notable changes to liquifai are documented here. The format follows
 ### Fixed
 
 - **A bare `--scope NAME` the config does not declare is refused** — `my-app run cfg.yaml --scope vla` printed
-  nothing and ran as if no scope were typed (the default split); it now stops with `Error: cfg.yaml has no scope
-  'vla' (its scopes: quick, val)` before anything runs. A `--scope KEY=VAL` of a dimension the config never declares
-  still changes nothing.
+  nothing and ran as if no scope were typed (the default split); it now stops with `Error: No scope block declares
+  'vla' (the scopes of /path/to/cfg.yaml: quick, val)` before anything runs — confluid's refusal, so an alias and a
+  scope declared in a scope block's own include still activate. A `--scope KEY=VAL` of a dimension the config never
+  declares still changes nothing. Needs the confluid release that refuses it.
 - **`--quick` beside a `!scope:quick` block names `--scope quick`** — a bare scope has no flag of its own, so
   `my-app run catalog.yaml --quick` ran the whole catalog with only the generic "Check the spelling" warning.
   The warning now ends "The configuration declares a scope 'quick': to activate it, use `--scope quick`
