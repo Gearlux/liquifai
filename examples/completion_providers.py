@@ -14,6 +14,7 @@ import tempfile
 from typing import Dict, List
 
 from liquifai import LiquifyApp
+from liquifai import completion as comp
 from liquifai.completion.tree import refresh_value_caches
 
 app = LiquifyApp(name="completion-demo")
@@ -59,6 +60,16 @@ def download(
     print(f"RESULT name={name!r} version={version!r} path={path!r} overwrite={overwrite} format={format!r}")
 
 
+@app.script_command("fetch")
+def fetch(dry_run: bool = False) -> None:
+    """Fetch what a config names.
+
+    Args:
+        dry_run: Fetch nothing; say what would be fetched.
+    """
+    print(f"RESULT dry_run={dry_run}")
+
+
 def demo() -> None:
     print("static provider  (download <TAB>):          ", dataset_names())
     print("dependent provider (download rfuav <TAB>):   ", dataset_versions({"name": "rfuav"}))
@@ -72,8 +83,6 @@ def demo() -> None:
     # Candidate semantics (engine is pure — drive it directly):
     # positionals are hinted, never offered as flags; a bool flag doesn't open
     # a value slot; already-typed flags drop out of the suggestions.
-    from liquifai import completion as comp
-
     line = ["completion-demo", "download", "rfuav", "v1", ""]
     flags = [
         c
@@ -106,6 +115,30 @@ def demo() -> None:
     ]
     assert [row.split() for _, row in listing[0][1]] == [["name", "rfuav"], ["version", "v1"]]
     print("the second TAB (download rfuav v1 --<TAB><TAB>):")
+    _print(listing)
+
+    # A config on the line: the settings its author wrote first — its own top-level keys, then its scopes — each with
+    # the comment written above it (or ending its line), before the command's options.
+    config = os.path.join(tempfile.mkdtemp(), "fetch.yaml")
+    with open(config, "w") as stream:
+        stream.write("# Where the files go.\ndestination: ./data\nretries: 3    # tries per file\n\n")
+        stream.write("# One file only.\nquick: !scope:quick\n  retries: 1\n")
+    line = ["completion-demo", "fetch", config, "--"]
+    _, listing = comp.complete_with_listing(comp.serialize_app(app), line, cword=3, width=100)
+    assert listing is not None and [header for header, _ in listing] == [
+        "arguments of completion-demo fetch",
+        f"options of {config}",
+        f"scopes of {config}",
+        "options of completion-demo fetch",
+        "global options",
+    ]
+    assert [row.split()[0] for _, row in listing[1][1]] == ["--destination", "--retries"]
+    print(f"\nwith a config on the line (fetch {os.path.basename(config)} --<TAB><TAB>):")
+    _print(listing)
+
+
+def _print(listing: "comp.Listing") -> None:
+    """The lines a shell prints: each header, then its rows."""
     for header, rows in listing:
         print(header)
         for _, row in rows:

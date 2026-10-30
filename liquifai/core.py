@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from liquifai import completion_cli, config_scopes, di, flags, host, overrides, report, router
+from liquifai.completion.config_help import ConfigHelp, read_config_help
 from liquifai.completion.tree import SCOPES_PARAM, _provider_arity
 from liquifai.config_scopes import ConfigFiles
 from liquifai.context import LiquifyContext, set_context
@@ -1278,6 +1279,17 @@ class LiquifyApp:
                 except Exception as exc:
                     console.print("[dim]Config failed to flow; showing command signature only. " f"Reason: {exc}[/dim]")
 
+            config_help: Optional[ConfigHelp] = None
+            if config_path is not None:
+                # The settings the config's author wrote first (its own top-level keys, its scopes), with the
+                # help of their comments — the groups a TAB listing shows. The command's own parameters are not
+                # the file's settings.
+                exclude = [*inspect.signature(target_func).parameters, *positionals]
+                try:
+                    config_help = read_config_help(config_path, exclude=exclude)
+                except Exception as exc:  # a malformed config: help still renders, the reason is shown
+                    console.print(f"[dim]The config's own settings are unavailable: {escape(str(exc))}[/dim]")
+
             if flowed_kwargs is not None and config_path is not None:
                 console.print(
                     "[dim]Plain --<name> overrides broadcast to every matching ctor kwarg "
@@ -1291,6 +1303,7 @@ class LiquifyApp:
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
                     hidden=hidden,
+                    config_help=config_help,
                 )
             else:
                 show_configuration(
@@ -1300,6 +1313,7 @@ class LiquifyApp:
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
                     hidden=hidden,
+                    config_help=config_help,
                 )
             if files_provider is not None:
                 report.show_config_scopes(files_provider, typed or {}, console=console)

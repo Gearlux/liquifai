@@ -253,6 +253,14 @@ project folder shadows the package.
   `LIQUIFAI_COMPLETE_SHELL=zsh` and the cut counts the codes too (`codes_count`), else a row near the edge garbles
   (`\x1b[ \x08`). Pin the behaviour in a real terminal, never by reading the script text.
   (`tests/test_completion_listing.py`, `tests/test_completion_shells.py`) §13.
+- With a config on the line, `options of <config>` (the top-level keys written in THAT file, never its includes',
+  in file order, the command's parameters and positionals left out) and `scopes of <config>` (`-s <activation>`, rows
+  that complete nothing) come between the arguments and the command's options; `--help`/`--docs` render the same
+  blocks first and fold a list of objects into one row. After the command's options, a group per `!class:` block
+  (`<path> (<Class>)`, the shallowest first, then in document order) lists EVERY constructor parameter of its class,
+  written or not (`confluid.source_params`); `--help` renders a table per object the same way. `completion.config_help.read_config_help` is the one reader
+  for both (help: the key's comment, else the fed parameter's docstring read from source — never an import of the
+  class on the TAB path). (user request 2026-10-30; `tests/test_config_help.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on

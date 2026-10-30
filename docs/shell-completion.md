@@ -115,10 +115,56 @@ global options
 $ my-app fetch alpha --
 ```
 
+With a config on the line, the settings its author wrote first come before the command's options: the top-level
+keys of that file (never its includes'), in the file's order, then the scopes it declares:
+
+```console
+$ my-app run catalog.yaml --<TAB><TAB>
+arguments of my-app run
+  config                        catalog.yaml
+options of catalog.yaml
+  --setup_folders               The folders searched. ([])
+  --setups_per_folder           0 = every setup (0)
+scopes of catalog.yaml
+  -s quick                      A quick run: 20 setups a folder.
+options of my-app run
+  --dry_run                     Run nothing.
+  --runnable RUNNABLE           The object bound under runnable.
+runnable (BuildCatalog)
+  --max_cases_per_dir           The most setups catalogued per folder. (0)
+  --overwrite                   Catalog every setup again instead of resuming.
+  --source_dirs                 The folders searched.
+  --workers                     Processes reading setups at once. (4)
+global options
+  …
+```
+
+for a config written as
+
+```yaml
+setup_folders: []
+setups_per_folder: 0    # 0 = every setup
+
+# A quick run: 20 setups a folder.
+quick: !scope:quick
+  setups_per_folder: 20
+
+runnable: !class:my_package.catalog.BuildCatalog
+  source_dirs: !ref:setup_folders
+  max_cases_per_dir: !ref:setups_per_folder
+```
+
+Each `!class:` block gets a group of its own, titled by its path and class — the shallowest first, then in the
+order the document writes them — listing every parameter of that class, written in the config or not
+(`--overwrite` above), each with its `Args:` help and the value the config writes, else its default; a yes/no
+parameter shows none. A key's help is the comment lines directly above it, else the comment at the end of its line, else the `Args:` help
+of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
+`!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
+the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds.
+
 The line stays as you typed it; keep typing or TAB again. Only the candidates the typed word matches are listed
 (`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command's
-help is the first line of its docstring, an argument's or option's its `Args:` line; a config's own keys are listed
-without one. The first TAB is unchanged: it still fills in the part the matches share. An option's values
+help is the first line of its docstring, an argument's or option's its `Args:` line. The first TAB is unchanged: it still fills in the part the matches share. An option's values
 (`--port <TAB>`) are listed as before.
 
 bash shows its own list instead (sorted alphabetically) whenever liquifai cannot draw its own reliably: the cursor
