@@ -20,13 +20,20 @@ from liquifai.exceptions import (
     ConfigNotFoundError,
     LiquifaiError,
     MissingArgumentError,
+    MissingOptionValueError,
     UnknownCommandError,
     UnknownFlagError,
     UnknownOperationError,
 )
 from liquifai.grammar import GLOBAL_FLAG_SPECS, HELP_FLAGS
 from liquifai.introspection import CONTEXT_PARAM, graft_signature, split_context_param
-from liquifai.overrides import expand_strings, parse_override_args, str_param_names
+from liquifai.overrides import (
+    bool_param_names,
+    expand_strings,
+    parse_override_args,
+    str_param_names,
+    valued_param_names,
+)
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
 
 FlowMode = Literal["manual", "auto"]
@@ -925,9 +932,20 @@ class LiquifyApp:
         # it folds a multi-line value onto one line, reads `#…` as a comment, `3:30` as
         # sexagesimal, `012` as octal, `yes` as True.
         verbatim = str_param_names(self._active_func)
-        parsed_overrides, deletions, dropped = parse_override_args(
-            expand_shorts(option_texts(tokens), shorts), verbatim_keys=verbatim
-        )
+        # A `bool` parameter is a switch: `--dry-run name=x` keeps the override instead of binding `dry_run='name=x'`.
+        switches = bool_param_names(self._active_func)
+        # An option of a declared non-bool type needs a value: `--name` alone is refused, never `name=True`.
+        valued = valued_param_names(self._active_func)
+        try:
+            parsed_overrides, deletions, dropped = parse_override_args(
+                expand_shorts(option_texts(tokens), shorts),
+                verbatim_keys=verbatim,
+                flag_keys=switches,
+                value_keys=valued,
+            )
+        except MissingOptionValueError as missing:
+            command = " ".join(self._command_path(self._active_func)) if self._active_func else self.name
+            raise MissingOptionValueError(f"{command}: {missing}") from None
 
         # A dropped token is almost always a typo'd override (``lr 0.1``
         # instead of ``--lr 0.1``) — silently ignoring one can cost an entire

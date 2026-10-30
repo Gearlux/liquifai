@@ -22,6 +22,11 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Breaking
 
+- **A `bool` parameter takes the word after it only when it is a yes/no value** (`true`/`false`/`yes`/`no`/`on`/
+  `off`/`0`/`1`). `my-app run c.yaml --dry-run name=x` used to bind `dry_run='name=x'` and lose the `name` override
+  without a warning; it now gives `dry_run=True` and applies `name=x`. Any other word after a switch is read on its
+  own (an unrecognised one warns, or is refused under `strict_flags`). Every other key, and every config key, keeps
+  the `--key value` form (`docs/cli-overrides.md`).
 - **A `completions=` key that names no parameter of the command is refused when it is decorated**
   (`CommandDefinitionError: review: completions key 'libary' names no parameter — did you mean 'library'?`). It used
   to be kept and complete nothing.
