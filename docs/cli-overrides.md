@@ -261,6 +261,17 @@ accepts 'max_pcaks'. Check the spelling against the declared parameters
 (`--help` lists them).
 ```
 
+A bare key that names a bare scope of the configuration (`--quick` beside a
+`quick: !scope:quick` block) is a scope meant to be switched on. Only a keyed
+scope binds to a flag (`--task seg` is `--scope task=seg`); a bare one is
+activated by `--scope` alone, and the warning says so:
+
+```
+Override 'quick' matched nothing and was ignored: no configured object accepts
+'quick'. The configuration declares a scope 'quick': to activate it, use
+`--scope quick` (`-s quick`).
+```
+
 A bare key that lands on *some* nodes and not others stays silent — that is
 what a document-wide cascade means, not a mistake.
 

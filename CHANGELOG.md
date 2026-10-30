@@ -22,6 +22,10 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **`--quick` beside a `!scope:quick` block names `--scope quick`** — a bare scope has no flag of its own, so
+  `my-app run catalog.yaml --quick` ran the whole catalog with only the generic "Check the spelling" warning.
+  The warning now ends "The configuration declares a scope 'quick': to activate it, use `--scope quick`
+  (`-s quick`)."
 - **An app typed alone prints its help when its default command has nothing to run** — a default command whose
   argument only the command line can give (a config runner's `runnable`) used to end a bare `my-app` in
   `Error: my-app run: missing required argument 'runnable' — pass it as `--runnable <value>``. Anything typed
