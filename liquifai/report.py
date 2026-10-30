@@ -1,5 +1,5 @@
 import inspect
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 from rich.console import Console
 from rich.markup import escape
@@ -41,7 +41,6 @@ def show_configuration(
     layout: HelpLayout = "table",
     positionals: Optional[List[str]] = None,
     shorts: Optional[Dict[str, str]] = None,
-    hidden: Optional[List[str]] = None,
     config_help: Optional[ConfigHelp] = None,
     command: str = "",
     objects: Optional[List[str]] = None,
@@ -76,8 +75,6 @@ def show_configuration(
     rendered as their own "Positional Arguments" block and EXCLUDED from the
     options — mirroring completion, which never offers a positional as its
     ``--flag`` spelling (the spelling still parses; it just isn't advertised).
-    ``hidden`` parameters are excluded the same way without a block of their own
-    (a ``config_files=`` command's ``scopes``, filled from ``--scope``).
 
     Every text a command's author wrote (docs, types, values) is printed ESCAPED: help is
     rendered through Rich markup, where ``[epochs=1]`` reads as a style tag and vanishes.
@@ -95,7 +92,6 @@ def show_configuration(
 
     pos_names = list(positionals or [])
     _render_positionals(target, pos_names, layout)
-    pos_names += list(hidden or [])
     if config_help is not None:
         _render_config_help(config_help, layout)
 
@@ -579,36 +575,6 @@ def show_global_options(console: Console) -> None:
     console.print(f"  {'--KEY VAL'.ljust(width)}  Implicit per-dimension flag for any `!scope:KEY=…` block")
     console.print(f"  {''.ljust(width)}  declared in the YAML (e.g. `--task classification`).")
     console.print("")
-
-
-def show_config_scopes(provider: Callable[..., Any], typed: Mapping[str, str], *, console: Console) -> None:
-    """Render the "Scopes" block of a ``@command(config_files=...)`` command: the scopes of the files it runs.
-
-    The files are the provider's for the words typed on the help line (``pictures all a --help`` reads ``a``'s), read
-    here, live (help is no hot path): one line per scope with the files declaring it. A provider or file that fails
-    leaves a ``<scope>`` placeholder and its reason, and the rest of the help still renders.
-    """
-    from liquifai import config_scopes
-
-    console.print("\n[bold]Scopes[/bold] (-s, --scope NAME — of the config this command runs):")
-    try:
-        files = config_scopes.files_for(provider, typed)
-        found = config_scopes.offered(files)
-    except Exception as exc:  # the help must render whatever reading the files needs
-        console.print(f"  <scope>  [dim]scopes unavailable: {escape(str(exc))}[/dim]")
-        return
-    if not found:
-        named = ", ".join(config_scopes.display(f) for f in files) or "no file"
-        console.print(f"  [dim](none declared in {escape(named)})[/dim]")
-        return
-    width = max(len(name) for name in found)
-    present = [f for f in files if f.is_file()]
-    for name, where in found.items():
-        if len(present) > 1 and len(where) == len(present):
-            said = f"every config ({len(where)} files)"
-        else:
-            said = ", ".join(where[:3]) + (f" (+{len(where) - 3} more)" if len(where) > 3 else "")
-        console.print(f"  {escape(name).ljust(width)}  [dim]{escape(said)}[/dim]")
 
 
 #: How many values a slot shows in help before it counts the rest.

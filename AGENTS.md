@@ -64,11 +64,6 @@ project folder shadows the package.
   2026-10-30). A keyed `--scope KEY=VAL` of an undeclared dimension stays inert (matrainer passes
   `--scope framework=<name>` to every config); host facts are keyed and filtered by `host.auto_scopes`.
   (`tests/test_undeclared_scope.py`)
-- A `@command(config_files=provider)` command receives the typed `--scope` values in its `scopes`
-  parameter and they activate NOTHING on the app's config. liquifai reads the scopes off the files
-  the provider names for the typed words (`config_scopes`, the one reader) — never a list the
-  command declares — and refuses one a file lacks before the body runs (`UnknownScopeError`).
-  (`tests/test_command_scopes.py`) §12.
 - `script_command(config_keys=fn)` (user choice 2026-10-30): `_apply_command_keys` calls `fn` with the document after
   the typed keys and merges what it returns through `overrides.apply_overrides` — after the typed keys, never into
   `cli_overrides`, never re-resolving placeholders, never without a config file. A non-callable is refused at
@@ -304,8 +299,7 @@ project folder shadows the package.
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on
   `${COMP_WORDS[*]}`. A wrapper change needs `--install-completion` re-run.
 - A `completions=` key names a parameter or is refused at decoration. A key naming an OPTION completes its
-  value (kind `static`, or `prefix`: cached per prefix of typed positionals, as a `config_files=` command's
-  scopes are). After a comma every list slot completes the next word (`engine._list_candidates`). `--help`'s
+  value (kind `static`, or `prefix`: cached per prefix of typed positionals). After a comma every list slot completes the next word (`engine._list_candidates`). `--help`'s
   "Values" block reads the same cache through `cache.read_slot_values` — never a provider.
   (`tests/test_value_completion.py`)
 - At a flag position: a bool flag opens no value slot; option keys already typed drop out;

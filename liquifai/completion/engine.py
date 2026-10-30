@@ -22,7 +22,6 @@ from liquifai.grammar import (
     GLOBAL_FLAGS,
     GLOBAL_VALUE_FLAGS,
     PATH_VALUE_FLAGS,
-    SCOPE_VALUE_FLAGS,
     SHELL_VALUE_FLAGS,
     flag_display,
     looks_like_key,
@@ -257,8 +256,6 @@ def _complete(
         return _file_candidates(incomplete, exts=None)
     if prev in SHELL_VALUE_FLAGS:
         return [s for s in SHELLS if s.startswith(incomplete)]
-    if prev in SCOPE_VALUE_FLAGS:
-        return _scope_candidates(tree, parsed, incomplete, app_name, lazy_refresh, force_refresh)
     if prev in GLOBAL_VALUE_FLAGS:
         return []
 
@@ -370,7 +367,7 @@ def _slot_candidates(
     lazy_refresh: Optional[Callable[..., None]],
     force_refresh: bool,
 ) -> List[str]:
-    """A non-positional slot's cached values (an option's value, a command's config scopes), self-healing."""
+    """A non-positional slot's cached values (an option's value), self-healing."""
     inputs = cache.slot_inputs(info, typed)
     if inputs is None:
         return []
@@ -383,7 +380,7 @@ def _slot_candidates(
 def _list_candidates(values: List[str], incomplete: str) -> List[str]:
     """``values`` matching ``incomplete`` — or, after a comma, the list's next word: ``a,`` → ``a,b``, ``a,c``.
 
-    A comma separates a list's items in a positional (``pictures all a,d``), an option's value and ``--scope``; the
+    A comma separates a list's items in a positional (``pictures all a,d``) and an option's value; the
     words already in the list are left out. Shells keep a comma inside the word, so the whole list is the candidate.
     """
     if "," not in incomplete:
@@ -391,30 +388,6 @@ def _list_candidates(values: List[str], incomplete: str) -> List[str]:
     head, _, tail = incomplete.rpartition(",")
     chosen = set(head.split(","))
     return [f"{head},{value}" for value in _filter_prefix(values, tail) if value not in chosen]
-
-
-def _scope_candidates(
-    tree: Dict[str, Any],
-    parsed: List[str],
-    incomplete: str,
-    app_name: str,
-    lazy_refresh: Optional[Callable[..., None]],
-    force_refresh: bool,
-) -> List[str]:
-    """``--scope <TAB>``: the scopes of the config files a command runs (``@command(config_files=...)``).
-
-    Read from the cache for the positionals typed before the flag (``{}`` when none is). Any other command's
-    ``--scope`` activates the app's own config, whose scopes this path cannot know without loading it: nothing is
-    offered, as before. A missing or stale cache self-heals like a dependent positional's.
-    """
-    walk = walk_invocation(tokenize(parsed), _TreeNav(tree), _peek_config)
-    cur = walk.nav.node if isinstance(walk.nav, _TreeNav) else tree
-    cmd_name = walk.cmd_name or ""
-    info = (cur.get("scope_completions") or {}).get(cmd_name)
-    if not info:
-        return []
-    typed = _typed_positionals(cur, cmd_name, parsed, walk.args_index)
-    return _slot_candidates(info, typed, incomplete, app_name, lazy_refresh, force_refresh)
 
 
 def _command_candidates(

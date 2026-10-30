@@ -93,21 +93,10 @@ All notable changes to liquifai are documented here. The format follows
   `pkg://liquifai/examples/<file>.yaml` names them from any install.
 - **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
   `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
-- **A list's next word completes after a comma** — positionals, option values and `--scope`: `pictures all a,<TAB>`
+- **A list's next word completes after a comma** — positionals and option values: `pictures all a,<TAB>`
   → `a,b a,c`, the words already listed left out.
 - **`--help` shows the values TAB offers** in a "Values" block, read from the completion cache (no provider runs);
   a dependent slot answers for the words typed before `--help`.
-
-- **`@app.command(config_files=provider)`: a command names the config it runs, and liquifai reads its scopes.** For a
-  command that hands a YAML of its own choosing to another tool. The provider returns the files — called with
-  nothing, or with the positionals typed so far (`{name: word}`). `my-app compile run2 --scope onnx` then gives the
-  command `scopes=["onnx"]` (typed order, comma lists split) instead of activating `onnx` on the app's own config,
-  where it reached nothing and nothing said so. `--help` lists every scope the files declare (bare ones by name,
-  keyed ones as `KEY=VAL`) with the file declaring it, `--scope <TAB>` offers them for the words typed before it,
-  and a scope one of the files lacks is refused before the command runs: `Error: configs/b.yaml has no scope
-  'original' (its scopes: val)` (`UnknownScopeError`). A command without a `scopes` parameter, or a provider taking
-  more than one argument, is a `CommandDefinitionError`. Needs confluid's `discover_boolean_scopes`. The
-  completion-tree cache moves to version 7.
 
 ### Fixed
 
