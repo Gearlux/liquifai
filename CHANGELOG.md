@@ -8,6 +8,9 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **`script_command(config_keys=fn)`: keys a command adds to its configuration** — `fn` gets the loaded document
+  (command-line keys applied) and returns `{key: value}`, merged in after the typed keys, before `--dump-config` /
+  `--save-config` and before the objects are built. A command that forces a setting shows it in the dumped file.
 - **`--dump-config` and `--save-config`: the configuration a run resolves to** — every setting of every class, the
   defaults the file leaves out included. `my-app run.yaml --dump-config` prints it and runs nothing;
   `--dump-config=PATH` writes it to `PATH` instead; `--save-config PATH` writes it and then runs. Includes, scopes,

@@ -3,7 +3,7 @@ import inspect
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, get_args
+from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, Optional, Set, get_args
 
 import confluid
 import loggair
@@ -167,6 +167,20 @@ def _validated_completions(
             hint = f" — did you mean {close[0]!r}?" if close else ""
             raise CommandDefinitionError(f"{cmd_name}: completions key '{name}' names no parameter{hint}")
     return dict(completions)
+
+
+#: ``script_command(config_keys=...)``: the loaded document in, ``{key: value}`` to merge in after the command line.
+ConfigKeys = Callable[[Dict[str, Any]], Mapping[str, Any]]
+
+
+def _validated_config_keys(cmd_name: str, config_keys: Optional[ConfigKeys]) -> Optional[ConfigKeys]:
+    """Check a command's ``config_keys=`` function at DECORATION time: it must be callable."""
+    if config_keys is not None and not callable(config_keys):
+        raise CommandDefinitionError(
+            f"{cmd_name}: config_keys= takes a callable — the loaded document in, {{key: value}} out — "
+            f"got {config_keys!r}."
+        )
+    return config_keys
 
 
 def _validated_config_files(
@@ -445,6 +459,7 @@ class LiquifyApp:
         flow_mode: FlowMode = "manual",
         positionals: Optional[List[str]] = None,
         default: bool = False,
+        config_keys: Optional[ConfigKeys] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command that supports config-promotion.
 
@@ -470,6 +485,15 @@ class LiquifyApp:
                 :meth:`command`). The config-file promotion peek runs first, so
                 a ``script_command`` consumes its config path before binding
                 positionals.
+            config_keys: Keys the command adds to its configuration: called with the loaded document
+                (includes, scopes, positionals and the command-line keys applied), it returns
+                ``{key: value}`` — a dotted key reaches a nested object, as a dotted override does —
+                and liquifai merges them in AFTER the command-line keys, so they win over the same
+                key typed, before ``--dump-config`` / ``--save-config`` write the configuration and
+                before the command's objects are built. A command that forces a setting (a trainer
+                verb's task) thereby shows it in the dumped file, and can add it only where the
+                document accepts it. Not called without a config file; an added key is never
+                reported as a typed key that reached nothing.
         """
         if flow_mode not in ("manual", "auto"):
             raise CommandDefinitionError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
@@ -480,6 +504,8 @@ class LiquifyApp:
             # Store the mode on the function itself; run_command looks it up
             # via getattr, no per-app registry needed.
             setattr(f, "__liquifai_flow_mode__", flow_mode)
+            # Read by _prepare, after the command-line keys are applied (_apply_command_keys).
+            setattr(f, "__liquifai_config_keys__", _validated_config_keys(cmd_name, config_keys))
             return self.command(name=cmd_name, positionals=positionals, default=default)(f)
 
         return decorator
@@ -799,6 +825,8 @@ class LiquifyApp:
         # 5. APPLY OVERRIDES (the command is known here, so its `short=` map can be expanded)
         self._active_func = inv.target_func
         self._apply_overrides(final_tokens)
+        # 5a. THE COMMAND'S OWN KEYS (`script_command(config_keys=...)`), after the typed ones, before any dump.
+        self._apply_command_keys(inv.target_func)
         self._warn_unbound_literals(inv)
 
     def _write_resolved_config(self) -> bool:
@@ -831,6 +859,29 @@ class LiquifyApp:
             sys.stdout.write(text)
             sys.stdout.flush()
         return context.dump_config
+
+    def _apply_command_keys(self, func: Optional[Callable[..., Any]]) -> None:
+        """Phase 5a: merge the keys a command's ``config_keys=`` function returns into the loaded document.
+
+        Called with the document as the command line left it, after the typed keys — so an added key wins over the
+        same key typed — and merged as a dotted override is (``overrides.apply_overrides``). The keys are NOT added
+        to ``cli_overrides``: the unused-override warning is about what the user typed. A document already resolved
+        does not re-read its ``${…}`` placeholders for them. Without a config file nothing is called.
+        """
+        context = self.context
+        provider = getattr(func, "__liquifai_config_keys__", None) if func is not None else None
+        if provider is None or context is None or context.config_path is None:
+            return
+        added = provider(context.config_data)
+        if not isinstance(added, Mapping):
+            command = " ".join(self._command_path(func)) if func is not None else self.name
+            raise CommandDefinitionError(
+                f"{command}: config_keys= returned a {type(added).__name__}, not a mapping of keys to values."
+            )
+        if not added:
+            return
+        context.logger.debug(f"Keys the command adds to its configuration: {dict(added)}")
+        context.config_data = overrides.apply_overrides(context.config_data, dict(added), [])
 
     def _log_promotion_source(self, inv: "Invocation", config_path: Optional[Path]) -> None:
         """Record WHERE a promoted config token was resolved from.

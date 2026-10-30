@@ -268,12 +268,45 @@ at most one argument: either mistake is refused when the command is decorated), 
 is never advertised as its own `--scopes` flag. A command without `config_files=` keeps `--scope`
 for the app's config, as before.
 
+## Keys a command adds to its config (`config_keys=`)
+
+A script command that forces a setting — a trainer's `evaluate` verb runs `task: test` whatever the file says —
+declares it with `config_keys=`, so the configuration liquifai resolves already holds it: `--dump-config` shows it,
+and the objects are built with it.
+
+```python
+def evaluate_keys(document):                   # the loaded document, command-line keys applied
+    runnable = document.get("runnable")
+    if isinstance(runnable, confluid.Target) and confluid.accepts_key(runnable.target, "task"):
+        return {"runnable.task": "test"}        # a dotted key reaches the nested object
+    return {}                                   # a runnable without a `task` gets nothing
+
+@app.script_command(name="evaluate", flow_mode="manual", config_keys=evaluate_keys)
+def evaluate(runnable: Any = None) -> None: ...
+```
+
+```console
+$ my-app evaluate job.yaml --dump-config      # job.yaml says task: fit
+runnable:
+  _target_: Job
+  task: test
+  epochs: 1
+```
+
+The function is called with the document after its includes, scopes, positionals and command-line keys; the keys
+it returns are merged in after the typed ones (an added key wins over the same key typed), before `--dump-config` /
+`--save-config` and before the command's objects are built. It is not called without a config file, a `${…}`
+placeholder already resolved does not see the added keys, and an added key is never reported as a typed key that
+reached nothing. A function returning anything but a mapping stops the command with one `Error:` line; a
+`config_keys=` that is not callable is refused when the command is decorated.
+
 ## Runnable examples
 
 - [`examples/basic_app.py`](../examples/basic_app.py) — minimal app with two commands and `get_context`.
 - [`examples/simple_app.py`](../examples/simple_app.py) — a `@configurable` component + logger wiring.
 - [`examples/positionals_app.py`](../examples/positionals_app.py) — positional binding and its interop with flags.
 - [`examples/scopes_app.py`](../examples/scopes_app.py) — a command naming the config it runs: the scopes liquifai reads from it in `--help`, two runs and the refusal of a scope it lacks.
+- [`examples/config_keys_app.py`](../examples/config_keys_app.py) — a command adding `runnable.task` to its config only where the runnable takes one, shown by `--dump-config`.
 - [`examples/promotion_app.py`](../examples/promotion_app.py) — config promotion across the search tiers, the DEBUG provenance notice, and the case where an XDG file swallows a positional.
 - [`examples/liquifai_app.py`](../examples/liquifai_app.py) — fuller confluid + loggair wiring.
 - [`examples/linefit/`](../examples/linefit/README.md) — an installable training-style CLI built on `@script_command`: config promotion, `flow_mode="auto"` with a `Lazy` optimizer, dotted overrides, and a `print-config` reproducibility verb.
