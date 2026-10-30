@@ -23,6 +23,7 @@ from . import cache
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v12: ``scope_completions`` is gone (``@command(config_files=...)`` was removed).
 # v11: ``option_docs`` rows carry a fourth field, the option's default as shown (``8787``; ``""`` for a flag
 # or an empty default).
 # v10: ``description`` (the node's), ``command_docs`` ``{cmd: first docstring line}`` and ``positional_docs``
@@ -51,7 +52,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 11
+CACHE_VERSION: int = 12
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -96,8 +97,7 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
     positional_docs: Dict[str, Dict[str, str]] = {}
     for cmd, func in app._commands.items():
         hierarchy = _introspect_function_hierarchy(func)
-        # A positional, and a config_files= command's ``scopes`` (filled from ``--scope``), is never a flag to offer.
-        pos = set(positionals_map[cmd]) | ({SCOPES_PARAM} if _config_files_provider(func) is not None else set())
+        pos = set(positionals_map[cmd])  # a positional is never a flag to offer
         paths = sorted(p for p in hierarchy if p.split(".", 1)[0] not in pos)
         command_paths[cmd] = paths
         display = _flag_display_map(paths)
@@ -126,14 +126,6 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         for name, provider in providers.items():
             spec = _slot_info(_provider_spec(_path, cmd, name, provider, pos_list))
             (positional_completions if name in pos_list else flag_completions).setdefault(cmd, {})[name] = spec
-    # {cmd: {key, kind, depends_on}} for a command that runs config files of its own (``config_files=``): their
-    # scopes, cached per prefix of typed positionals when its provider reads them, else once, under ``{}``.
-    scope_completions: Dict[str, Dict[str, Any]] = {}
-    for cmd, func in app._commands.items():
-        files = _config_files_provider(func)
-        if files is not None:
-            pos_list = list(getattr(func, "__liquifai_positionals__", [])) if _provider_arity(files) else []
-            scope_completions[cmd] = _slot_info(_provider_spec(_path, cmd, SCOPE_SLOT, _scope_names(files), pos_list))
     return {
         "name": app.name,
         # The node's own description, the commands' first docstring lines: the listing's "commands of …" rows.
@@ -172,7 +164,6 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "positional_completions": positional_completions,
         # {cmd: {option: {key, kind, depends_on}}} — options whose value has a provider (``--library <TAB>``).
         "flag_completions": flag_completions,
-        "scope_completions": scope_completions,
     }
 
 
@@ -196,33 +187,9 @@ def _one_line(entry: Any) -> str:
     return " ".join(str(doc or "").split())
 
 
-#: The value-cache slot of a ``config_files=`` command's ``--scope`` values (beside its positionals' slots).
-SCOPE_SLOT = "--scope"
-
-#: The parameter a ``@command(config_files=...)`` command receives its typed ``--scope`` values in. Defined here
-#: (stdlib-only) so core, the help and the tree read ONE name.
-SCOPES_PARAM = "scopes"
-
-
 def _slot_info(spec: Dict[str, Any]) -> Dict[str, Any]:
     """The JSON-safe part of a provider spec the fast path reads."""
     return {k: v for k, v in spec.items() if k in ("key", "kind", "depends_on")}
-
-
-def _config_files_provider(func: Any) -> Optional[Callable[..., Any]]:
-    provider = getattr(func, "__liquifai_config_files__", None)
-    return provider if callable(provider) else None
-
-
-def _scope_names(files_provider: Callable[..., Any]) -> Callable[[Dict[str, str]], List[str]]:
-    """The ``--scope`` slot's provider: the scopes of the files ``files_provider`` names for the typed words."""
-
-    def names(typed: Dict[str, str]) -> List[str]:
-        from liquifai import config_scopes  # confluid behind it: never on the fast path's import
-
-        return list(config_scopes.offered(config_scopes.files_for(files_provider, typed)))
-
-    return names
 
 
 def _provider_arity(provider: Callable[..., Any]) -> int:
@@ -264,10 +231,9 @@ def _provider_spec(
     this independently — a drift hazard between the tree and the refreshers.
     """
     key = cache.value_cache_key(path, cmd, pos)
-    if pos == SCOPE_SLOT or (pos not in pos_list and _provider_arity(provider) > 0):
-        # A slot that is no positional — a command's config scopes, an option's value — answering for the words
-        # typed: cached per PREFIX of typed positionals (``{}`` included). ``pictures --scope`` reads the default
-        # files, ``pictures all a --scope`` a's; ``review a --mode`` asks the provider with ``{"option": "a"}``.
+    if pos not in pos_list and _provider_arity(provider) > 0:
+        # A slot that is no positional — an option's value — answering for the words typed: cached per PREFIX of
+        # typed positionals (``{}`` included). ``review a --mode`` asks the provider with ``{"option": "a"}``.
         return {
             "key": key,
             "provider": provider,
@@ -299,11 +265,6 @@ def iter_completion_providers(app: "LiquifyApp", _path: Tuple[str, ...] = ()) ->
         pos_list = list(getattr(func, "__liquifai_positionals__", []))
         for pos, provider in providers.items():
             yield _provider_spec(_path, cmd, pos, provider, pos_list)
-        files = _config_files_provider(func)
-        if files is not None:  # a provider reading no typed words is cached once, under ``{}``
-            yield _provider_spec(
-                _path, cmd, SCOPE_SLOT, _scope_names(files), pos_list if _provider_arity(files) else []
-            )
     for name, sub in app._sub_apps.items():
         if name in app._sub_app_aliases:
             continue  # canonical only — aliases share the same keys

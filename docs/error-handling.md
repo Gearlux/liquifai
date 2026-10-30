@@ -7,7 +7,6 @@ Liquifai raises typed exceptions rooted at `LiquifaiError`; each also inherits t
 | `CommandDefinitionError` | `ValueError` | a `@command` / `@script_command` / `@operation` / bridge declaration is invalid (bad `flow_mode` / `presentation`, or an `SdkBridge` group naming an unregistered policy / adapter) |
 | `UnknownOperationError` | `KeyError` | `set_completions()` names an operation that is not registered |
 | `UnknownCommandError` | `ValueError` | the argv tokens resolved to no command, and the group has no default |
-| `UnknownScopeError` | `ValueError` | a typed `--scope` names no scope of a config file the command runs (`@command(config_files=...)`): the message names the file, the scope and the scopes it declares |
 | `UnknownFlagError` | `ValueError` | an app built with `strict_flags=True` got a CLI token that names no parameter of the command (and no top-level config key), or that matches no override form |
 | `MissingArgumentError` | `TypeError` | a command parameter without a default got no value from the command line, the config, or dependency injection |
 | `MissingOptionValueError` | `ValueError` | an option the command declares with a type other than `bool` was given without a value (`--name` alone, or another option right after it) |

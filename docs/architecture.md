@@ -919,6 +919,13 @@ def compile(run: str = "", scopes: Optional[List[str]] = None) -> None:
 `completion.tree.SCOPES_PARAM`). Do not let a `config_files=` command's typed scopes activate on
 the app's config as well, and do not read the scopes anywhere but `config_scopes`.
 
+**Amendment 2026-10-30 — removed (user choice).** `config_files=`, `config_scopes`, `UnknownScopeError`, the help
+block and the `--scope <TAB>` slot are gone, unreleased. Its one user, a runner of steps, became workflow configs
+run by the config runner, so every `--scope` is again a scope of the config on the command line, which confluid
+refuses when no block declares it (confluid §1 amendment 2026-10-30). Its reader was also wrong in two cases:
+reading the file raw, it refused a `scope_aliases:` name and a scope declared in a scope block's own include, both
+of which confluid loads. `CACHE_VERSION` 12 drops `scope_completions`.
+
 ## 13. The second TAB lists the options grouped, drawn by the wrapper (2026-10-27)
 
 **Context.** liquifai-complete always sent the global options first and the command's own after them, but bash's

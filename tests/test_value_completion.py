@@ -3,14 +3,14 @@
 * A ``completions=`` entry naming an OPTION (not a positional) completes its value: ``review a --library <TAB>``. Its
   provider takes nothing, or the positionals typed so far.
 * A word after a comma completes the next item of a list: ``pictures all a,<TAB>`` → ``a,b  a,c``, the words already
-  in the list left out — positionals, option values and ``--scope`` alike.
+  in the list left out — positionals and option values alike.
 * ``--help`` shows the values TAB would offer, read from the same cache (never by running a provider: one may query a
   server). Nothing is shown for a slot whose cache is not filled yet.
 """
 
 import sys
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 
 import pytest
 
@@ -22,8 +22,6 @@ from liquifai.exceptions import CommandDefinitionError
 
 def _app(tmp_path: Path) -> LiquifyApp:
     app = LiquifyApp(name="probe", description="value probe", strict_flags=True)
-    compile_yaml = tmp_path / "compile.yaml"
-    compile_yaml.write_text("b: 1\nonnx: !scope:onnx\n  b: 2\nfp16: !scope:fp16\n  b: 3\n")
 
     @app.command(
         positionals=["option", "set"],
@@ -36,10 +34,6 @@ def _app(tmp_path: Path) -> LiquifyApp:
     )
     def review(option: str = "", set: str = "", library: str = "", mode: str = "", port: int = 0) -> None:
         """Review an option."""
-
-    @app.command(positionals=["run"], config_files=lambda: [compile_yaml])
-    def compile(run: str = "", scopes: Optional[List[str]] = None) -> None:
-        """Compile a run."""
 
     return app
 
@@ -100,10 +94,9 @@ class TestAListsNextWord:
         assert _tab(app, "review", "a,b,") == ["a,b,c"]
         assert _tab(app, "review", "a,b,c,") == []
 
-    def test_an_options_value_and_a_scope_list_too(self, app: LiquifyApp) -> None:
+    def test_an_options_value_too(self, app: LiquifyApp) -> None:
         refresh_value_caches(app)
         assert _tab(app, "review", "a", "--library", "unofficial,") == ["unofficial,complete"]
-        assert _tab(app, "compile", "run2", "--scope", "onnx,") == ["onnx,fp16"]
 
 
 # --- the values in --help ---------------------------------------------------------------------------------------------
