@@ -162,8 +162,8 @@ def test_an_included_files_keys_and_the_markers_parameters_are_documented_not_fo
     assert "label" not in [key.path for key in found.focused]
     assert found.docs["label"] == "Shared label, documented where it is written."
     assert found.docs["width"] == "How many to build."  # shared.yaml's !ref:width feeds Builder.count
-    assert found.docs["runnable.source_dirs"] == "The folders searched."
-    assert found.docs["widget.count"] == "How many to build."
+    assert found.docs["runnable.items"] == "The items read."
+    assert found.docs["widget.items"] == "The items read."
 
 
 def test_a_command_parameter_is_never_one_of_the_files_settings(config: Path) -> None:
@@ -174,7 +174,7 @@ def test_a_command_parameter_is_never_one_of_the_files_settings(config: Path) ->
 
 def test_without_docs_only_the_keys_are_read(config: Path) -> None:
     found = read_config_help(config, with_docs=False)
-    assert {"folders", "runnable.source_dirs", "label", "widget.count"} <= set(found.keys)
+    assert {"folders", "label", "runnable.items", "widget.items"} <= set(found.keys)
     assert found.focused == [] and found.scopes == [] and found.docs == {}
 
 
@@ -224,17 +224,42 @@ def test_the_tab_listing_shows_the_configs_options_and_scopes_before_the_command
     assert [row.split()[0] for row in command] == ["--dry_run", "--label", "--runnable", "--widget", "--width"]
 
 
-def test_a_blocks_group_lists_every_parameter_of_its_class_written_or_not(config: Path) -> None:
+def test_a_blocks_group_lists_every_parameter_of_its_class_written_or_not(tmp_path: Path) -> None:
+    config = _write(tmp_path, "run.yaml", f"runnable: !class:{HERE}.Builder\n  source_dirs: [a]\n")
     text = _text(f"helpdemo run {config} --")
-    block = text[text.index("runnable (Builder)") + 1 : text.index("global options")]
-    assert block == [
-        "--runnable.count              How many to build. (0)",  # not written: its class's default
-        "--runnable.items              The items read.",
-        "--runnable.source_dirs        The folders searched.",  # written as a !ref: no value of its own to show
-        "--runnable.verbose            Say more.",  # a yes/no parameter shows no default
+    assert text[text.index("runnable (Builder)") + 1 : text.index("global options")] == [
+        "--count                       How many to build. (0)",  # not written: its class's default
+        "--items                       The items read.",
+        "--source_dirs                 The folders searched. ([a])",  # written: its value
+        "--verbose                     Say more.",  # a yes/no parameter shows no default
     ]
-    words = f"helpdemo run {config} --runnable.ver".split(" ")
-    assert comp.complete_from_tree(tree_mod.serialize_app(_app()), words, len(words) - 1) == ["--runnable.verbose"]
+    words = f"helpdemo run {config} --ver".split(" ")
+    assert comp.complete_from_tree(tree_mod.serialize_app(_app()), words, len(words) - 1) == ["--verbose"]
+
+
+def test_a_parameter_a_top_level_key_feeds_is_listed_with_that_key_only(config: Path) -> None:
+    """``source_dirs: !ref:folders`` and the top-level ``count`` / ``verbose`` (broadcast into Builder, which does
+    not write them) are listed as ``--folders``, ``--count``, ``--verbose`` — never again with the block."""
+    text = _text(f"helpdemo run {config} --")
+    assert text[text.index("runnable (Builder)") + 1 : text.index("global options")] == [
+        "--runnable.items              The items read."
+    ]
+    assert read_config_help(config, exclude=["runnable"]).fed == {
+        ("Builder", "source_dirs"),
+        ("Builder", "count"),
+        ("Builder", "verbose"),
+    }
+    words = f"helpdemo run {config} --runnable.so".split(" ")
+    assert comp.complete_from_tree(tree_mod.serialize_app(_app()), words, len(words) - 1) == []
+
+
+def test_a_parameter_its_block_writes_stays_with_the_block_though_a_top_level_key_shares_its_name(
+    tmp_path: Path,
+) -> None:
+    config = _write(tmp_path, "run.yaml", f"count: 2\nrunnable: !class:{HERE}.Builder\n  count: 5\n")
+    text = _text(f"helpdemo run {config} --")
+    assert "--runnable.count              How many to build. (5)" in text
+    assert "--verbose                     Say more." in text  # nothing feeds it: still the block's
 
 
 def test_a_written_value_is_shown_and_an_unwritten_parameter_completes_bare(tmp_path: Path) -> None:
@@ -297,9 +322,8 @@ def test_help_shows_a_table_per_object_titled_by_its_path_and_class(
     assert "runnable (Builder)" in flowed and "Applies to" not in flowed
     table = flowed.split("runnable (Builder)", 1)[1].split("Global Options", 1)[0]
     assert [line.split()[0] for line in table.splitlines() if line.strip().startswith("--")] == [
-        "--items",
-        "--source_dirs",
-    ]  # --count and --verbose are the config's own, shown above
+        "--items"
+    ]  # --count and --verbose are the config's own, shown above; --source_dirs is fed by --folders
 
 
 def test_help_lists_a_list_of_objects_as_one_row_and_no_key_twice(

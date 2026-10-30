@@ -16,7 +16,8 @@ All notable changes to liquifai are documented here. The format follows
   instead of a row per field of each item.
 - **A group per `!class:` block, with every parameter of its class** — the listing's `runnable (BuildCatalog)`
   group offers `--overwrite` even when the config never writes `overwrite:`, each parameter with its help and its
-  value or default. `--help` shows a table per object, titled by its path and class, instead of one table with an
+  value or default, but a parameter a top-level key already feeds (`datasets: !ref:setup_datasets`) — listed once,
+  as that key. `--help` shows a table per object, titled by its path and class, instead of one table with an
   "Applies to" column.
 
 ### Fixed

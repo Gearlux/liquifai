@@ -66,6 +66,9 @@ class ConfigHelp:
     switches: Set[str] = field(default_factory=set)
     #: ``(path, class name)`` of every ``!class:`` block, the shallowest first, then in document order.
     blocks: List[Tuple[str, str]] = field(default_factory=list)
+    #: ``(class name, parameter)`` of every block parameter a top-level key already feeds — through ``!ref:`` or by
+    #: its name — and that is therefore not listed with its block.
+    fed: Set[Tuple[str, str]] = field(default_factory=set)
 
 
 def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: bool = True) -> ConfigHelp:
@@ -85,7 +88,8 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
     keys: List[str] = list(dimensions)
     targets: Dict[str, str] = {}
     values: Dict[str, str] = {}
-    _walk_keys(document, "", keys, targets, values)
+    refs: Dict[str, str] = {}
+    _walk_keys(document, "", keys, targets, values, refs)
     # Every parameter of a block's class is an option, written or not (``--overwrite`` with no ``overwrite:``),
     # read from the class's source — nothing is imported.
     switches: Set[str] = set()
@@ -98,9 +102,25 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
             if param.switch:
                 switches.add(key)
             keys.append(key)
+    # A block parameter a top-level key already feeds is that key's to list, not its block's: one written as
+    # ``!ref:<key>``, or one the block does not write, named like a top-level key (which is broadcast into it).
+    top = (
+        {key for key in document if isinstance(key, str) and not key.startswith("_")}
+        if isinstance(document, dict)
+        else set()
+    )
+    fed_paths = {path for path, ref in refs.items() if ref.split(".", 1)[0].split("[", 1)[0] in top}
+    for key in keys:
+        head, _, leaf = key.rpartition(".")
+        if head in targets and leaf in top and key not in written:
+            fed_paths.add(key)
+    fed = {(_class_name(targets[path.rpartition(".")[0]]), path.rpartition(".")[2]) for path in fed_paths}
+    keys = [key for key in keys if key not in fed_paths]
     order = {path: index for index, path in enumerate(targets)}
     blocks = [(path, _class_name(targets[path])) for path in sorted(targets, key=lambda p: (p.count("."), order[p]))]
-    found = ConfigHelp(source=config_path.name, keys=sorted(set(keys)), values=values, switches=switches, blocks=blocks)
+    found = ConfigHelp(
+        source=config_path.name, keys=sorted(set(keys)), values=values, switches=switches, blocks=blocks, fed=fed
+    )
     if not with_docs:
         return found
 
@@ -196,12 +216,14 @@ def _walk_keys(
     out: List[str],
     targets: Dict[str, str],
     values: Dict[str, str],
+    refs: Dict[str, str],
     depth: int = 0,
     max_depth: int = 8,
     in_block: bool = False,
 ) -> None:
-    """Every dotted key under ``obj`` into ``out``; ``targets`` gets each marker's path and the class it names, and
-    ``values`` the value of each marker parameter short enough to show."""
+    """Every dotted key under ``obj`` into ``out``; ``targets`` gets each marker's path and the class it names,
+    ``values`` the value of each marker parameter short enough to show, and ``refs`` the path each marker parameter
+    written as a reference points at."""
     if depth > max_depth:
         return
     if isinstance(obj, dict):
@@ -212,7 +234,9 @@ def _walk_keys(
             out.append(full)
             if in_block and _shown(v):
                 values[full] = _shown(v)
-            _walk_keys(v, full, out, targets, values, depth + 1, max_depth)
+            if in_block and type(v).__name__ == "Reference" and isinstance(getattr(v, "target", None), str):
+                refs[full] = v.target
+            _walk_keys(v, full, out, targets, values, refs, depth + 1, max_depth)
         return
     kwargs = getattr(obj, "kwargs", None)
     if isinstance(kwargs, dict):
@@ -222,4 +246,4 @@ def _walk_keys(
             targets[prefix] = (
                 target if isinstance(target, str) else f"{target.__module__}.{getattr(target, '__qualname__', '')}"
             )
-        _walk_keys(kwargs, prefix, out, targets, values, depth + 1, max_depth, in_block=is_block)
+        _walk_keys(kwargs, prefix, out, targets, values, refs, depth + 1, max_depth, in_block=is_block)

@@ -262,7 +262,9 @@ project folder shadows the package.
   that complete nothing) come between the arguments and the command's options; `--help`/`--docs` render the same
   blocks first and fold a list of objects into one row. After the command's options, a group per `!class:` block
   (`<path> (<Class>)`, the shallowest first, then in document order) lists EVERY constructor parameter of its class,
-  written or not (`confluid.source_params`); `--help` renders a table per object the same way. `completion.config_help.read_config_help` is the one reader
+  written or not (`confluid.source_params`), but a parameter a top-level key feeds (`!ref:<key>`, or unwritten and
+  named like a top-level key) — that key's row, never the block's, nor a candidate (user correction 2026-10-30);
+  `--help` renders a table per object the same way. `completion.config_help.read_config_help` is the one reader
   for both (help: the key's comment, else the fed parameter's docstring read from source — never an import of the
   class on the TAB path). (user request 2026-10-30; `tests/test_config_help.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`

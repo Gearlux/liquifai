@@ -131,9 +131,7 @@ options of my-app run
   --dry_run                     Run nothing.
   --runnable RUNNABLE           The object bound under runnable.
 runnable (BuildCatalog)
-  --max_cases_per_dir           The most setups catalogued per folder. (0)
   --overwrite                   Catalog every setup again instead of resuming.
-  --source_dirs                 The folders searched.
   --workers                     Processes reading setups at once. (4)
 global options
   …
@@ -157,7 +155,9 @@ runnable: !class:my_package.catalog.BuildCatalog
 Each `!class:` block gets a group of its own, titled by its path and class — the shallowest first, then in the
 order the document writes them — listing every parameter of that class, written in the config or not
 (`--overwrite` above), each with its `Args:` help and the value the config writes, else its default; a yes/no
-parameter shows none. A key's help is the comment lines directly above it, else the comment at the end of its line, else the `Args:` help
+parameter shows none. A parameter a top-level key already feeds — written `!ref:<key>` (`source_dirs:
+!ref:setup_folders` above), or not written by its block and named like a top-level key, which is broadcast into it
+— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it, else the comment at the end of its line, else the `Args:` help
 of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
 `!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
 the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds.
