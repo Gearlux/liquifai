@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
 
 from rich.console import Console
@@ -13,6 +14,26 @@ from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
 HelpLayout = Literal["table", "lines"]
 
 
+def command_description(doc: Optional[str]) -> str:
+    """A command's docstring as its help prints it: dedented, its ``Args:`` block left out.
+
+    The options tables below carry each parameter's help, so printing the block too showed it twice, the second time
+    as raw docstring text. Every other section (``Raises:``, ``Example:``) stays.
+    """
+    if not doc:
+        return "No description."
+    kept: List[str] = []
+    args_indent: Optional[int] = None  # set while inside the Args: block
+    for line in inspect.cleandoc(doc).splitlines():
+        indent = len(line) - len(line.lstrip())
+        if args_indent is not None and (not line.strip() or indent > args_indent):
+            continue
+        args_indent = indent if line.strip() == "Args:" else None
+        if args_indent is None and (line.strip() or (kept and kept[-1].strip())):
+            kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def show_configuration(
     target: Any,
     config_map: Optional[Dict[str, Any]] = None,
@@ -22,6 +43,8 @@ def show_configuration(
     shorts: Optional[Dict[str, str]] = None,
     hidden: Optional[List[str]] = None,
     config_help: Optional[ConfigHelp] = None,
+    command: str = "",
+    objects: Optional[List[str]] = None,
 ) -> None:
     """Display configuration options using the shortest possible unique paths.
 
@@ -63,6 +86,10 @@ def show_configuration(
     file's own top-level keys and its scopes first, each in a block of its own, in file order —
     the groups a TAB listing shows; a flowed option those keys spell is left out of the table
     below them. A list of objects is one row (``--datasets``), never a row per field of each item.
+
+    On a flowed graph the ``command``'s own plain parameters (``--dry_run``) come next, as ``Options of <command>`` in
+    the same columns — the instance walk sees only objects, so they were listed nowhere. ``objects`` names the
+    parameters a config binds an object to (a script command's ``Any`` parameter): they are never an option row.
     """
     from confluid import get_hierarchy, get_hierarchy_from_instance
 
@@ -73,6 +100,9 @@ def show_configuration(
         _render_config_help(config_help, layout)
 
     if _looks_like_flowed_graph(config_map):
+        assert config_map is not None  # a flowed graph is a dict
+        own = _command_option_rows(target, config_map, [*pos_names, *(objects or [])], shorts)
+        _render_command_options(own, command, layout)
         hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
         hierarchy = _fold_list_items(hierarchy, config_map)
         skip = {key.path for key in config_help.focused} if config_help is not None else set()
@@ -86,13 +116,14 @@ def show_configuration(
             _render_flowed_table(hierarchy, title, skip=skip, root=config_map)
         return
 
+    pos_names += list(objects or [])
     if layout == "lines":
         _render_lines(
             _drop_positional_paths(get_hierarchy(target), pos_names), title, flowed=False, config_map=config_map
         )
         return
 
-    # Static-type path (legacy behaviour)
+    # Static-type path: the same title, columns and value spelling as the flowed tables
     from confluid import shortest_unique_paths
 
     hierarchy = _drop_positional_paths(get_hierarchy(target), pos_names)
@@ -101,10 +132,10 @@ def show_configuration(
 
     console = Console()
     table = Table(title=title, box=None, show_header=True, header_style="bold cyan")
-    table.add_column("Option (Shortest Unique)", style="bold white")
+    table.add_column("Option", style="bold white")
     table.add_column("Type", style="dim cyan")
-    table.add_column("Current/Default Value", style="green")
-    table.add_column("Documentation", style="dim white")
+    table.add_column("Current Value", style="green")
+    table.add_column("Description", style="dim white")
 
     sorted_paths = sorted(all_paths, key=lambda p: (display_map[p].count("."), display_map[p]))
     by_param = {param: letter for letter, param in (shorts or {}).items()}
@@ -114,13 +145,90 @@ def show_configuration(
         type_str, default, doc = hierarchy[path]
         current_val = _get_from_config(config_map, path) if config_map else None
         display_val = current_val if current_val is not None else default
-        val_str = str(display_val)
-        if len(val_str) > 50:
-            val_str = val_str[:47] + "..."
+        val_str = _short_repr(display_val)
         letter = by_param.get(short_path)
         spelling = f"-{letter}, --{short_path}" if letter else f"--{short_path}"
         table.add_row(escape(spelling), escape(str(type_str)), escape(val_str), escape(doc or ""))
     console.print(table)
+
+
+#: A ``(flag, type, value, help)`` row of a command's own options.
+CommandOption = Tuple[str, str, str, str]
+
+
+def _command_option_rows(
+    target: Any, config_map: Dict[str, Any], exclude: List[str], shorts: Optional[Dict[str, str]]
+) -> List[CommandOption]:
+    """The ``target`` command's own parameters that hold a plain value (not an object the walk lists), in order."""
+    from confluid import parse_param_docs, type_label
+
+    docs = parse_param_docs(target)
+    letters = {param: letter for letter, param in (shorts or {}).items()}
+    rows: List[CommandOption] = []
+    for name, param in _signature(target).parameters.items():
+        if param.kind not in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY) or name in exclude:
+            continue
+        value = config_map.get(name, None if param.default is param.empty else param.default)
+        if not _is_plain(value):
+            continue
+        flag = f"-{letters[name]}, --{name}" if name in letters else f"--{name}"
+        annotation = "" if param.annotation is param.empty else type_label(param.annotation)
+        rows.append((flag, annotation, _short_repr(value), docs.get(name, "")))
+    return rows
+
+
+def _render_command_options(rows: List[CommandOption], command: str, layout: HelpLayout) -> None:
+    """``Options of <command>``: the rows of :func:`_command_option_rows`, in the flowed tables' columns."""
+    if not rows:
+        return
+    console = Console()
+    title = f"Options of {escape(command)}" if command else "Options of the command"
+    if layout == "lines":
+        console.print(f"\n[bold cyan]{title}[/bold cyan]")
+        flag_w = max(len(row[0]) for row in rows)
+        type_w = max(len(row[1]) for row in rows)
+        for flag, type_str, value, doc in rows:
+            console.print(
+                f"  [bold white]{escape(flag.ljust(flag_w))}[/bold white]  [dim cyan]{escape(type_str.ljust(type_w))}"
+                f"[/dim cyan]  [green]= {escape(value)}[/green]  [dim]{escape(doc)}[/dim]"
+            )
+        return
+    table = Table(title=title, box=None, show_header=True, header_style="bold cyan")
+    table.add_column("Option", style="bold white")
+    table.add_column("Type", style="dim cyan")
+    table.add_column("Current Value", style="green")
+    table.add_column("Description", style="dim white")
+    for flag, type_str, value, doc in rows:
+        table.add_row(escape(flag), escape(type_str), escape(value), escape(doc))
+    console.print(table)
+
+
+def _signature(target: Any) -> inspect.Signature:
+    """``target``'s signature with its quoted annotations resolved where they can be (PEP 563 modules)."""
+    try:
+        return inspect.signature(target, eval_str=True)
+    except Exception:  # an annotation naming what the module cannot import: keep the text
+        return inspect.signature(target)
+
+
+def _is_plain(value: Any) -> bool:
+    """Whether ``value`` is data a flag sets (a scalar, or a container of them), not an object the walk lists."""
+    if value is None or isinstance(value, (str, bytes, int, float, bool)):
+        return True
+    if isinstance(value, (list, tuple, set)):
+        return all(_is_plain(item) for item in value)
+    if isinstance(value, dict):
+        return all(_is_plain(item) for item in value.values())
+    return False
+
+
+def config_object_params(target: Any) -> List[str]:
+    """The parameters of a script command that a config binds an object to: those annotated ``Any``.
+
+    ``recordstream run``'s ``runnable: Any`` is the config's ``runnable:`` key — a typed ``--runnable foo`` builds
+    nothing, so help lists the object's own options instead of a flag for it.
+    """
+    return [name for name, param in _signature(target).parameters.items() if param.annotation is Any]
 
 
 def _drop_positional_paths(hierarchy: Dict[str, Any], positionals: List[str]) -> Dict[str, Any]:

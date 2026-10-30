@@ -1,9 +1,24 @@
 import difflib
 import inspect
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Mapping, Optional, Set, get_args
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Set,
+    Union,
+    get_args,
+    get_origin,
+)
 
 import confluid
 import loggair
@@ -20,6 +35,7 @@ from liquifai.dump import resolved_config_text, write_config_text
 from liquifai.exceptions import (
     CommandDefinitionError,
     ConfigNotFoundError,
+    InvalidChoiceError,
     LiquifaiError,
     MissingArgumentError,
     MissingOptionValueError,
@@ -66,6 +82,50 @@ def needs_typed_argument(func: Callable[..., Any]) -> bool:
         and not registry.is_configurable(param.annotation)
         for param in inspect.signature(func).parameters.values()
     )
+
+
+def choice_params(func: Callable[..., Any]) -> Dict[str, tuple]:
+    """``{parameter: its allowed values}`` for each parameter of ``func`` typed as a closed set.
+
+    A ``Literal`` (inside ``Annotated`` too) is its values; ``Optional[Literal[...]]`` adds ``None``; a union of
+    literals joins them. Any other member in a union (``int``) opens the set, and the parameter is not listed.
+    """
+    try:
+        parameters = inspect.signature(func, eval_str=True).parameters
+    except Exception:  # an annotation naming what the module cannot import: nothing to judge
+        return {}
+    found: Dict[str, tuple] = {}
+    for name, param in parameters.items():
+        allowed = _closed_values(param.annotation)
+        if allowed:
+            found[name] = allowed
+    return found
+
+
+def _closed_values(annotation: Any) -> tuple:
+    """The values a closed-set annotation allows, or ``()`` when it is not one."""
+    origin, args = get_origin(annotation), get_args(annotation)
+    if origin is Annotated:
+        return _closed_values(args[0])
+    if origin is Literal:
+        return args
+    if origin is Union or origin is types.UnionType:
+        values: tuple = ()
+        for member in args:
+            if member is type(None):
+                values += (None,)
+                continue
+            closed = _closed_values(member)
+            if not closed:
+                return ()
+            values += closed
+        return values
+    return ()
+
+
+def _same_value(given: Any, allowed: Any) -> bool:
+    """``given`` is ``allowed`` — the same value of the same type, so ``True`` is not the choice ``1``."""
+    return type(given) is type(allowed) and given == allowed
 
 
 @dataclass
@@ -1164,6 +1224,7 @@ class LiquifyApp:
         else:
             kwargs = _materialize_kwargs()
         self._check_missing_arguments(func, kwargs)
+        self._check_choices(func, kwargs)
         return func(**kwargs)
 
     def _check_missing_arguments(self, func: Callable[..., Any], kwargs: Dict[str, Any]) -> None:
@@ -1198,6 +1259,25 @@ class LiquifyApp:
             f"{command}: missing required {noun} {', '.join(repr(n) for n in missing)} — "
             f"pass {pronoun} as {' or '.join(f'`{form}`' for form in forms)}."
         )
+
+    def _check_choices(self, func: Callable[..., Any], kwargs: Dict[str, Any]) -> None:
+        """Refuse a value outside a parameter's closed set (``Literal["text", "json"]``), naming the set.
+
+        Runs on the RESOLVED kwargs, like :meth:`_check_missing_arguments`: a value from the command line and one from
+        a config key of the same name are judged alike. A type mixing a choice with an open type
+        (``Union[int, Literal["auto"]]``) has no closed set and is left alone.
+        """
+        positionals: List[str] = getattr(func, "__liquifai_positionals__", [])
+        for name, allowed in choice_params(func).items():
+            if name not in kwargs or any(_same_value(kwargs[name], value) for value in allowed):
+                continue
+            command = " ".join(self._command_path(func)) or f"{self.name} {func.__name__}"
+            spelling = f"<{name}>" if name in positionals else f"--{name}"
+            # `None` (an Optional's unset value) is accepted but never listed: nobody types it.
+            listed = ", ".join(
+                repr(value) if not isinstance(value, str) else value for value in allowed if value is not None
+            )
+            raise InvalidChoiceError(f"{command}: {spelling} must be one of {listed}; got {kwargs[name]!r}")
 
     def _command_path(self, func: Callable[..., Any]) -> List[str]:
         """The tokens that select ``func`` from this app — ``["root", "dataset", "pull"]``.
@@ -1347,16 +1427,17 @@ class LiquifyApp:
             # only by already knowing their names. Show the index first, then the command.
             if target_func is app._default_cmd and (app._commands or app._sub_apps):
                 report.show_command_index(app, console)
-            desc = target_func.__doc__ or "No description."
             positionals = getattr(target_func, "__liquifai_positionals__", [])
             # The REGISTERED name, never the function's: a generated operation handler is called
             # `<op>_cmd`, and `@app.command("token-info")` may decorate any function name at all.
             cmd_name = app._command_path(target_func)[-1:] or [target_func.__name__.replace("_", "-")]
             usage = cmd_name[0] + "".join(f" <{p}>" for p in positionals)
             console.print(f"\n[bold]Command:[/bold] {escape(usage)}")
-            console.print(f"[dim]{escape(desc.strip())}[/dim]")
+            console.print(f"[dim]{escape(report.command_description(target_func.__doc__))}[/dim]")
             files_provider = getattr(target_func, "__liquifai_config_files__", None)
             hidden = [SCOPES_PARAM] if files_provider is not None else []
+            # A script command's `Any` parameter is the object its config binds: listed by its options, never a flag.
+            objects = report.config_object_params(target_func) if cmd_name[0] in app._script_cmds else []
 
             from liquifai.report import show_configuration
 
@@ -1392,16 +1473,20 @@ class LiquifyApp:
                     shorts=getattr(target_func, "__liquifai_short__", None),
                     hidden=hidden,
                     config_help=config_help,
+                    command=cmd_name[0],
+                    objects=objects,
                 )
             else:
                 show_configuration(
                     target_func,
-                    title="Command Configuration Options",
+                    title=f"Options of {cmd_name[0]}",
                     layout=layout,
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
                     hidden=hidden,
                     config_help=config_help,
+                    command=cmd_name[0],
+                    objects=objects,
                 )
             if files_provider is not None:
                 report.show_config_scopes(files_provider, typed or {}, console=console)

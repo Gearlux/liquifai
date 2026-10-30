@@ -58,6 +58,11 @@ project folder shadows the package.
   the document, and only the detected copy is filtered against the document's declared values,
   so a typed `--scope` keeps confluid's typo error. `--os`/`--device` stay ordinary overrides,
   never implicit dimension flags. No environment variable is set or read. (`tests/test_host.py`) §8.
+- A typed bare `--scope NAME` (no `=`) the script command's config does not declare — a bare scope or a keyed
+  dimension's name, includes followed — is refused in `_prepare` right after the raw load
+  (`config_scopes.check_declared`, `UnknownScopeError`, the file's scopes listed); a keyed `--scope KEY=VAL` of an
+  undeclared dimension stays inert (confluid §1: matrainer passes `--scope framework=<name>` to every config). Host
+  facts are never judged. (user request 2026-10-30; `tests/test_undeclared_scope.py`)
 - A `@command(config_files=provider)` command receives the typed `--scope` values in its `scopes`
   parameter and they activate NOTHING on the app's config. liquifai reads the scopes off the files
   the provider names for the typed words (`config_scopes`, the one reader) — never a list the
@@ -154,6 +159,12 @@ project folder shadows the package.
 - A parameter without a default that nothing supplied (checked after DI) raises
   `MissingArgumentError`, naming the CLI path and both spellings.
   (`tests/test_missing_argument.py`, `examples/pypeek/run.py`)
+- A parameter typed as a closed set (`Literal`, `Optional[Literal]`, a union of `Literal`s, inside `Annotated` too —
+  `core.choice_params`) given a value outside it raises `InvalidChoiceError` after DI (`_check_choices`, beside the
+  missing-argument check, so a config key of its name is judged as a typed value), naming the command, the option
+  (`<name>` for a positional), the values (an Optional's `None` accepted, never listed) and the one given; the match is
+  type-exact (`True` is not `1`). A union with an open member (`Union[int, Literal["auto"]]`) is not judged — never
+  grow this into type validation (user approval 2026-10-30). (`tests/test_choice_values.py`)
 - A displayed command name comes from `LiquifyApp._command_path`, never from the function's
   `__name__`. (`tests/test_core_extended.py::test_help_names_*`)
 - `report.py` renders all help; `core._show_help` only orchestrates. `--docs` is `--help` with
@@ -170,6 +181,12 @@ project folder shadows the package.
 - A positional is never advertised as a `--flag` in help or completion, though that spelling
   still parses. (`tests/test_help_with_config.py`, the `_version_create_app` cases in
   `tests/test_completion.py`)
+- A command's own plain parameters are an options table in EVERY help view, titled `Options of <command>` with the
+  flowed tables' columns (`Option`, `Type`, `Current Value`, `Description`) and value spelling: with a config,
+  between the config's options and the objects' tables (`report._command_option_rows`; the instance walk lists objects
+  only). The description is `report.command_description`: the docstring without its `Args:` block, which the tables
+  carry. A script command's `Any` parameter is the object its config binds (`report.config_object_params`): never a
+  flag row. A type is spelled by `confluid.type_label` (`text | json`), never `Literal`. (`tests/test_help_command_options.py`)
 
 ## Code shape
 

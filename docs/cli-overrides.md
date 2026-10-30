@@ -49,6 +49,17 @@ Error: my-app show: --name needs a value — pass it as `--name <value>` or `nam
 
 A switch, a config key and a parameter without a type annotation keep the implicit `True` (`--verbose`).
 
+**A choice takes only its values.** A parameter typed as a closed set — `plan_format: Literal["text", "json"]`,
+`Optional[Literal[...]]`, a union of `Literal`s — refuses any other value before the command runs, whether it was
+typed or written as a config key of that name:
+
+```text
+Error: my-app show: --plan_format must be one of text, json; got 'xml'
+```
+
+The comparison is exact: `JSON` is not `json`. A type mixing a choice with an open type (`Union[int, Literal["auto"]]`)
+is not judged.
+
 ## How a value is typed
 
 An override value is read as YAML, so it arrives as the type it looks like:
@@ -111,9 +122,10 @@ $ myapp restart -b                 # == --background
 $ myapp restart -p 9000            # == --port 9000   (-p=9000 also works)
 
 $ myapp restart --help
- Option (Shortest Unique)  Type  Current/Default Value  Documentation
- -b, --background          bool  False                  Start detached.
- --port                    int   8188                   Port to use.
+                      Options of restart
+ Option            Type  Current Value  Description
+ -b, --background  bool  False          Start detached.
+ -p, --port        int   8188           Port to use.
 ```
 
 A letter that is reserved by a global, declared twice, longer than one character, or names no
