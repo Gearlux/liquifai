@@ -58,11 +58,12 @@ project folder shadows the package.
   the document, and only the detected copy is filtered against the document's declared values,
   so a typed `--scope` keeps confluid's typo error. `--os`/`--device` stay ordinary overrides,
   never implicit dimension flags. No environment variable is set or read. (`tests/test_host.py`) §8.
-- A typed bare `--scope NAME` (no `=`) the config on the line (`<config>` or `-c`) does not declare — a bare scope or a keyed
-  dimension's name, includes followed — is refused in `_prepare` right after the raw load
-  (`config_scopes.check_declared`, `UnknownScopeError`, the file's scopes listed); a keyed `--scope KEY=VAL` of an
-  undeclared dimension stays inert (confluid §1: matrainer passes `--scope framework=<name>` to every config). Host
-  facts are never judged. (user request 2026-10-30; `tests/test_undeclared_scope.py`)
+- A typed bare `--scope NAME` (no `=`) no block of the config declares is refused by CONFLUID's `load()` after its
+  settle loop (confluid §1 amendment 2026-10-30, `ScopeError` → one `Error:` line here), never by a check of
+  liquifai's: one on the raw document refused an alias and a name a scope block's own include declares (user choice
+  2026-10-30). A keyed `--scope KEY=VAL` of an undeclared dimension stays inert (matrainer passes
+  `--scope framework=<name>` to every config); host facts are keyed and filtered by `host.auto_scopes`.
+  (`tests/test_undeclared_scope.py`)
 - A `@command(config_files=provider)` command receives the typed `--scope` values in its `scopes`
   parameter and they activate NOTHING on the app's config. liquifai reads the scopes off the files
   the provider names for the typed words (`config_scopes`, the one reader) — never a list the

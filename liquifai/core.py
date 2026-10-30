@@ -838,8 +838,6 @@ class LiquifyApp:
         included_paths: List[Path] = []
         if config_path is not None and config_path.exists():
             raw_config, included_paths = confluid.load(config_path, until="raw", return_paths=True)
-            # A typed bare scope the config does not declare is refused: it would run as if none were typed.
-            config_scopes.check_declared(scopes, raw_config, config_path)
             scopes, final_tokens = flags.bind_dimension_flags(scopes, raw_config, final_tokens)
 
         # 3c. HOST FACTS — `os` / `device`, detected once and offered twice: as scope

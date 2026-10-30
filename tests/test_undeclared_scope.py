@@ -1,8 +1,9 @@
 """A bare ``--scope NAME`` the config does not declare is refused before anything runs.
 
 ``tool run cfg.yaml --scope vla`` (a typo of ``val``) used to run as if no scope were given — the default, train
-split — and said nothing. A typed bare scope is now checked against the config's scopes (its includes too) and
-refused naming the file and the scopes it does declare, as a ``config_files=`` command's typed scope already is.
+split — and said nothing. confluid refuses the name once the document's scopes and includes settle (its
+architecture §1, amendment 2026-10-30), and liquifai's failure contract makes it one ``Error:`` line, exit 1. liquifai
+adds no check of its own: one on the raw document refused an alias and a name a scope block's own include declares.
 A keyed ``--scope dim=value`` whose dimension the config never declares stays an inert no-op: a CLI passes a
 dimension to every config (``--framework`` becomes ``--scope framework=<name>``) while a config grows into it.
 """
@@ -12,9 +13,9 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
+from confluid.exceptions import ScopeError
 
 from liquifai import LiquifyApp
-from liquifai.exceptions import UnknownScopeError
 
 CONFIG = "size: 1\nquick: !scope:quick\n  size: 2\nkeyed: !scope:task=a\n  size: 3\n"
 
@@ -23,8 +24,14 @@ CONFIG = "size: 1\nquick: !scope:quick\n  size: 2\nkeyed: !scope:task=a\n  size:
 def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "base.yaml").write_text("deep: !scope:deep\n  size: 4\n")
+    (tmp_path / "quick_extra.yaml").write_text("extra: !scope:extra\n  size: 5\n")
     path = tmp_path / "cfg.yaml"
-    path.write_text(CONFIG + "include: base.yaml\n")  # last: its scope's size wins
+    # `include: base.yaml` last: its scope's size wins. The alias and the include inside `quick2` are what a check on
+    # the raw document cannot see.
+    path.write_text(
+        CONFIG
+        + "quick2: !scope:quick2\n  include: quick_extra.yaml\nscope_aliases:\n  fast: [quick]\ninclude: base.yaml\n"
+    )
     return path
 
 
@@ -54,6 +61,8 @@ def _refused(config: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any, *argv: 
     [
         (["--scope", "quick"], 2),
         (["--scope", "deep"], 4),  # declared in an included file
+        (["--scope", "fast"], 2),  # an alias the config declares
+        (["--scope", "quick2", "--scope", "extra"], 5),  # declared in the include of an active scope block
         (["--scope", "task=a"], 3),
         (["--task", "a"], 3),  # the dimension flag
         ([], 1),
@@ -68,7 +77,9 @@ def test_an_undeclared_bare_scope_is_refused_naming_the_file_and_its_scopes(
     config: Path, monkeypatch: pytest.MonkeyPatch, capsys: Any, argv: List[str]
 ) -> None:
     out = _refused(config, monkeypatch, capsys, *argv)
-    assert "Error: cfg.yaml has no scope 'quik' (its scopes: deep, quick, task=a)" in out
+    files = f"{config}, {config.parent / 'base.yaml'}"
+    expected = f"Error: No scope block declares 'quik' (the scopes of {files}: deep, quick, quick2, task=a)"
+    assert "".join(expected.split()) in "".join(out.split())  # the console wraps a long path inside a word
 
 
 def test_an_undeclared_keyed_dimension_stays_inert(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,7 +94,7 @@ def test_a_bare_name_of_a_keyed_dimension_keeps_confluids_own_refusal(
 
 
 def test_with_debug_the_refusal_propagates(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(UnknownScopeError, match="has no scope 'quik'"):
+    with pytest.raises(ScopeError, match="No scope block declares 'quik'"):
         _run(config, monkeypatch, "--scope", "quik", "--debug")
 
 
