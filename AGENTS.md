@@ -94,7 +94,7 @@ project folder shadows the package.
   it. (`tests/test_option_values.py`)
 - `--dump-config[=PATH]` prints (or writes) the resolved configuration and runs NOTHING; `--save-config PATH` writes it
   and runs (user choice 2026-10-30). Both write `dump.resolved_config_text`: the document after overrides, built as DI
-  builds it, never solidified, dumped `qualified=True`, the `platform:` block dropped when it holds only the detected
+  builds it, never solidified, dumped `qualified=True, defaults=True` (a deferred slot shows its defaults), the `platform:` block dropped when it holds only the detected
   facts. `--dump-config`'s path is taken only after `=` (never the next token), and neither flag ever reaches the config; a missing
   config, an empty `=` or a `--save-config` without a file is refused. (`tests/test_dump_config.py`) §14.
 - `strict_flags` stays OFF by default. When on, it judges only BARE keys, against the command's

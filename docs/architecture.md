@@ -1077,7 +1077,8 @@ stray override); writing the file from the command (each app would repeat it).
   store values (the lazy-initialization rule), so that is cheap; a class that breaks the rule pays it twice.
 - A dump that stops warns about a command-line key that reached nothing, as the run would; `--save-config` leaves
   that to the run, so it is said once.
-- A deferred slot (`_partial_: true`) shows only what it was given: it is built later, by the run.
+- A deferred slot (`_partial_: true`) is built later, by the run; it is dumped with its defaults too
+  (`confluid.dump(..., defaults=True)`, amendment 2026-10-30), a parameter without a default left out.
 - A parameter DI builds from its type annotation alone, with no key in the document, is not in the file.
 - Without a config file both flags are refused (`ConfigNotFoundError`): there is nothing to resolve.
 

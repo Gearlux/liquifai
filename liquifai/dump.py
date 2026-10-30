@@ -5,7 +5,8 @@ dumped with each of its settings — written or defaulted — so a reader sees e
 involves, and the file runs again as it is. Objects are built the way dependency injection builds them
 (``confluid.load(node, context=document)``, so top-level keys broadcast), without ``solidify()``: a constructor only
 stores values (the workspace's lazy-initialization rule), so nothing is downloaded or materialized. Classes are named
-by their importable dotted path (``qualified=True``), so the file reloads in a process that registered nothing.
+by their importable dotted path (``qualified=True``), so the file reloads in a process that registered nothing. A slot
+the run builds later (``_partial_: true``) is listed with the defaults it was not given too (``defaults=True``).
 
 Example::
 
@@ -37,7 +38,7 @@ def resolved_config_text(document: Mapping[str, Any], host_facts: Mapping[str, s
     built = confluid.load(data, context=data, solidify=False)
     if isinstance(built, dict) and built.get(host.NAMESPACE) == dict(host_facts):
         built.pop(host.NAMESPACE)
-    return str(confluid.dump(built, qualified=True))
+    return str(confluid.dump(built, qualified=True, defaults=True))
 
 
 def write_config_text(text: str, path: Path) -> Path:

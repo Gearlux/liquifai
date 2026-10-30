@@ -93,7 +93,7 @@ as written: `my-app resolved.yaml` runs the same configuration. The `platform:` 
 | `my-app run.yaml --dump-config=resolved.yaml` | writes `resolved.yaml` (its folder created), runs nothing |
 | `my-app run.yaml --save-config resolved.yaml` | writes `resolved.yaml`, then runs |
 
-A deferred slot (`_partial_: true`, built later by the run) shows only what it was given. A command with no config
+A deferred slot (`_partial_: true`, built later by the run) is listed with its defaults too; a parameter without a default (an optimizer's `params`, passed in by the run) is left out. A command with no config
 file refuses both flags: `Error: --dump-config: no configuration file was given — name one (...)`.
 
 ## `--help` with a config — the Scope Dimensions block
