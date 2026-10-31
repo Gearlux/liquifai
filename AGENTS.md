@@ -86,9 +86,10 @@ project folder shadows the package.
   (`tests/test_short_options.py`, `tests/test_help_flag.py`)
 - Flag KEYS are normalised `-` → `_` per dotted segment, after polarity is read
   (`--default-nodes-` means False). Flag VALUES are never normalised. (`tests/test_flag_spelling.py`)
-- A value for a bare key the active command declares `str` or `Optional[str]` is kept verbatim;
-  everything else keeps YAML typing (`confluid.parse_value`). Do not grow this into a per-type
-  coercion table or a new value spelling. (`tests/test_override_str_verbatim.py`)
+- A value for a bare key the active command declares `str` or `Optional[str]` is kept verbatim, and so is one for a
+  top-level key the loaded document holds as text (`overrides.text_config_keys`, user choice 2026-10-31: `--version
+  1.10` was the float `1.1`); everything else keeps YAML typing (`confluid.parse_value`). Do not grow this into a
+  per-type coercion table or a new value spelling — no quote stripping. (`tests/test_override_str_verbatim.py`) §17.
 - A bare key the active command declares `bool` or `Optional[bool]` is a switch (`overrides.bool_param_names`, user
   approval 2026-10-30): it takes the next word only when that word is a yes/no value (`true`/`false`/`yes`/`no`/
   `on`/`off`/`0`/`1`), else it is `True` and the word is read on its own — the parser agrees with completion's

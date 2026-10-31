@@ -16,10 +16,15 @@ So: when the active command annotates a parameter ``str``, its value is taken
 verbatim. Everything else keeps coercing.
 """
 
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pytest
+from confluid import configurable
 
+from liquifai import LiquifyApp
+from liquifai.context import set_context
 from liquifai.overrides import parse_override_args
 
 #: The parameter names the active command declares as ``str``.
@@ -106,3 +111,109 @@ class TestSignatureDerivation:
         from liquifai.overrides import str_param_names
 
         assert str_param_names(None) == set()
+
+
+class TestAConfigKeyHoldingTextKeepsTheValueAsTyped:
+    """A top-level key the loaded config holds as text takes a typed value as text.
+
+    Reported: ``run render.yaml --version "1.3"`` — the shell drops the quotes, YAML reads ``1.3`` as a float, and the
+    class taking ``version: str`` refused it (``1.10`` would have become ``1.1``, another version). The config's own
+    value (``version: latest``) already says the key is text.
+    """
+
+    _DOCUMENT = {"version": "latest", "dataset": "", "exclude": "*.pickle.json", "limit": 20, "downloaded": False}
+
+    def _parse(self, args: List[str]) -> Dict[str, Any]:
+        from liquifai.overrides import text_config_keys
+
+        overrides, _deletions, _dropped = parse_override_args(args, verbatim_keys=text_config_keys(self._DOCUMENT))
+        return overrides
+
+    @pytest.mark.parametrize(
+        ("args", "expected"),
+        [
+            (["--version", "1.3"], {"version": "1.3"}),
+            (["--version", "1.10"], {"version": "1.10"}),
+            (["version=2.0"], {"version": "2.0"}),
+            (["--dataset", "2024"], {"dataset": "2024"}),
+            (["--version", "'1.3'"], {"version": "'1.3'"}),
+            (["--version", "null"], {"version": "null"}),
+            (["--exclude", "[a, b]"], {"exclude": "[a, b]"}),
+        ],
+    )
+    def test_the_typed_text_arrives_unchanged(self, args: List[str], expected: Dict[str, Any]) -> None:
+        assert self._parse(args) == expected
+
+    @pytest.mark.parametrize(
+        ("args", "expected"),
+        [
+            (["--limit", "30"], {"limit": 30}),
+            (["--downloaded", "true"], {"downloaded": True}),
+            (["+trainer.lr=0.01"], {"trainer.lr": 0.01}),
+            (["--sets.0.version", "1.3"], {"sets.0.version": 1.3}),
+            (["--samples", "5"], {"samples": 5}),
+        ],
+    )
+    def test_a_key_not_held_as_text_still_reads_as_yaml(self, args: List[str], expected: Dict[str, Any]) -> None:
+        assert self._parse(args) == expected
+
+    def test_only_top_level_text_values_count(self) -> None:
+        from liquifai.overrides import text_config_keys
+
+        document = {"version": "latest", "limit": 20, "nested": {"name": "x"}, "items": ["a"], "none": None}
+        assert text_config_keys(document) == {"version"}
+
+    def test_a_document_that_is_no_mapping_holds_no_text_keys(self) -> None:
+        from liquifai.overrides import text_config_keys
+
+        assert text_config_keys(None) == set()
+        assert text_config_keys(["version"]) == set()
+
+
+@configurable
+class _VersionedSource:
+    """End-to-end fixture: a class that takes its version as text, fed by a top-level key."""
+
+    def __init__(self, version: str = "latest", limit: int = 0) -> None:
+        self.version, self.limit = version, limit
+
+
+def _run_versioned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, document: str, *flags: str) -> "_VersionedSource":
+    app = LiquifyApp(name="versioned-app")
+    seen: List[_VersionedSource] = []
+
+    @app.script_command(flow_mode="auto")
+    def go(source: Any) -> None:
+        seen.append(source)
+
+    config = tmp_path / "cfg.yaml"
+    config.write_text(document)
+    monkeypatch.setattr(sys, "argv", ["versioned-app", "go", str(config), *flags])
+    set_context(None)
+    app.run()
+    (source,) = seen
+    return source
+
+
+_VERSIONED_DOCUMENT = "version: latest\nlimit: 20\nsource: !class:_VersionedSource {}\n"
+
+
+class TestTheRealRun:
+    def test_a_version_typed_like_a_number_reaches_the_class_as_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _run_versioned(tmp_path, monkeypatch, _VERSIONED_DOCUMENT, "--version", "1.10")
+        assert source.version == "1.10"
+
+    def test_a_number_key_still_reaches_the_class_as_a_number(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = _run_versioned(tmp_path, monkeypatch, _VERSIONED_DOCUMENT, "--limit", "30")
+        assert source.limit == 30
+
+    def test_a_key_the_document_does_not_hold_still_reads_as_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without ``version:`` in the document the typed ``1.3`` stays a number, as before."""
+        source = _run_versioned(tmp_path, monkeypatch, "source: !class:_VersionedSource {}\n", "--limit", "1.0")
+        assert source.limit == 1.0

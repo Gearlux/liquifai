@@ -48,6 +48,7 @@ from liquifai.overrides import (
     expand_strings,
     parse_override_args,
     str_param_names,
+    text_config_keys,
     valued_param_names,
 )
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
@@ -1015,8 +1016,9 @@ class LiquifyApp:
         # typed. `parse_value` ends in `yaml.safe_load`, which is right for an untyped
         # config override (`+trainer.lr=0.01` -> float) and destructive for declared text:
         # it folds a multi-line value onto one line, reads `#…` as a comment, `3:30` as
-        # sexagesimal, `012` as octal, `yes` as True.
-        verbatim = str_param_names(self._active_func)
+        # sexagesimal, `012` as octal, `yes` as True. A top-level key the document holds as text
+        # (`version: latest`) is declared text too: `--version 1.10` must not become the float 1.1.
+        verbatim = str_param_names(self._active_func) | text_config_keys(self.context.config_data)
         # A `bool` parameter is a switch: `--dry-run name=x` keeps the override instead of binding `dry_run='name=x'`.
         switches = bool_param_names(self._active_func)
         # An option of a declared non-bool type needs a value: `--name` alone is refused, never `name=True`.
