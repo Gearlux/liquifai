@@ -307,7 +307,8 @@ project folder shadows the package.
 - A config key's value (`key=<TAB>`, `--key <TAB>`, `--key=<TAB>`, a config on the line) completes from the provider
   a package registers under the `liquifai.values` entry-point group, named `<module>.<Class>.<parameter>`, for the
   `!class:` blocks the key feeds (name, `!ref:`, dotted path) — `completion.config_values`. The provider gets the
-  block's other settings as text and runs only in `--refresh-completion-value` (`tree.refresh_one`), cached per
+  block's other settings as text (the line's scopes applied to the document first) and runs only in
+  `--refresh-completion-value` (`tree.refresh_one`), cached per
   settings; a key no provider answers for completes exactly as before (`value_candidates` returns None). The entry
   points are read with `importlib.metadata`, never by importing the class. bash gets the part after the word's last
   `=` (`shells.bash_word_tail`, COMP_LINE path only). (`tests/test_config_value_completion.py`) §16.

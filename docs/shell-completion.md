@@ -450,7 +450,9 @@ huge-one  huge-two
 
 The provider gets the block's other parameters as text: the command line's, else the file's (the
 block's own, the key a `!ref:` names, a broadcast top-level key), else the class's defaults as its
-source writes them, a yes/no parameter as `true` / `false`. It runs only when its cache is
+source writes them, a yes/no parameter as `true` / `false`. The scopes typed on the line (`-s
+folder`) are applied first, so a key a scope gives another meaning completes for the one typed — or,
+when the scope leaves no block with a provider, as before. It runs only when its cache is
 refreshed, in the app's process: the first TAB for a combination of settings offers nothing and
 starts that refresh in the background, the next TAB offers what it listed, and a double-TAB asks
 again. A provider that raises caches nothing. A key no installed package registers a provider for

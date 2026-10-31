@@ -1221,6 +1221,9 @@ the block is the key).
   slot with a config on the line.
 - A cache is per combination of the block's settings: a changed setting the provider ignores still asks again once.
 - `--refresh-completions` cannot fill these caches: it reads no config.
+- The scopes typed on the line (`-s`, `--scope`, `=` spellings, comma lists) are applied to the document first: a
+  key a scope gives another meaning (`folder`: a dataset's folder, or with `-s folder` the folder read) completes
+  for the one typed. A scope the config does not declare completes nothing, as the run refuses it.
 - bash now inserts only the value after `key=` for every candidate holding the word's `=` — `--scope KEY=VAL`'s too.
 
 **Example.**
