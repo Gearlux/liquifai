@@ -25,6 +25,7 @@ import sys
 
 from liquifai.completion import (
     LISTING_WIRE,
+    bash_word_tail,
     complete_from_tree,
     complete_with_listing,
     completion_colour,
@@ -90,10 +91,13 @@ def main() -> None:
             # zsh measures a row's colour codes as characters (its wrapper says it is zsh): count them too.
             codes_count=os.environ.get("LIQUIFAI_COMPLETE_SHELL") == "zsh",
         )
+        if comp_line:  # bash replaces only what follows the word's last `=` (a config key's value)
+            candidates = bash_word_tail(candidates, words[cword])
         for line in wire_lines(candidates, listing):
             print(line)
         return
-    for cand in complete_from_tree(tree, words, cword, lazy_refresh=lazy_refresh, force_refresh=force_refresh):
+    candidates = complete_from_tree(tree, words, cword, lazy_refresh=lazy_refresh, force_refresh=force_refresh)
+    for cand in bash_word_tail(candidates, words[cword]) if comp_line else candidates:
         print(escape_candidate(cand))
 
 

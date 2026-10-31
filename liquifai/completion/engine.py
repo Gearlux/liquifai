@@ -22,6 +22,7 @@ from liquifai.grammar import (
     GLOBAL_FLAGS,
     GLOBAL_VALUE_FLAGS,
     PATH_VALUE_FLAGS,
+    SCOPE_VALUE_FLAGS,
     SHELL_VALUE_FLAGS,
     flag_display,
     looks_like_key,
@@ -29,8 +30,8 @@ from liquifai.grammar import (
 )
 from liquifai.walk import Nav, tokenize, walk_invocation
 
-from . import cache, tree
-from .config_help import ConfigHelp, read_config_help
+from . import cache, config_values, tree
+from .config_help import ConfigHelp, read_config_help, read_config_scopes
 from .shells import SHELLS
 
 if TYPE_CHECKING:
@@ -256,8 +257,11 @@ def _complete(
         return _file_candidates(incomplete, exts=None)
     if prev in SHELL_VALUE_FLAGS:
         return [s for s in SHELLS if s.startswith(incomplete)]
-    if prev in GLOBAL_VALUE_FLAGS:
+    if prev in GLOBAL_VALUE_FLAGS and prev not in SCOPE_VALUE_FLAGS:
         return []
+    flag, equals, value = incomplete.partition("=")
+    if equals and flag in PATH_VALUE_FLAGS:  # ``--config=<TAB>``: the files, the option kept in front
+        return [f"{flag}={path}" for path in _file_candidates(value, exts=None)]
 
     # The descent to (sub-app, command, promoted config, positionals) is the
     # SAME walk the dispatcher runs — shared via liquifai.walk so the two can
@@ -270,12 +274,19 @@ def _complete(
     config_path: Optional[Path] = walk.config_path
     consumed_config = walk.consumed_config
 
-    # An explicit ``--config PATH`` outranks a promoted token for the
+    # An explicit ``--config PATH`` (or ``--config=PATH``) outranks a promoted token for the
     # override-key branch below (the walk leaves the flag in `remaining`).
     leftovers = [t.text for t in walk.remaining]
     for i, tok in enumerate(leftovers):
         if tok in ("--config", "-c") and i + 1 < len(leftovers):
             config_path = Path(leftovers[i + 1])
+        elif tok.partition("=")[0] in ("--config", "-c") and tok.partition("=")[2]:
+            config_path = Path(tok.partition("=")[2])
+
+    if prev in SCOPE_VALUE_FLAGS:
+        return _scope_candidates(config_path, leftovers, incomplete)
+    if equals and flag in SCOPE_VALUE_FLAGS:
+        return [f"{flag}={scope}" for scope in _scope_candidates(config_path, leftovers, value)]
 
     if cmd_name is None:
         if incomplete.startswith("-"):
@@ -335,6 +346,25 @@ def _complete(
     )
 
 
+def _scope_candidates(config_path: Optional[Path], leftovers: List[str], incomplete: str) -> List[str]:
+    """The scopes of the config on the line that match ``incomplete`` (``--scope <TAB>``), none without one.
+
+    A scope an earlier ``--scope NAME`` or ``--scope=NAME`` already names is left out; after a comma the list's next
+    scope is offered. A config that cannot be read offers nothing, never a failed TAB.
+    """
+    resolved = _resolve_config_path(config_path) if config_path is not None else None
+    if resolved is None:
+        return []
+    try:
+        scopes = [scope.activation for scope in read_config_scopes(resolved)]
+    except Exception:
+        return []
+    given = [value for flag, value in zip(leftovers, leftovers[1:]) if flag in SCOPE_VALUE_FLAGS]
+    given += [tok.partition("=")[2] for tok in leftovers if tok.partition("=")[0] in SCOPE_VALUE_FLAGS]
+    typed = {name for value in given for name in value.split(",")}
+    return _list_candidates([scope for scope in scopes if scope not in typed], incomplete)
+
+
 def _command_path(tree: Dict[str, Any], leading: List[str], cmd_name: Optional[str]) -> str:
     """``<app> <sub-app ...> <command>``: the canonical names of the sub-apps ``leading`` enters, then the command
     (none: the level alone)."""
@@ -375,6 +405,28 @@ def _slot_candidates(
     if lazy_refresh is not None and (force_refresh or cache.slot_is_stale(app_name, info, inputs)):
         lazy_refresh(info["key"], inputs)
     return _list_candidates(list(values or []), incomplete)
+
+
+def _config_value_slot(prev: str, incomplete: str, bool_flags: Set[str]) -> Optional[Tuple[str, str, str]]:
+    """``(key, what the candidate keeps before the value, the value typed so far)`` when the word is an option's
+    value — ``name=sm``, ``--name=sm``, or ``sm`` after ``--name`` — else None."""
+    if incomplete.startswith("--") and "=" in incomplete:
+        head, _, partial = incomplete[2:].partition("=")
+        return (config_values.option_key(head), f"--{head}=", partial) if head else None
+    if "=" in incomplete and not incomplete.startswith("-"):
+        head, _, partial = incomplete.partition("=")
+        return (config_values.option_key(head), f"{head}=", partial) if looks_like_key(head) else None
+    if (
+        prev.startswith("--")
+        and len(prev) > 2
+        and "=" not in prev
+        and not prev.endswith(("+", "-"))
+        and prev not in GLOBAL_FLAGS
+        and prev not in bool_flags
+        and not incomplete.startswith("-")
+    ):
+        return config_values.option_key(prev[2:]), "", incomplete
+    return None
 
 
 def _list_candidates(values: List[str], incomplete: str) -> List[str]:
@@ -455,6 +507,18 @@ def _command_candidates(
         # (``--converter.dry`` consumed ⇒ drop the collapsed ``--dry``).
         key = flag[2:]
         return not any(k == key or k.endswith("." + key) for k in used_keys)
+
+    # A config key's value (``name=<TAB>``, ``--name <TAB>``, ``--name=<TAB>``): what the provider of the class
+    # parameter the key feeds listed (config_values), when one answers for it; otherwise the branches below.
+    if is_script_cmd and config_path is not None:
+        slot = _config_value_slot(prev, incomplete, bool_flags)
+        resolved = _resolve_config_path(config_path) if slot is not None else None
+        if slot is not None and resolved is not None:
+            key, spelled, partial = slot
+            typed_words = list(parsed[args_index + 1 :] if consumed_config else parsed[args_index:])
+            values = config_values.value_candidates(app_name, resolved, key, typed_words, lazy_refresh, force_refresh)
+            if values is not None:
+                return [spelled + value for value in _list_candidates(values, partial)]
 
     # The previous token is a value-taking ``--flag`` (and not one of the
     # globals whose values we resolved at the top): its value comes next and

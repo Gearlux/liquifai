@@ -3,7 +3,7 @@
 A script command's config holds the settings its author put first: the top-level keys written in that file (never
 its includes') and the scope blocks of the document — its own, then its includes' (a scope activates wherever it is
 declared). :func:`read_config_help` reads them with their help — the comment
-lines directly above each key (else the comment at the end of its line), else the docstring of the class parameter
+lines directly above each key (else the comment at the end of its line, with the comment lines aligned under it), else the docstring of the class parameter
 the key feeds (through ``!ref:`` or by its name) — and every other key the document holds with its class's
 parameter help. Class docstrings are read from source (:func:`confluid.source_param_docs`), never by importing the
 class, so a TAB stays fast.
@@ -163,19 +163,59 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
                 found.focused.append(FocusedKey(note.name, help_of(note), _shown(value)))
             elif note.name not in found.docs:
                 found.docs[note.name] = help_of(note)
-        # A scope activates for the whole document wherever it is declared: an include's are the config's too.
-        for scope in notes.scopes:
-            if scope.activation not in seen:
-                seen[scope.activation] = ConfigScope(scope.activation, scope.comment)
-                found.scopes.append(seen[scope.activation])
-            elif not seen[scope.activation].help:
-                seen[scope.activation].help = scope.comment
+        _add_scopes(notes, seen, found.scopes)
+    _add_aliases(raw, seen, found.scopes)
     for key in found.keys:
         head, _, leaf = key.rpartition(".")
         owner = targets.get(head)
         if owner is not None and key not in found.docs:
             found.docs[key] = docs_of(owner).get(leaf, "")
     return found
+
+
+def read_config_scopes(config_path: Path) -> List[ConfigScope]:
+    """The scopes of the config at ``config_path`` — :attr:`ConfigHelp.scopes`, without reading its keys.
+
+    What ``--scope <TAB>`` offers: the file's own in file order, then each include's, one per activation, then the
+    document's ``scope_aliases:``. The files are read as :func:`confluid.load` reads them, and its error propagates.
+    """
+    import confluid
+
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        raw, paths = confluid.load(config_path, until="raw", return_paths=True)
+    scopes: List[ConfigScope] = []
+    seen: Dict[str, ConfigScope] = {}
+    for read in paths or [Path(config_path).resolve()]:
+        notes = _notes(confluid.document_notes, read)
+        if notes is not None:
+            _add_scopes(notes, seen, scopes)
+    _add_aliases(raw, seen, scopes)
+    return scopes
+
+
+def _add_scopes(notes: Any, seen: Dict[str, ConfigScope], scopes: List[ConfigScope]) -> None:
+    """Append one file's scopes to ``scopes``: a scope activates for the whole document wherever it is declared, so an
+    include's are the config's too; one declared again keeps its first place and gains a comment it lacked."""
+    for scope in notes.scopes:
+        if scope.activation not in seen:
+            seen[scope.activation] = ConfigScope(scope.activation, scope.comment)
+            scopes.append(seen[scope.activation])
+        elif not seen[scope.activation].help:
+            seen[scope.activation].help = scope.comment
+
+
+def _add_aliases(raw: Any, seen: Dict[str, ConfigScope], scopes: List[ConfigScope]) -> None:
+    """Append the document's ``scope_aliases:`` — its includes' too, merged into the raw document — after its scopes,
+    each helped by what it activates; an alias named like a scope is that scope's row already."""
+    aliases = raw.get("scope_aliases") if isinstance(raw, dict) else None
+    if not isinstance(aliases, dict):
+        return
+    for name, targets in aliases.items():
+        if not isinstance(name, str) or name in seen:
+            continue
+        names = targets if isinstance(targets, list) else [targets]
+        seen[name] = ConfigScope(name, f"Alias of {', '.join(str(each) for each in names)}.")
+        scopes.append(seen[name])
 
 
 def _params_of(reader: Callable[[str], Any], target: str) -> Any:

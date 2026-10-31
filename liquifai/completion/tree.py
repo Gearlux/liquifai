@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
-from . import cache
+from . import cache, config_values
 
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
@@ -380,6 +380,9 @@ def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Op
     ``<…>-updated`` notice). Returns the number of values written, or None on no match /
     provider failure.
     """
+    if config_values.is_value_key(cache_key):  # a config key's value: its class's registered provider
+        provided = config_values.provide(cache_key, inputs)
+        return None if provided is None else _write_dependent(app.name, cache_key, inputs, provided)
     want_dependent = bool(inputs)
     for s in iter_completion_providers(app):
         if s["key"] != cache_key:
@@ -392,23 +395,29 @@ def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Op
             values = [str(v) for v in ((s["provider"](inputs) if want_dependent else s["provider"]()) or [])]
         except Exception:
             return None
+        if want_dependent:
+            return _write_dependent(app.name, cache_key, inputs, values)
         try:
-            if want_dependent:
-                old = cache.read_dependent_value_cache(app.name, cache_key, inputs)
-                # Stamp a change (drives the "<…>-updated" notice) on first population or
-                # change; keep the prior stamp on an unchanged refresh so it ages out.
-                changed_at = (
-                    time.time()
-                    if (old is None or old != values)
-                    else cache._dependent_changed_at(app.name, cache_key, inputs)
-                )
-                cache.write_dependent_value_cache(app.name, cache_key, inputs, values, changed_at=changed_at)
-            else:
-                cache.write_value_cache(app.name, cache_key, values)
+            cache.write_value_cache(app.name, cache_key, values)
         except Exception:
             return None
         return len(values)
     return None
+
+
+def _write_dependent(app_name: str, cache_key: str, inputs: Dict[str, str], values: List[str]) -> Optional[int]:
+    """Cache a dependent slot's ``values`` for ``inputs``; the number written, or None when the cache cannot be."""
+    try:
+        old = cache.read_dependent_value_cache(app_name, cache_key, inputs)
+        # Stamp a change (drives the "<…>-updated" notice) on first population or
+        # change; keep the prior stamp on an unchanged refresh so it ages out.
+        changed_at = (
+            time.time() if (old is None or old != values) else cache._dependent_changed_at(app_name, cache_key, inputs)
+        )
+        cache.write_dependent_value_cache(app_name, cache_key, inputs, values, changed_at=changed_at)
+    except Exception:
+        return None
+    return len(values)
 
 
 def has_stale_value_caches(app: "LiquifyApp", ttl: float) -> bool:

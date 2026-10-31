@@ -96,6 +96,7 @@ from .shells import (  # noqa: F401
     WIRE_HEADER,
     CompletionColour,
     CompletionList,
+    bash_word_tail,
     completion_colour,
     completion_list_style,
     detect_shell,
