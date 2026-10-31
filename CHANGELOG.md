@@ -34,6 +34,11 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **A config's scopes include those of the files it includes** — `my-app run masks.yaml --<TAB><TAB>` and `--help`
+  showed no scopes when the only one (`quick`) was declared in an included file; `scopes of masks.yaml` now lists
+  `-s quick` with its comment. The file's own scopes come first; a scope declared twice is listed once.
+- **A section rule above a key is not its help** — under `# -- Knobs -----…`, `--fft_size` showed the rule as its
+  help; it now shows the comment ending its own line (confluid's `document_notes`).
 - **A bare `--scope NAME` the config does not declare is refused** — `my-app run cfg.yaml --scope vla` printed
   nothing and ran as if no scope were typed (the default split); it now stops with `Error: No scope block declares
   'vla' (the scopes of /path/to/cfg.yaml: quick, val)` before anything runs — confluid's refusal, so an alias and a

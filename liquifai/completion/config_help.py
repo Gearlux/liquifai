@@ -1,7 +1,8 @@
 """What a config on the command line says about its settings — the help a TAB listing and ``--help`` show for it.
 
 A script command's config holds the settings its author put first: the top-level keys written in that file (never
-its includes') and the scope blocks it declares. :func:`read_config_help` reads them with their help — the comment
+its includes') and the scope blocks of the document — its own, then its includes' (a scope activates wherever it is
+declared). :func:`read_config_help` reads them with their help — the comment
 lines directly above each key (else the comment at the end of its line), else the docstring of the class parameter
 the key feeds (through ``!ref:`` or by its name) — and every other key the document holds with its class's
 parameter help. Class docstrings are read from source (:func:`confluid.source_param_docs`), never by importing the
@@ -36,7 +37,7 @@ class FocusedKey:
 
 @dataclass
 class ConfigScope:
-    """A scope block the config file declares."""
+    """A scope the config declares, in the file itself or in a file it includes."""
 
     #: What ``--scope`` takes to activate it (``quick``, ``task=classification``).
     activation: str
@@ -54,7 +55,8 @@ class ConfigHelp:
     keys: List[str] = field(default_factory=list)
     #: The top-level keys of the file itself, in file order.
     focused: List[FocusedKey] = field(default_factory=list)
-    #: The scope blocks of the file itself, in file order, one per activation.
+    #: The scopes of the document, one per activation: the file's own in file order, then each include's in the
+    #: order they are read; the help is the file's comment, else the first include's.
     scopes: List[ConfigScope] = field(default_factory=list)
     #: ``{dotted key: help}`` for the document's other keys: an included file's top-level keys and the parameters
     #: of the markers it builds.
@@ -72,7 +74,7 @@ class ConfigHelp:
 
 
 def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: bool = True) -> ConfigHelp:
-    """The keys of the config at ``config_path``, its own top-level keys and scopes first, each with its help.
+    """The keys of the config at ``config_path``, its own top-level keys and every scope first, each with its help.
 
     ``exclude`` names keys that belong to the command (its parameters and positionals — ``runnable`` is what
     ``run`` takes, not a setting of the file); they are never focused. ``with_docs=False`` reads the keys alone (the
@@ -149,6 +151,7 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
 
     entry = Path(config_path).resolve()
     skipped = set(exclude)
+    seen: Dict[str, ConfigScope] = {}
     for read in paths or [entry]:
         notes = _notes(confluid.document_notes, read)
         if notes is None:
@@ -160,14 +163,13 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
                 found.focused.append(FocusedKey(note.name, help_of(note), _shown(value)))
             elif note.name not in found.docs:
                 found.docs[note.name] = help_of(note)
-        if own:
-            seen: Dict[str, ConfigScope] = {}
-            for scope in notes.scopes:
-                if scope.activation not in seen:
-                    seen[scope.activation] = ConfigScope(scope.activation, scope.comment)
-                    found.scopes.append(seen[scope.activation])
-                elif not seen[scope.activation].help:
-                    seen[scope.activation].help = scope.comment
+        # A scope activates for the whole document wherever it is declared: an include's are the config's too.
+        for scope in notes.scopes:
+            if scope.activation not in seen:
+                seen[scope.activation] = ConfigScope(scope.activation, scope.comment)
+                found.scopes.append(seen[scope.activation])
+            elif not seen[scope.activation].help:
+                seen[scope.activation].help = scope.comment
     for key in found.keys:
         head, _, leaf = key.rpartition(".")
         owner = targets.get(head)

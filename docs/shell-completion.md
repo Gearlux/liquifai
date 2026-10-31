@@ -116,7 +116,8 @@ $ my-app fetch alpha --
 ```
 
 With a config on the line, the settings its author wrote first come before the command's options: the top-level
-keys of that file (never its includes'), in the file's order, then the scopes it declares:
+keys of that file (never its includes'), in the file's order, then the scopes it and the files it includes declare
+(its own first; a scope declared in both is one row):
 
 ```console
 $ my-app run catalog.yaml --<TAB><TAB>
@@ -157,7 +158,7 @@ order the document writes them — listing every parameter of that class, writte
 (`--overwrite` above), each with its `Args:` help and the value the config writes, else its default; a yes/no
 parameter shows none. A parameter a top-level key already feeds — written `!ref:<key>` (`source_dirs:
 !ref:setup_folders` above), or not written by its block and named like a top-level key, which is broadcast into it
-— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it, else the comment at the end of its line, else the `Args:` help
+— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it (a section rule such as `# -- Knobs -----` is no key's help), else the comment at the end of its line, else the `Args:` help
 of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
 `!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
 the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds.
