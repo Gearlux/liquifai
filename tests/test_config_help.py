@@ -1,7 +1,8 @@
 """A config's own settings come first, with their help — in the TAB listing and in ``--help`` alike.
 
-The top-level keys written in the config file itself (never its includes') and its scope blocks are what its author
-put first; each shows its comment, else the help of the class parameter it feeds (through ``!ref:`` or by its name).
+The top-level keys written in the config file itself (never its includes') and the document's scopes (its own, then
+its includes') are what its author put first; each shows its comment, else the help of the class parameter it feeds
+(through ``!ref:`` or by its name).
 """
 
 from __future__ import annotations
@@ -140,6 +141,70 @@ def test_the_files_own_keys_are_focused_in_file_order_each_with_its_help(config:
         FocusedKey("long_text", "", ""),  # too long to show its value
     ]
     assert found.scopes == [ConfigScope("quick", "A quick run.")]
+
+
+@pytest.fixture
+def included_scopes(tmp_path: Path) -> Path:
+    """A config declaring one scope of its own over two levels of includes that declare more."""
+    _write(
+        tmp_path,
+        "deep.yaml",
+        """\
+        # Validation only.
+        val: !scope:val
+          count: 0
+        """,
+    )
+    _write(
+        tmp_path,
+        "shared.yaml",
+        """\
+        include: deep.yaml
+        count: 1
+        # The include's quick run.
+        quick: !scope:quick
+          count: 5
+        # A long run.
+        long: !scope:long
+          count: 500
+        """,
+    )
+    return _write(
+        tmp_path,
+        "run.yaml",
+        """\
+        include: shared.yaml
+        quick: !scope:quick
+          count: 20
+        # Debug output.
+        debug: !scope:debug
+          count: 2
+        """,
+    )
+
+
+def test_an_included_files_scopes_are_the_configs_too_its_own_first(included_scopes: Path) -> None:
+    """A scope activates for the whole document wherever it is declared: the file's own come first, then each
+    include's in the order they are read; a scope declared twice is one row, the file's comment else the include's."""
+    assert read_config_help(included_scopes).scopes == [
+        ConfigScope("quick", "The include's quick run."),  # its own block has no comment
+        ConfigScope("debug", "Debug output."),
+        ConfigScope("long", "A long run."),
+        ConfigScope("val", "Validation only."),  # an include's include
+    ]
+    assert read_config_help(included_scopes, with_docs=False).scopes == []
+
+
+def test_the_tab_listing_and_help_show_an_included_files_scopes(
+    included_scopes: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = _text(f"helpdemo run {included_scopes} --")
+    start = text.index(f"scopes of {included_scopes}") + 1
+    assert [row.split()[1] for row in text[start : start + 4]] == ["quick", "debug", "long", "val"]
+    out = _help(included_scopes, capsys, monkeypatch)
+    scopes = out[out.index("Scopes of run.yaml") :]
+    assert all(f"-s {name}" in scopes for name in ("quick", "debug", "long", "val"))
+    assert "Validation only." in scopes
 
 
 def test_a_key_without_a_comment_takes_the_help_of_the_parameter_its_ref_feeds(tmp_path: Path) -> None:

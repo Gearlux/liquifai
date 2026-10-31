@@ -1058,6 +1058,18 @@ read_config_help(Path("catalog.yaml")).fed
 # {('BuildSignalStudioCatalog', 'datasets'), ('RenderViews', 'modes'), …}
 ```
 
+**Amendment (2026-10-30, scopes): an included file's scopes are the config's.** A config whose only scope sat in a
+file it includes (`masks.yaml` over `_setups.yaml`'s `quick`) showed no `scopes of <config>` at all: the scopes
+were read from the typed file only, like its focused keys. A scope activates for the whole document wherever it is
+declared, so the user asked for every one: the file's own first, in file order, then each include's in the order
+`confluid.load` reads them; a scope declared twice is one row, its help the file's comment, else the include's.
+An included file's KEYS stay out of `options of <config>` — only scopes are gathered.
+
+```python
+read_config_help(Path("masks.yaml")).scopes
+# [ConfigScope(activation='quick', help='A quick run: the first 5 folders of each dataset, 20 setups a folder.')]
+```
+
 ## 14. The resolved configuration is written by the run itself — `--dump-config`, `--save-config` (2026-10-30)
 
 **Context.** A config sets a few keys; the run uses many more — every constructor default, the values its includes

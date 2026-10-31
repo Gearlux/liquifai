@@ -286,8 +286,9 @@ project folder shadows the package.
   (`tests/test_completion_listing.py`, `tests/test_completion_shells.py`) §13.
 - With a config on the line, `options of <config>` (the top-level keys written in THAT file, never its includes',
   in file order, the command's parameters and positionals left out) and `scopes of <config>` (`-s <activation>`, rows
-  that complete nothing) come between the arguments and the command's options; `--help`/`--docs` render the same
-  blocks first and fold a list of objects into one row. After the command's options, a group per `!class:` block
+  that complete nothing; every scope of the document — the file's own first, then each include's, one row per
+  activation, user request 2026-10-30) come between the arguments and the command's options; `--help`/`--docs`
+  render the same blocks first and fold a list of objects into one row. After the command's options, a group per `!class:` block
   (`<path> (<Class>)`, the shallowest first, then in document order) lists EVERY constructor parameter of its class,
   written or not (`confluid.source_params`), but a parameter a top-level key feeds (`!ref:<key>`, or unwritten and
   named like a top-level key) — that key's row, never the block's, nor a candidate (user correction 2026-10-30);
