@@ -1097,8 +1097,9 @@ are read by their own short-circuit and keep the next-token spelling. Completion
 on the line and offers `--config=<files>` (`--log-dir=`, `--save-config=` too).
 
 ```python
-parse_globals(tokenize(["--level=DEBUG", "-c=a.yaml"])).log_overrides, _.config_path
-# {'log_level': 'DEBUG'}, Path('a.yaml')
+flags = parse_globals(tokenize(["--level=DEBUG", "-c=a.yaml"]))
+flags.log_overrides, flags.config_path
+# ({'log_level': 'DEBUG'}, PosixPath('a.yaml'))
 ```
 
 ```python

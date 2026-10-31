@@ -19,6 +19,9 @@ derive from that single table, so they can never drift apart.
 | `--docs` | The same code-extracted documentation as `--help`, one option per line. |
 | `--install-completion [SHELL]` / `--show-completion [SHELL]` / `--refresh-completions` | Shell completion management (see [shell completion](shell-completion.md)). |
 
+A flag's value follows a space or an `=`: `--level=DEBUG`, `-c=run.yaml` and `--scope=quick` are `--level DEBUG`,
+`-c run.yaml` and `--scope quick` (the completion flags take theirs after a space).
+
 ## Where a log level comes from
 
 The four log flags are the TOP layer of a hierarchy, not the whole of it. A flag
