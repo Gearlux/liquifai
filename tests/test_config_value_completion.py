@@ -269,6 +269,28 @@ class TestWhichKeyAddressesTheBlock:
     def test_without_a_config_on_the_line_a_key_completes_nothing(self) -> None:
         assert _tab("valuedemo run name=", Spawner()) == []
 
+    def test_a_scope_typed_on_the_line_is_applied_before_the_blocks_are_read(self, tmp_path: Path) -> None:
+        """``-s plain`` empties the list of catalogs: ``name`` then feeds no block with a provider, and completes as a
+        key without one — so a key two scopes give two meanings to is completed for the one typed."""
+        config = _config(
+            tmp_path,
+            f"""\
+            name: ""
+            sets:
+              - !class:{HERE}.Catalog {{}}
+            runnable: !class:{HERE}.Runner
+              catalogs: !ref:sets
+            plain: !scope:plain
+              sets: []
+            """,
+        )
+        assert _tab_after_refresh(f"valuedemo run {config} name=")[:1] == ["name=big-one"]
+        for typed in ("-s plain", "--scope plain", "--scope=plain", "-s=plain"):
+            assert _tab_after_refresh(f"valuedemo run {config} {typed} name=") == [], typed
+
+    def test_a_scope_naming_nothing_the_config_declares_completes_nothing(self, config: Path) -> None:
+        assert _tab_after_refresh(f"valuedemo run {config} -s nope name=") == []
+
 
 # --- the shells -------------------------------------------------------------------------------------------------------
 

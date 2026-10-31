@@ -72,8 +72,8 @@ def value_candidates(
         return None
     owners = {name.rpartition(".")[0] for name in names}
     try:
-        document = _document(config_path)
-    except Exception:  # a config that cannot be read completes nothing, never a failed TAB
+        document = _document(config_path, _typed_scopes(typed))
+    except Exception:  # a config that cannot be read (or a scope it does not declare) completes nothing
         return None
     blocks = [block for block in _blocks(document, "") if _clean(block[1]) in owners]
     if not blocks:
@@ -127,13 +127,33 @@ def _provider_names() -> Set[str]:
     return {ep.name for ep in entry_points(group=GROUP)}
 
 
-def _document(config_path: Path) -> Any:
-    """The config's document, as the help reads it (scopes not applied)."""
+def _document(config_path: Path, scopes: List[str]) -> Any:
+    """The config's document with the scopes typed on the line applied — a key a scope gives another meaning (a
+    folder to read instead of a dataset's folder) is completed for the one typed."""
     import confluid
 
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         raw = confluid.load(config_path, until="raw")
-        return confluid.load(raw, until="document")
+        return confluid.load(raw, until="document", scopes=scopes or None)
+
+
+#: The spellings of the scope flag (liquifai's global ``--scope`` / ``-s``).
+_SCOPE_FLAGS = ("--scope", "-s")
+
+
+def _typed_scopes(typed: Sequence[str]) -> List[str]:
+    """The scopes typed — ``-s quick``, ``--scope quick``, ``--scope=quick``, ``-s=quick``, ``-s a,b`` — in order."""
+    scopes: List[str] = []
+    words = list(typed)
+    for index, word in enumerate(words):
+        if word == "--":
+            break
+        head, equals, value = word.partition("=")
+        if head in _SCOPE_FLAGS and equals:
+            scopes.extend(value.split(","))
+        elif word in _SCOPE_FLAGS and index + 1 < len(words):
+            scopes.extend(words[index + 1].split(","))
+    return [scope for scope in scopes if scope]
 
 
 def _clean(target: str) -> str:

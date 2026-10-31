@@ -17,7 +17,8 @@ All notable changes to liquifai are documented here. The format follows
   offers what the provider of the class parameter the key feeds lists, given the block's other settings. A package
   registers the provider under the `liquifai.values` entry-point group, named by the parameter's dotted path
   (`"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"`). The provider runs in the background refresh, never
-  on the TAB. In bash, a candidate after `key=` is now inserted without repeating the `key=`.
+  on the TAB. The scopes typed on the line (`-s folder`) are applied first, so a key a scope gives another meaning
+  completes for the one typed. In bash, a candidate after `key=` is now inserted without repeating the `key=`.
 
 - **`script_command(config_keys=fn)`: keys a command adds to its configuration** — `fn` gets the loaded document
   (command-line keys applied) and returns `{key: value}`, merged in after the typed keys, before `--dump-config` /
