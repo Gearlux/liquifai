@@ -84,6 +84,20 @@ def str_param_names(func: Any) -> Set[str]:
     return names
 
 
+def text_config_keys(data: Any) -> Set[str]:
+    """Top-level keys the loaded document holds as text (``version: latest``).
+
+    A value typed for one of them is kept as typed, like a ``str`` parameter's (:func:`str_param_names`): the
+    document's own value already says the key is text, and YAML typing would turn ``--version 1.10`` into the float
+    ``1.1`` — another version. The shell drops the quotes of ``--version "1.3"`` before liquifai sees them, so the
+    user has no way to say "text" on the command line. Only the TOP level counts (the keys a bare flag names); a key
+    the document does not hold, or holds as a number, a list or ``null``, keeps YAML typing.
+    """
+    if not isinstance(data, dict):
+        return set()
+    return {key for key, value in data.items() if isinstance(key, str) and isinstance(value, str)}
+
+
 def bool_param_names(func: Any) -> Set[str]:
     """Parameter names ``func`` annotates as ``bool`` (or ``Optional[bool]``): the command's switches.
 

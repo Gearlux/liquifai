@@ -79,10 +79,20 @@ text that was never meant to be parsed:
 | `--note yes` | `'yes'` | `True` |
 | `--note "  padded  "` | `'  padded  '` | `'padded'` — stripped |
 
-`Optional[str]` counts as `str`. Everything else keeps YAML typing: a parameter
-annotated `int`/`bool`/`list`, any key the command does not declare, and every
-**dotted** key — `--opt.note` addresses a nested config object, not the command
-signature, so the signature cannot vouch for it.
+`Optional[str]` counts as `str`.
+
+**The same holds for a top-level key the config holds as text.** With
+`version: latest` in the config, `--version 1.3` arrives as `'1.3'` and
+`--version 1.10` as `'1.10'` — read as YAML they would be the floats `1.3` and
+`1.1`. Quoting cannot help: the shell removes the quotes of `--version "1.3"`
+before the command sees them. The value is then exactly the text typed, so
+`--version null` is `'null'` and `--exclude "[a, b]"` the text `'[a, b]'`, not a
+list.
+
+Everything else keeps YAML typing: a parameter annotated `int`/`bool`/`list`, a
+key the config holds as a number, a list or `null`, a key it does not hold, and
+every **dotted** key — `--opt.note` addresses a nested config object, not the
+command signature, so the signature cannot vouch for it.
 
 If you need a multi-line value for a key that is *not* a declared `str`
 parameter, YAML's block scalar still works:
