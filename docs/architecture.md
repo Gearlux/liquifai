@@ -1070,6 +1070,46 @@ read_config_help(Path("masks.yaml")).scopes
 # [ConfigScope(activation='quick', help='A quick run: the first 5 folders of each dataset, 20 setups a folder.')]
 ```
 
+**Amendment (2026-10-31): `--scope <TAB>` completes those scopes.** The listing showed `-s quick` as a row that
+completes nothing, while `recordstream run masks.yaml -s <TAB>` offered nothing: `--scope`'s `value_kind="scope"`
+had no reader since `@command(config_files=...)` went (tree v12), so the engine's value-flag guard answered `[]`
+before the walk had found the config. `grammar.SCOPE_VALUE_FLAGS` is derived from the table like the path and shell
+sets; the engine answers it after the walk, from `read_config_scopes` — the scopes alone, the same list and order
+`read_config_help` gives, without reading the keys or any class's docs — filtered by the typed prefix, the scopes an
+earlier `--scope` names left out, the list's next item after a comma. No config, or one that cannot be read, offers
+nothing. The document's `scope_aliases:` follow its scopes, in the order the raw document merges them (an include's
+before the file's own: `include:` comes first), each helped `Alias of <its scopes>.` — confluid accepts an alias
+wherever a scope name goes (§1 amendment 2026-10-30), so `--scope fast` is as typeable as `--scope quick`.
+
+**Second step (same day): `--scope=NAME` activates the scope, and completes.** `parse_globals` read a value flag
+only as the NEXT token, so `--scope=quick` fell through to the overrides as the key `scope` — the run went on with
+no scope and no warning (`size = 1` where `--scope quick` gave `2`) — and `-s=quick` was an unrecognised token. The
+user chose to accept the spelling rather than refuse it: `--scope=NAME` / `-s=NAME` is `--scope NAME`, comma lists
+included, and `--scope=` with no name is refused like `--dump-config=`. Completion keeps the flag in front
+(`--scope=quick`; bash, which splits at `=`, gets `quick`).
+
+**Third step (same day): every value flag the parser reads takes `=`.** `--level=DEBUG` became the config key
+`level`, `--config=run.yaml` the key `config`, the same silent miss. The user asked for the spelling on all of them:
+`parse_globals` reads `--flag=VALUE` for every `takes_value` spec it consumes (`config_path`, `scopes`, the three
+levels, `log_dir`, `save_config`), through the same `_store` as `--flag VALUE`; `--flag=` alone is refused, naming
+the spec's metavar (`--level= gives no LEVEL`). The completion flags (`--install-completion`, `--show-completion`)
+are read by their own short-circuit and keep the next-token spelling. Completion reads `--config=PATH` as the config
+on the line and offers `--config=<files>` (`--log-dir=`, `--save-config=` too).
+
+```python
+parse_globals(tokenize(["--level=DEBUG", "-c=a.yaml"])).log_overrides, _.config_path
+# {'log_level': 'DEBUG'}, Path('a.yaml')
+```
+
+```python
+complete_from_tree(tree, ["recordstream", "run", "masks.yaml", "-s", "q"], 4)
+# ['quick']
+complete_from_tree(tree, ["recordstream", "run", "masks.yaml", "--scope=q"], 3)
+# ['--scope=quick']
+parse_globals(tokenize(["--scope=quick", "-s=task=a"])).scopes
+# ['quick', 'task=a']
+```
+
 ## 14. The resolved configuration is written by the run itself — `--dump-config`, `--save-config` (2026-10-30)
 
 **Context.** A config sets a few keys; the run uses many more — every constructor default, the values its includes
@@ -1153,3 +1193,79 @@ def evaluate(runnable: Any = None) -> None: ...
 
 **What you may change.** The function's signature may grow a second, optional argument (the typed positionals) if a
 command needs them. Do not merge the keys before the typed ones, and do not report them as typed keys.
+
+## 16. A config key's value completes from a provider its class's package registers (2026-10-31)
+
+**Context.** A config key that names a dataset (`dataset=<TAB>`) completed nothing: completion knew the keys a config
+holds (§13) but no value of one. The values belong to the class the key feeds — only its package knows which datasets
+exist — and TAB may not import that class (the fast path reads caches, §2).
+
+**Decision.** A package registers `provider(settings) -> Iterable[str]` for one parameter of one of its classes under
+the `liquifai.values` entry-point group, named by the parameter's dotted path (`mypkg.sources.Catalog.name`). With a
+config on the line, `completion.config_values` finds the `!class:` blocks the key feeds — by name (broadcast), through
+`!ref:`, or by dotted path — and reads the cache of each block's provider for its other settings (the line's, else
+the file's, else the class's source defaults, all as text). A missing or old cache detaches the same
+`--refresh-completion-value` a dependent positional uses; `tree.refresh_one` runs the provider (`config_values.provide`)
+and writes a dependent cache keyed by the settings. bash replaces only what follows a word's last `=`
+(`$COMP_WORDBREAKS`), so `_fast_complete` gives it that tail (`shells.bash_word_tail`); zsh and fish get the word.
+
+Rejected: a class attribute naming the provider (TAB would have to import the class or parse its source for it); a
+provider keyed by the config key (the same class read by two configs under two keys would need two registrations);
+keying the cache on the settings the provider reads (TAB cannot know them without importing it, so every setting of
+the block is the key).
+
+**Consequences.**
+
+- An entry point is found with the standard library alone, about 45 ms in a large environment, and only at a value
+  slot with a config on the line.
+- A cache is per combination of the block's settings: a changed setting the provider ignores still asks again once.
+- `--refresh-completions` cannot fill these caches: it reads no config.
+- bash now inserts only the value after `key=` for every candidate holding the word's `=` — `--scope KEY=VAL`'s too.
+
+**Example.**
+
+```toml
+[project.entry-points."liquifai.values"]
+"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"
+```
+
+`my-app run run.yaml kind=huge name=<TAB>` → `name=huge-one name=huge-two`, `catalog_names` having been called with
+`{"kind": "huge", ...}` in the background.
+
+**What you may change.** The settings a provider gets may grow (a parameter the line names in another spelling); the
+lookup may cache the entry points in a file if 45 ms shows. Do not run a provider on the TAB itself, and do not make a
+key with no provider complete differently from before.
+
+## 17. A config key holding text takes a typed value as text (2026-10-31)
+
+**Context.** `run render.yaml --version "1.3"` failed: `MelodyDatasetFiles` takes `version: str`, but the shell drops
+the quotes, and an override value is read as YAML, so `1.3` arrived as a float. `--version 1.10` arrived as `1.1` —
+another version, which a class converting numbers back to text would have read silently. The verbatim rule (a command
+parameter declared `str` keeps the typed text) did not apply: `version` is a key of the config, which carries no type.
+
+**Decision.** A top-level key whose value in the loaded document is a string is declared text by that value:
+`overrides.text_config_keys(config_data)` joins `str_param_names` in the verbatim set `_apply_overrides` passes to
+`parse_override_args`. Only the top level counts, the keys a bare flag names; a dotted key keeps YAML typing.
+
+Rejected: converting a number back to text in the class (`1.10` → `'1.1'`, lossy); stripping a pair of quotes typed
+inside the shell's (`"'1.3'"`), a new value spelling the verbatim rule forbids; reading the type of the class
+parameter the key feeds (the key may feed several classes, and the classes are built after the overrides).
+
+**Consequences.**
+
+- On a key the config holds as text, the command line cannot give a number, a list or `null`: `--version null` is
+  `'null'`, `--exclude "[a, b]"` the text `'[a, b]'`.
+- `--version "'1.3'"` is now `"'1.3'"`, quotes included.
+- A key held as text only in a scope not activated keeps YAML typing.
+
+**Example.**
+
+```yaml
+version: latest
+source: !class:mypkg.Source {}
+```
+
+`my-app run cfg.yaml --version 1.10` → `Source(version='1.10')`; `--limit 30` on `limit: 20` stays the int `30`.
+
+**What you may change.** The set may come from somewhere that knows more (a declared type of the key). Do not add a
+second spelling for text, and do not reach into nested keys without a rule for which object a dotted key addresses.

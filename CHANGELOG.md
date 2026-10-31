@@ -8,6 +8,17 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **`--scope <TAB>` completes the config's scopes** — `my-app run run.yaml -s <TAB>` (or `--scope <TAB>`,
+  `--scope=<TAB>`, or with `--config run.yaml`) offers the scopes the config and its includes declare, a keyed one as
+  `KEY=VAL`, then its `scope_aliases:` (in the second TAB's `scopes of` listing too, `Alias of quick.`), leaving out
+  one already typed; after a comma, the list's next scope. It used to offer nothing.
+
+- **A config key's value completes on TAB** — `my-app run run.yaml name=<TAB>` (or `--name <TAB>`, `--name=<TAB>`)
+  offers what the provider of the class parameter the key feeds lists, given the block's other settings. A package
+  registers the provider under the `liquifai.values` entry-point group, named by the parameter's dotted path
+  (`"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"`). The provider runs in the background refresh, never
+  on the TAB. In bash, a candidate after `key=` is now inserted without repeating the `key=`.
+
 - **`script_command(config_keys=fn)`: keys a command adds to its configuration** — `fn` gets the loaded document
   (command-line keys applied) and returns `{key: value}`, merged in after the typed keys, before `--dump-config` /
   `--save-config` and before the objects are built. A command that forces a setting shows it in the dumped file.
@@ -34,6 +45,17 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **A value for a config key holding text stays text** — with `version: latest` in the config, `--version 1.3` reached
+  the class as the float `1.3` (`Input should be a valid string`) and `--version 1.10` as `1.1`; the shell drops the
+  quotes of `--version "1.3"`, so there was no way to say text. Both now arrive as typed (`'1.3'`, `'1.10'`). On such
+  a key the command line no longer gives a number, a list or `null`: `--version null` is the text `'null'`.
+
+- **A global option's value may follow an `=`** — `--scope=quick`, `--level=DEBUG`, `--config=run.yaml`,
+  `--log-dir=logs`, `--save-config=out.yaml` (and `-s=`, `-c=`) work as `--scope quick` and the rest. `--scope=quick`
+  ran with no scope and said nothing (it became the config key `scope`, `--level=DEBUG` the key `level`), and
+  `-s=quick` warned that it was an unrecognised token. A `--level=` with nothing after it is refused
+  (`Error: --level= gives no LEVEL — write `--level LEVEL` or `--level=LEVEL`.`). `--config=<TAB>`,
+  `--log-dir=<TAB>` and `--save-config=<TAB>` complete files.
 - **A config's scopes include those of the files it includes** — `my-app run masks.yaml --<TAB><TAB>` and `--help`
   showed no scopes when the only one (`quick`) was declared in an included file; `scopes of masks.yaml` now lists
   `-s quick` with its comment. The file's own scopes come first; a scope declared twice is listed once.

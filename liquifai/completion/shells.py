@@ -214,6 +214,19 @@ def wire_lines(candidates: List[str], listing: Optional["Listing"]) -> List[str]
     return out
 
 
+def bash_word_tail(candidates: List[str], word: str) -> List[str]:
+    """The part of each candidate bash replaces when the word holds ``=``: what follows its last ``=``.
+
+    bash splits the word under the cursor at the characters of ``$COMP_WORDBREAKS`` (``=`` among them), so for
+    ``name=sm<TAB>`` it replaces only ``sm`` — a candidate ``name=small`` would be inserted as ``name=name=small``.
+    zsh and fish replace the whole word and get the candidates as they are.
+    """
+    if "=" not in word:
+        return candidates
+    head = word[: word.rindex("=") + 1]
+    return [c[len(head) :] if c.startswith(head) else c for c in candidates]
+
+
 def escape_candidate(value: str) -> str:
     """Backslash-escape a candidate so the shell inserts it as ONE token.
 

@@ -304,6 +304,22 @@ project folder shadows the package.
   value (kind `static`, or `prefix`: cached per prefix of typed positionals). After a comma every list slot completes the next word (`engine._list_candidates`). `--help`'s
   "Values" block reads the same cache through `cache.read_slot_values` — never a provider.
   (`tests/test_value_completion.py`)
+- A config key's value (`key=<TAB>`, `--key <TAB>`, `--key=<TAB>`, a config on the line) completes from the provider
+  a package registers under the `liquifai.values` entry-point group, named `<module>.<Class>.<parameter>`, for the
+  `!class:` blocks the key feeds (name, `!ref:`, dotted path) — `completion.config_values`. The provider gets the
+  block's other settings as text and runs only in `--refresh-completion-value` (`tree.refresh_one`), cached per
+  settings; a key no provider answers for completes exactly as before (`value_candidates` returns None). The entry
+  points are read with `importlib.metadata`, never by importing the class. bash gets the part after the word's last
+  `=` (`shells.bash_word_tail`, COMP_LINE path only). (`tests/test_config_value_completion.py`) §16.
+- `--scope <TAB>` / `-s <TAB>` / `--scope=<TAB>` (`grammar.SCOPE_VALUE_FLAGS`) offers the scopes of the config on
+  the line — the promoted config or `--config PATH`, any command — from `config_help.read_config_scopes`, the list
+  `scopes of <config>` shows: its scopes, then its `scope_aliases:` (`Alias of …`); one an earlier `--scope` names
+  is left out, after a comma the next item; no or an unreadable config offers nothing (user request 2026-10-31).
+  (`tests/test_scope_completion.py`) §13.
+- Every value flag `parse_globals` consumes takes `--flag=VALUE` as `--flag VALUE` (`--scope=quick`,
+  `--level=DEBUG`, `-c=a.yaml`), through the one `flags._store`; `--flag=` alone is a `MissingOptionValueError`
+  naming the metavar; never the config key `scope`/`level` (user choices 2026-10-31). Completion reads `--config=PATH`
+  as the config and completes `--<path flag>=<files>`. (`tests/test_value_flag_equals.py`) §13.
 - At a flag position: a bool flag opens no value slot; option keys already typed drop out;
   global flags are never dropped (`--scope` repeats).
 - Every app declares the `liquifai.apps` entry point (name = binary = `LiquifyApp.name`). Keep

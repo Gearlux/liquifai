@@ -158,7 +158,7 @@ order the document writes them — listing every parameter of that class, writte
 (`--overwrite` above), each with its `Args:` help and the value the config writes, else its default; a yes/no
 parameter shows none. A parameter a top-level key already feeds — written `!ref:<key>` (`source_dirs:
 !ref:setup_folders` above), or not written by its block and named like a top-level key, which is broadcast into it
-— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it (a section rule such as `# -- Knobs -----` is no key's help), else the comment at the end of its line, else the `Args:` help
+— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it (a section rule such as `# -- Knobs -----` is no key's help), else the comment at the end of its line — carried on through the comment lines below it whose `#` stands in the same column — else the `Args:` help
 of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
 `!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
 the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds.
@@ -397,11 +397,66 @@ typed so far (`{name: word}`, `{}` when none is) — cached per prefix of them, 
 config scopes. A key that names no parameter of the command is refused when it is decorated
 (`CommandDefinitionError`, with the closest parameter): a misspelt key would complete nothing.
 
+### A scope (`-s <TAB>`)
+
+With a config on the line — the command's config, or `--config PATH` — `--scope <TAB>` and `-s <TAB>` offer the
+scopes that config declares, the ones `scopes of <config>` lists: its own first, then its includes', a keyed one as
+`KEY=VAL`, then its `scope_aliases:`. `--scope=<TAB>` completes the same scopes, the flag kept in front
+(`--scope=quick`). A scope an earlier `--scope` names is left out:
+
+```console
+$ my-app run catalog.yaml -s <TAB>
+quick
+$ my-app run catalog.yaml -s quick -s <TAB>
+$ my-app run -s <TAB>
+```
+
+The last two offer nothing: `catalog.yaml` has no other scope, and without a config there is none to offer.
+
+A global option's value completes in its `=` spelling too, the option kept in front: `--config=<TAB>`,
+`--log-dir=<TAB>` and `--save-config=<TAB>` offer files, `--scope=<TAB>` the scopes.
+
 ### A list's next word (`a,<TAB>`)
 
 After a comma, a positional, an option's value and `--scope` complete the list's next item:
 `pictures all a,<TAB>` → `a,b a,c …`, the words already in the list left out. Shells keep a comma
 inside the word, so the candidate is the whole list.
+
+### A config key's value (`name=<TAB>`)
+
+With a config on the line, `key=<TAB>`, `--key <TAB>` and `--key=<TAB>` complete the value of a key
+that feeds a parameter of a `!class:` block — by its name (a bare key is broadcast to every block
+whose class takes it), through `!ref:<key>`, or by its dotted path (`runnable.source.name=`) — when
+the class's package registers a provider for that parameter under the `liquifai.values`
+entry-point group. The name is the parameter's dotted path, the class as a `!class:` tag spells it:
+
+```toml
+[project.entry-points."liquifai.values"]
+"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"
+```
+
+```python
+def catalog_names(settings: Mapping[str, str]) -> List[str]:
+    """The catalogs a Catalog with these settings can read."""
+    return list_catalogs(kind=settings["kind"])
+```
+
+```console
+$ my-app run run.yaml name=<TAB>
+name=small-one  name=small-two
+$ my-app run run.yaml kind=huge --name <TAB>
+huge-one  huge-two
+```
+
+The provider gets the block's other parameters as text: the command line's, else the file's (the
+block's own, the key a `!ref:` names, a broadcast top-level key), else the class's defaults as its
+source writes them, a yes/no parameter as `true` / `false`. It runs only when its cache is
+refreshed, in the app's process: the first TAB for a combination of settings offers nothing and
+starts that refresh in the background, the next TAB offers what it listed, and a double-TAB asks
+again. A provider that raises caches nothing. A key no installed package registers a provider for
+completes as before. bash is given the part after the `=` (it replaces only that part of the word);
+zsh and fish get the whole word. `--refresh-completions` does not run these providers: it reads no
+config.
 
 ### The same values in `--help`
 
