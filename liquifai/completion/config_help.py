@@ -2,9 +2,9 @@
 
 A script command's config holds the settings its author put first: the top-level keys written in that file (never
 its includes') and the scope blocks of the document — its own, then its includes' (a scope activates wherever it is
-declared). :func:`read_config_help` reads them with their help — the comment
-lines directly above each key (else the comment at the end of its line, with the comment lines aligned under it), else the docstring of the class parameter
-the key feeds (through ``!ref:`` or by its name) — and every other key the document holds with its class's
+declared). :func:`read_config_help` reads them with their help — the comment lines directly above each key (else
+the comment at the end of its line, with the comment lines aligned under it), else the docstring of the class
+parameter the key feeds (through ``!ref:`` or by its name) — and every other key the document holds with its class's
 parameter help. Class docstrings are read from source (:func:`confluid.source_param_docs`), never by importing the
 class, so a TAB stays fast.
 
