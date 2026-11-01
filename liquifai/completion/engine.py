@@ -474,6 +474,12 @@ def _command_candidates(
     signature_flags = list((cur.get("signature_flags") or {}).get(cmd_name, []))
     signature_paths = list((cur.get("signature_paths") or {}).get(cmd_name, []))
     bool_flags = set((cur.get("signature_bool_flags") or {}).get(cmd_name, []))
+    # A parameter the config binds an object to (``runnable: Any``) is never offered: a typed value builds nothing.
+    objects = set((cur.get("object_params") or {}).get(cmd_name, []))
+    object_flags = {
+        str(entry[1]) for entry in (cur.get("option_docs") or {}).get(cmd_name, []) if str(entry[0]) in objects
+    }
+    option_paths = [path for path in signature_paths if path not in objects]
 
     # Option keys already consumed on the line (after the command token), in
     # any of the override grammar's spellings: ``--key value``, ``--key=value``,
@@ -693,11 +699,11 @@ def _command_candidates(
             )
         except Exception:
             config_help = None
-        yaml_paths = config_help.keys if config_help is not None else []
-        candidates.extend(f for f in _collapse_to_flags(signature_paths + yaml_paths) if _not_used(f))
-        flag_paths = {flag: path for path, flag in _flag_display_map(signature_paths + yaml_paths).items()}
+        yaml_paths = [key for key in config_help.keys if key not in objects] if config_help is not None else []
+        candidates.extend(f for f in _collapse_to_flags(option_paths + yaml_paths) if _not_used(f))
+        flag_paths = {flag: path for path, flag in _flag_display_map(option_paths + yaml_paths).items()}
     else:
-        candidates.extend(f for f in signature_flags if _not_used(f))
+        candidates.extend(f for f in signature_flags if _not_used(f) and f not in object_flags)
     # Prepend positional hint (if any) before flag candidates; _filter_prefix
     # naturally drops it when the user has started typing a non-matching prefix.
     if "," in incomplete and positional_hint and not positional_hint[-1].startswith("<"):
@@ -723,7 +729,12 @@ def _listing(
     spec_of = {flag: spec for spec in visible for flag in spec.flags}
     cmd = options.cmd_name or ""
     node = options.node
-    docs = [list(entry) + ["", ""][len(entry) - 2 :] for entry in (node.get("option_docs") or {}).get(cmd, [])]
+    objects = set((node.get("object_params") or {}).get(cmd, []))
+    docs = [
+        list(entry) + ["", ""][len(entry) - 2 :]
+        for entry in (node.get("option_docs") or {}).get(cmd, [])
+        if str(entry[0]) not in objects
+    ]
     doc_of_path = {str(entry[0]): str(entry[2]) for entry in docs}
     default_of_path = {str(entry[0]): str(entry[3]) for entry in docs if len(entry) > 3}
     flag_paths = options.flag_paths if options.flag_paths is not None else {str(e[1]): str(e[0]) for e in docs}
@@ -754,6 +765,9 @@ def _listing(
 
     config_help = options.config_help
     focused = {key.path: key for key in config_help.focused} if config_help is not None else {}
+    included = list(config_help.included) if config_help is not None else []
+    # A key an included file writes and the config does not: its own group, under the include's name.
+    named = {**{key.path: key for group in included for key in group.keys}, **focused}
     config_docs = config_help.docs if config_help is not None else {}
     config_values = config_help.values if config_help is not None else {}
     switches = config_help.switches if config_help is not None else set()
@@ -768,8 +782,8 @@ def _listing(
 
     def option_help(flag: str) -> str:
         path = flag_paths.get(flag, "")
-        if path in focused:
-            help_text, default = focused[path].help, focused[path].value
+        if path in named:
+            help_text, default = named[path].help, named[path].value
         else:
             help_text = doc_of_path.get(path) or config_docs.get(path, "")
             default = default_of_path.get(path, "") or ("" if path in switches else config_values.get(path, ""))
@@ -777,7 +791,7 @@ def _listing(
 
     lefts = [flag_display(spec) for spec in visible] + ["".join(t for t, _ in command_left(str(e[1]))) for e in docs]
     lefts += list(names) + [f"<{slot}>" for slot in slots] + scope_lefts
-    lefts += [flag for flag, path in flag_paths.items() if path in focused]
+    lefts += [flag for flag, path in flag_paths.items() if path in named]
     left_w = min(max(len(left) for left in lefts), _LEFT_MAX)
 
     def row(left: List[_Piece], doc: str = "", doc_role: Optional[Role] = "help", lead: str = "  ") -> str:
@@ -805,7 +819,7 @@ def _listing(
     values: List[str] = []
     global_rows: List[ListingRow] = []
     option_rows: List[ListingRow] = []
-    focused_rows: Dict[str, ListingRow] = {}
+    focused_rows: Dict[str, ListingRow] = {}  # the config's own keys and its includes', by path
     block_rows: Dict[str, List[ListingRow]] = {}
     shown_specs: Set[str] = set()
     for cand in candidates:
@@ -815,7 +829,7 @@ def _listing(
             shown_specs.add(spec.dest)
         elif cand in names:
             command_rows.append((cand, row([(cand, "command")], str(command_help.get(cand, "")))))
-        elif cand.startswith("-") and flag_paths.get(cand) in focused:
+        elif cand.startswith("-") and flag_paths.get(cand) in named:
             focused_rows[str(flag_paths[cand])] = (cand, row(command_left(cand), option_help(cand)))
         elif cand.startswith("-") and block_of(flag_paths.get(cand, "")) is not None:
             owner = str(block_of(flag_paths[cand]))
@@ -867,6 +881,10 @@ def _listing(
         scope_rows = [("", row([(f"-s {scope.activation}", "option")], scope.help)) for scope in config_help.scopes]
         if scope_rows:
             groups.append((title(f"scopes of {source}"), scope_rows))
+        for group in included:
+            rows = [focused_rows[key.path] for key in group.keys if key.path in focused_rows]
+            if rows:
+                groups.append((title(f"options of {group.source}"), rows))
     if option_rows:
         groups.append((title(f"options of {options.path}"), option_rows))
     for path, name in config_help.blocks if config_help is not None else []:  # a group per !class: block, by depth

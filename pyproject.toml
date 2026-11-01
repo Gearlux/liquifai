@@ -110,6 +110,9 @@ module = [
     # standalone CI has no torch, so the missing-stub error must not fail the gate.
     "torch",
     "torch.*",
+    # confluid's go-to-definition reader, newer than the confluid floor: config_help imports it guarded and names
+    # no include without it, so a CI on the released confluid must not fail on its absence.
+    "confluid.locate",
 ]
 ignore_missing_imports = true
 

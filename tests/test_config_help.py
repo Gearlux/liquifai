@@ -1,8 +1,10 @@
 """A config's own settings come first, with their help — in the TAB listing and in ``--help`` alike.
 
-The top-level keys written in the config file itself (never its includes') and the document's scopes (its own, then
-its includes') are what its author put first; each shows its comment, else the help of the class parameter it feeds
-(through ``!ref:`` or by its name).
+The top-level keys written in the config file itself and the document's scopes (its own, then its includes') are what
+its author put first; each included file's keys the config does not write follow, under the include's name. Each shows
+its comment, else the help of the class parameter it feeds (through ``!ref:`` or by its name). Both listings show the
+same options: a ``!class:`` block the command's objects never reach has its own group, and a key holding an object is
+never offered as a value.
 """
 
 from __future__ import annotations
@@ -17,8 +19,9 @@ from confluid import configurable
 
 from liquifai import LiquifyApp
 from liquifai import completion as comp
+from liquifai.completion import config_help as config_help_mod
 from liquifai.completion import tree as tree_mod
-from liquifai.completion.config_help import ConfigScope, FocusedKey, read_config_help
+from liquifai.completion.config_help import ConfigScope, FocusedKey, IncludedKeys, read_config_help
 
 #: The class path a ``!class:`` tag in these configs names: this module, found by its source.
 HERE = __name__
@@ -243,6 +246,70 @@ def test_without_docs_only_the_keys_are_read(config: Path) -> None:
     assert found.focused == [] and found.scopes == [] and found.docs == {}
 
 
+def test_an_included_files_keys_the_config_does_not_write_are_grouped_under_the_include(config: Path) -> None:
+    assert read_config_help(config, exclude=["runnable"]).included == [
+        IncludedKeys(
+            "shared.yaml",
+            [
+                FocusedKey("label", "Shared label, documented where it is written.", "base"),
+                FocusedKey("widget", "", ""),  # an object: no value to show
+                FocusedKey("width", "How many to build.", "3"),
+            ],
+        )
+    ]
+
+
+def test_a_key_the_config_rewrites_stays_its_own_and_one_two_includes_write_is_listed_once(tmp_path: Path) -> None:
+    _write(tmp_path, "deep.yaml", "# Deep's own.\nshared: 1\ndeep_only: 2\nlabel: x\n")
+    _write(tmp_path, "base.yaml", "include: deep.yaml\n# Base's own.\nshared: 3\nlabel: y\n")
+    config = _write(tmp_path, "run.yaml", "include: base.yaml\nlabel: z\n")
+    found = read_config_help(config)
+    assert [key.path for key in found.focused] == ["label"]
+    assert [(group.source, [key.path for key in group.keys]) for group in found.included] == [
+        ("base.yaml", ["shared"]),
+        ("deep.yaml", ["deep_only"]),
+    ]
+    assert found.included[0].keys[0] == FocusedKey("shared", "Base's own.", "3")  # the value the document holds
+
+
+def test_a_package_include_is_named_as_the_config_writes_it(tmp_path: Path) -> None:
+    config = _write(tmp_path, "run.yaml", "include: pkg://liquifai/examples/simple.yaml\nown: 1\n")
+    found = read_config_help(config)
+    assert [(group.source, [key.path for key in group.keys]) for group in found.included] == [
+        ("pkg://liquifai/examples/simple.yaml", ["MyComponent", "debug"])
+    ]
+
+
+def test_an_include_that_cannot_be_named_shows_its_files_path(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A confluid without its go-to-definition reader names no include: the file's path stands in."""
+    monkeypatch.setitem(sys.modules, "confluid.locate", None)
+    assert config_help_mod._include_spellings([config]) == {}
+    assert [group.source for group in read_config_help(config).included] == [str((config.parent / "shared.yaml"))]
+
+
+def test_an_unreadable_file_names_none_of_its_includes(tmp_path: Path) -> None:
+    assert config_help_mod._include_spellings([tmp_path / "missing.yaml"]) == {}
+
+
+def test_a_key_holding_an_object_is_no_key_to_type(tmp_path: Path) -> None:
+    """A marker parameter holding a block (``outer.inner``) and an excluded key holding one (``runnable``) are
+    listed by their parameters only; a top-level block of the file's own (``second``) stays its key."""
+    config = _write(
+        tmp_path,
+        "run.yaml",
+        f"""\
+        outer: !class:{HERE}.Holder
+          inner: !class:{HERE}.Leaf
+        second: !class:{HERE}.Leaf
+        runnable: !class:{HERE}.Holder
+          inner: !class:{HERE}.Leaf
+        """,
+    )
+    keys = read_config_help(config, exclude=["runnable"]).keys
+    assert {"outer", "second", "outer.inner.size", "runnable.inner.size", "runnable.tag"} <= set(keys)
+    assert not {"outer.inner", "runnable", "runnable.inner"} & set(keys)
+
+
 def _app() -> LiquifyApp:
     app = LiquifyApp(name="helpdemo")
 
@@ -276,6 +343,7 @@ def test_the_tab_listing_shows_the_configs_options_and_scopes_before_the_command
         "arguments of helpdemo run",
         f"options of {config}",
         f"scopes of {config}",
+        "options of shared.yaml",  # the include's own keys, under its name as run.yaml writes it
         "options of helpdemo run",
         "widget (Builder)",  # included above runnable: the document writes it first
         "runnable (Builder)",
@@ -285,8 +353,33 @@ def test_the_tab_listing_shows_the_configs_options_and_scopes_before_the_command
     assert [row.split()[0] for row in own] == ["--folders", "--per_folder", "--count", "--verbose", "--long_text"]
     assert own[0].endswith("The folders read. ([a, b])")
     assert text[text.index(f"scopes of {config}") + 1].split() == ["-s", "quick", "A", "quick", "run."]
+    included = text[text.index("options of shared.yaml") + 1 : text.index("options of helpdemo run")]
+    assert [row.split()[0] for row in included] == ["--label", "--widget", "--width"]
+    assert included[0].endswith("Shared label, documented where it is written. (base)")
     command = text[text.index("options of helpdemo run") + 1 : text.index("widget (Builder)")]
-    assert [row.split()[0] for row in command] == ["--dry_run", "--label", "--runnable", "--widget", "--width"]
+    assert [row.split()[0] for row in command] == ["--dry_run"]  # never --runnable: the object the config binds
+
+
+def test_tab_never_offers_the_object_a_config_binds(config: Path) -> None:
+    tree = tree_mod.serialize_app(_app())
+    assert tree["object_params"] == {"run": ["runnable"]}
+    for line in ("helpdemo run --runn", f"helpdemo run {config} --runn"):
+        words = line.split(" ")
+        assert "--runnable" not in comp.complete_from_tree(tree, words, len(words) - 1), line
+    words = f"helpdemo run {config} --runn".split(" ")
+    assert comp.complete_from_tree(tree, words, len(words) - 1) == ["--runnable.items"]  # its parameters stay
+    words = "helpdemo run --".split(" ")
+    _, listing = comp.complete_with_listing(tree, words, len(words) - 1)
+    assert listing is not None
+    assert [candidate for candidate, _ in dict(listing)["options of helpdemo run"]] == ["--dry_run"]
+
+
+def test_a_marker_parameter_holding_an_object_is_never_offered(tmp_path: Path) -> None:
+    config = _write(tmp_path, "run.yaml", f"runnable: !class:{HERE}.Holder\n  inner: !class:{HERE}.Leaf\n")
+    words = f"helpdemo run {config} --".split(" ")
+    candidates = comp.complete_from_tree(tree_mod.serialize_app(_app()), words, len(words) - 1)
+    assert "--size" in candidates and "--tag" in candidates
+    assert "--inner" not in candidates and "--runnable" not in candidates
 
 
 def test_a_blocks_group_lists_every_parameter_of_its_class_written_or_not(tmp_path: Path) -> None:
@@ -385,7 +478,7 @@ def test_help_shows_a_table_per_object_titled_by_its_path_and_class(
 ) -> None:
     flowed = _help(config, capsys, monkeypatch).split("flowed from", 1)[1]
     assert "runnable (Builder)" in flowed and "Applies to" not in flowed
-    table = flowed.split("runnable (Builder)", 1)[1].split("Global Options", 1)[0]
+    table = flowed.split("runnable (Builder)", 1)[1].split("widget (Builder)", 1)[0]
     assert [line.split()[0] for line in table.splitlines() if line.strip().startswith("--")] == [
         "--items"
     ]  # --count and --verbose are the config's own, shown above; --source_dirs is fed by --folders
@@ -405,6 +498,56 @@ def test_help_lists_a_list_of_objects_as_one_row_and_no_key_twice(
     assert "--count" not in rows and "--verbose" not in rows  # shown above, as the config's own
 
 
+def test_help_shows_an_included_files_keys_after_the_scopes(
+    config: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = _help(config, capsys, monkeypatch)
+    scopes, included, flowed = (
+        out.index("Scopes of run.yaml"),
+        out.index("Options of shared.yaml"),
+        out.index("flowed from"),
+    )
+    assert scopes < included < flowed
+    table = out[included:flowed]
+    assert "--label" in table and "Shared label, documented where it is written." in table and "base" in table
+    assert "--width" in table and "--widget" in table
+
+
+def test_help_shows_a_block_the_commands_objects_never_reach_as_tab_groups_it(
+    config: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    flowed = _help(config, capsys, monkeypatch).split("flowed from", 1)[1]
+    assert flowed.index("runnable (Builder)") < flowed.index("widget (Builder)")
+    table = flowed.split("widget (Builder)", 1)[1].split("Global Options", 1)[0]
+    rows = [line.split() for line in table.splitlines() if line.strip().startswith("--")]
+    # its count is fed by !ref:width and its verbose by the top-level verbose: those keys' rows, as in TAB
+    assert [row[0] for row in rows] == ["--widget.items", "--source_dirs"]
+    text = _text(f"helpdemo run {config} --")
+    assert [row.split()[0] for row in text[text.index("widget (Builder)") + 1 : text.index("runnable (Builder)")]] == [
+        "--widget.items",
+        "--source_dirs",
+    ]
+    assert rows[1][1] == "Optional[List[str]]" and " ".join(rows[1][2:]) == "The folders searched."
+    assert "Option" in table and "Type" in table  # the flowed tables' columns
+
+
+def test_help_lists_a_block_the_command_reaches_by_reference_once(
+    tmp_path: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _write(
+        tmp_path,
+        "run.yaml",
+        f"""\
+        leaf: !class:{HERE}.Leaf
+        runnable: !class:{HERE}.Holder
+          inner: !ref:leaf
+        """,
+    )
+    flowed = _help(config, capsys, monkeypatch).split("flowed from", 1)[1]
+    assert "runnable.inner (Leaf)" in flowed
+    assert "leaf (Leaf)" not in flowed
+
+
 def test_docs_renders_the_same_blocks_one_per_line(config: Path, capsys: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _help(config, capsys, monkeypatch, flag="--docs")
     assert out.index("Options of run.yaml") < out.index("Scopes of run.yaml")
@@ -414,6 +557,10 @@ def test_docs_renders_the_same_blocks_one_per_line(config: Path, capsys: Any, mo
     assert not any(".Leaf." in line for line in out.splitlines())
     lines = out.splitlines()
     assert lines[lines.index("runnable (Builder)") + 1].strip().startswith("--items")
+    included = lines.index("Options of shared.yaml")
+    assert lines[included + 1].split()[:3] == ["--label", "=", "base"]
+    block = lines.index("widget (Builder)")
+    assert lines[block + 2].split()[:3] == ["--source_dirs", "Optional[List[str]]", "="]
 
 
 def test_help_still_renders_when_the_configs_settings_cannot_be_read(

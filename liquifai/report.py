@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from liquifai.completion.config_help import ConfigHelp
+from liquifai.completion.config_help import ConfigHelp, FocusedKey
 from liquifai.grammar import GLOBAL_FLAG_SPECS, flag_display
 
 #: How a command's options are rendered: the Rich grid (``--help``) or one
@@ -80,9 +80,11 @@ def show_configuration(
     rendered through Rich markup, where ``[epochs=1]`` reads as a style tag and vanishes.
 
     ``config_help`` (what the config on the command line says about its settings) puts the
-    file's own top-level keys and its scopes first, each in a block of its own, in file order —
-    the groups a TAB listing shows; a flowed option those keys spell is left out of the table
-    below them. A list of objects is one row (``--datasets``), never a row per field of each item.
+    file's own top-level keys, its scopes and each included file's keys first, each in a block of its own, in file
+    order — the groups a TAB listing shows; a flowed option those keys spell is left out of the table below them.
+    A ``!class:`` block of the config the instance walk does not reach (a top-level ``captures: !class:…`` that a
+    list item references) gets a table of its own after the walk's, titled as TAB titles its group. A list of objects
+    is one row (``--datasets``), never a row per field of each item.
 
     On a flowed graph the ``command``'s own plain parameters (``--dry_run``) come next, as ``Options of <command>`` in
     the same columns — the instance walk sees only objects, so they were listed nowhere. ``objects`` names the
@@ -101,7 +103,7 @@ def show_configuration(
         _render_command_options(own, command, layout)
         hierarchy = _drop_positional_paths(get_hierarchy_from_instance(config_map), pos_names)
         hierarchy = _fold_list_items(hierarchy, config_map)
-        skip = {key.path for key in config_help.focused} if config_help is not None else set()
+        skip = _config_key_paths(config_help) if config_help is not None else set()
         if config_help is not None and config_help.fed:  # a parameter a top-level key feeds is that key's row
             hierarchy = {
                 path: entry for path, entry in hierarchy.items() if tuple(path.split(".")[-2:]) not in config_help.fed
@@ -110,6 +112,8 @@ def show_configuration(
             _render_lines(hierarchy, title, flowed=True, skip=skip, root=config_map)
         else:
             _render_flowed_table(hierarchy, title, skip=skip, root=config_map)
+        if config_help is not None:
+            _render_config_blocks(_unwalked_blocks(config_help, hierarchy, config_map), layout)
         return
 
     pos_names += list(objects or [])
@@ -277,39 +281,123 @@ def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout)
 
 
 def _render_config_help(config_help: ConfigHelp, layout: HelpLayout) -> None:
-    """The config's own top-level keys, then its scopes — each with its help, in the file's order."""
+    """The config's own top-level keys, then its scopes, then each included file's keys the config does not write —
+    each with its help, in the file's order."""
     console = Console()
     source = config_help.source
     if layout == "lines":
         if config_help.focused:
-            console.print(f"\n[bold cyan]Options of {escape(source)}[/bold cyan]")
-            flag_w = max(len(key.path) + 2 for key in config_help.focused)
-            for key in config_help.focused:
-                value = f"[green]= {escape(key.value)}[/green]  " if key.value else ""
-                console.print(
-                    f"  [bold white]{f'--{key.path}'.ljust(flag_w)}[/bold white]  {value}[dim]{escape(key.help)}[/dim]"
-                )
+            _render_key_lines(console, f"Options of {source}", config_help.focused)
         if config_help.scopes:
             console.print(f"\n[bold cyan]Scopes of {escape(source)}[/bold cyan]")
             scope_w = max(len(scope.activation) + 3 for scope in config_help.scopes)
             for scope in config_help.scopes:
                 spelling = f"-s {scope.activation}".ljust(scope_w)
                 console.print(f"  [bold white]{escape(spelling)}[/bold white]  [dim]{escape(scope.help)}[/dim]")
+        for group in config_help.included:
+            _render_key_lines(console, f"Options of {group.source}", group.keys)
         return
     if config_help.focused:
-        table = Table(title=f"Options of {escape(source)}", box=None, show_header=True, header_style="bold cyan")
-        table.add_column("Option", style="bold white")
-        table.add_column("Current Value", style="green")
-        table.add_column("Description", style="dim white")
-        for key in config_help.focused:
-            table.add_row(escape(f"--{key.path}"), escape(key.value), escape(key.help))
-        console.print(table)
+        _render_key_table(console, f"Options of {source}", config_help.focused)
     if config_help.scopes:
         table = Table(title=f"Scopes of {escape(source)}", box=None, show_header=True, header_style="bold cyan")
         table.add_column("Scope", style="bold white")
         table.add_column("Description", style="dim white")
         for scope in config_help.scopes:
             table.add_row(escape(f"-s {scope.activation}"), escape(scope.help))
+        console.print(table)
+    for group in config_help.included:
+        _render_key_table(console, f"Options of {group.source}", group.keys)
+
+
+def _render_key_lines(console: Console, title: str, keys: List[FocusedKey]) -> None:
+    """A config file's top-level keys one per line under ``title``: the flag, its value, its help."""
+    console.print(f"\n[bold cyan]{escape(title)}[/bold cyan]")
+    flag_w = max(len(key.path) + 2 for key in keys)
+    for key in keys:
+        value = f"[green]= {escape(key.value)}[/green]  " if key.value else ""
+        console.print(
+            f"  [bold white]{f'--{key.path}'.ljust(flag_w)}[/bold white]  {value}[dim]{escape(key.help)}[/dim]"
+        )
+
+
+def _render_key_table(console: Console, title: str, keys: List[FocusedKey]) -> None:
+    """A config file's top-level keys as a table titled ``title``: the flag, its value, its help."""
+    table = Table(title=escape(title), box=None, show_header=True, header_style="bold cyan")
+    table.add_column("Option", style="bold white")
+    table.add_column("Current Value", style="green")
+    table.add_column("Description", style="dim white")
+    for key in keys:
+        table.add_row(escape(f"--{key.path}"), escape(key.value), escape(key.help))
+    console.print(table)
+
+
+def _config_key_paths(config_help: ConfigHelp) -> Set[str]:
+    """The top-level keys the config's own blocks list — its file's and its includes'."""
+    return {key.path for key in config_help.focused} | {key.path for g in config_help.included for key in g.keys}
+
+
+#: A ``(flag, type, value, help)`` row of a config block's table.
+BlockRow = Tuple[str, str, str, str]
+
+
+def _unwalked_blocks(config_help: ConfigHelp, hierarchy: Dict[str, Any], root: Any) -> List[Tuple[str, List[BlockRow]]]:
+    """``(title, rows)`` of each ``!class:`` block of the config that no table of the instance walk lists, in the
+    order TAB groups them; a block whose every parameter is listed elsewhere has none.
+
+    The walk starts at the command's parameters: a block it reaches is a table of its own already, under its path
+    or under the parameter that references it (``source: !ref:recordings``). A block it never reaches — one a list
+    item references, the walk folding a list into one row — is listed from what the config says of it (each
+    parameter's annotation, value and help, read from the class's source), as the TAB listing lists it.
+    """
+    from liquifai.completion.tree import _flag_display_map
+
+    walked = {_owner_parts(root, path.split(".")[:-1])[0] for path in hierarchy}
+    covered = walked | {config_help.references[path] for path in walked if path in config_help.references}
+    blocks = [path for path, _ in config_help.blocks]
+    shown = _config_key_paths(config_help)
+    flags = _flag_display_map(list(config_help.keys))
+    groups: List[Tuple[str, List[BlockRow]]] = []
+    for path, name in config_help.blocks:
+        if path in covered:
+            continue
+        rows = [
+            (
+                flags.get(key, f"--{key}"),
+                config_help.types.get(key, ""),
+                config_help.values.get(key, ""),
+                config_help.docs.get(key, ""),
+            )
+            for key in config_help.keys
+            if key not in shown and max((b for b in blocks if key.startswith(b + ".")), key=len, default=None) == path
+        ]
+        if rows:
+            groups.append((f"{path} ({name})", rows))
+    return groups
+
+
+def _render_config_blocks(groups: List[Tuple[str, List[BlockRow]]], layout: HelpLayout) -> None:
+    """The tables (or ``--docs`` lines) of :func:`_unwalked_blocks`, in the flowed tables' columns."""
+    console = Console()
+    for title, rows in groups:
+        if layout == "lines":
+            console.print(f"[cyan]{escape(title)}[/cyan]")
+            flag_w = max(len(row[0]) for row in rows)
+            type_w = max(len(row[1]) for row in rows)
+            for flag, type_str, value, doc in rows:
+                spelling, annotation = escape(flag.ljust(flag_w)), escape(type_str.ljust(type_w))
+                console.print(
+                    f"  [bold white]{spelling}[/bold white]  [dim cyan]{annotation}[/dim cyan]"
+                    f"  [green]= {escape(value)}[/green]  [dim]{escape(doc)}[/dim]"
+                )
+            continue
+        table = Table(title=escape(title), box=None, show_header=True, header_style="bold cyan")
+        table.add_column("Option", style="bold white")
+        table.add_column("Type", style="dim cyan")
+        table.add_column("Current Value", style="green")
+        table.add_column("Description", style="dim white")
+        for row in rows:
+            table.add_row(*(escape(cell) for cell in row))
         console.print(table)
 
 
@@ -409,6 +497,13 @@ def _owner_title(root: Any, parts: List[str]) -> Tuple[str, int]:
     The walk writes an object's class (or instance) name after the key that holds it
     (``runnable.Builder.render.RenderViews``); the title is the keys a config writes, ``runnable.render
     (RenderViews)``, and the depth is how many there are."""
+    path, name, depth = _owner_parts(root, parts)
+    return (f"{path} ({name})" if path and name else path or name), depth
+
+
+def _owner_parts(root: Any, parts: List[str]) -> Tuple[str, str, int]:
+    """``(path, class, depth)`` of the object at an instance-walk path — :func:`_owner_title`'s parts: the keys a
+    config writes (``runnable.render``), the object's class (``RenderViews``) and how many keys there are."""
     keys: List[str] = []
     name = ""
     current = root
@@ -424,8 +519,7 @@ def _owner_title(root: Any, parts: List[str]) -> Tuple[str, int]:
         else:
             keys.append(part)
             current = getattr(current, part, None)
-    path = ".".join(keys)
-    return (f"{path} ({name})" if path and name else path or name), len(keys)
+    return ".".join(keys), name, len(keys)
 
 
 def _render_lines(

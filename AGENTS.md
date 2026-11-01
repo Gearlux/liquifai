@@ -288,12 +288,19 @@ project folder shadows the package.
 - With a config on the line, `options of <config>` (the top-level keys written in THAT file, never its includes',
   in file order, the command's parameters and positionals left out) and `scopes of <config>` (`-s <activation>`, rows
   that complete nothing; every scope of the document — the file's own first, then each include's, one row per
-  activation, user request 2026-10-30) come between the arguments and the command's options; `--help`/`--docs`
-  render the same blocks first and fold a list of objects into one row. After the command's options, a group per `!class:` block
+  activation, user request 2026-10-30), then `options of <include as written>` (`pkg://…/base.yaml`: each included
+  file's top-level keys THAT file does not write, the first include writing a key lists it; `confluid.locate` names
+  it, else the file's path — user choice 2026-10-31) come between the arguments and the command's options;
+  `--help`/`--docs` render the same blocks first and fold a list of objects into one row. After the command's
+  options, a group per `!class:` block
   (`<path> (<Class>)`, the shallowest first, then in document order) lists EVERY constructor parameter of its class,
   written or not (`confluid.source_params`), but a parameter a top-level key feeds (`!ref:<key>`, or unwritten and
   named like a top-level key) — that key's row, never the block's, nor a candidate (user correction 2026-10-30);
-  `--help` renders a table per object the same way. `completion.config_help.read_config_help` is the one reader
+  `--help` renders a table per object the same way, and one for each block its instance walk never reaches (neither
+  the block nor a parameter referencing it — a block only a list item references), so `--help` lists every option
+  TAB offers (user choice 2026-10-31). Neither offers a key holding an object: a script command's `Any` parameter
+  (tree `object_params`) or a marker parameter holding a block (`runnable.stream`) — only their parameters (user
+  choice 2026-10-31). `completion.config_help.read_config_help` is the one reader
   for both (help: the key's comment, else the fed parameter's docstring read from source — never an import of the
   class on the TAB path). (user request 2026-10-30; `tests/test_config_help.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
