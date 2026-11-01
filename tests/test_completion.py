@@ -184,6 +184,45 @@ def test_script_command_no_config_override_flag_silent(app: LiquifyApp) -> None:
     assert out == []
 
 
+@pytest.mark.parametrize("word", ["--sh", "--"])
+def test_a_word_the_parser_reads_as_an_option_completes_after_a_config_key(
+    app: LiquifyApp, tmp_path: Path, word: str
+) -> None:
+    """`myapp train cfg.yaml --overwrite --sh<TAB>`: `--overwrite` is a config key, not a signature bool, but the
+    override parser never takes a `--`/`+`/`~` word as its value — so completion offers the options, as the parser
+    reads them, instead of keeping silent for a value."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--overwrite", word], cword=4)
+    assert "--show_progress" in out
+    assert "--overwrite" not in out  # already typed
+
+
+@pytest.mark.parametrize("word", ["", "tr", "-3"])
+def test_a_word_the_parser_takes_as_the_value_stays_silent_after_a_config_key(
+    app: LiquifyApp, tmp_path: Path, word: str
+) -> None:
+    """`--overwrite <TAB>`, `--overwrite tr<TAB>`, `--threshold -3<TAB>`: the parser takes these words as the key's
+    value (one dash is a negative number), so completion stays silent for the shell's own completion."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--overwrite", word], cword=4)
+    assert out == []
+
+
+def test_the_listing_after_a_config_key_lists_the_options(app: LiquifyApp, tmp_path: Path) -> None:
+    """The second TAB after `--overwrite --` draws the options listing (bash/zsh wire), not nothing."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    words = ["myapp", "train", str(cfg), "--overwrite", "--"]
+    candidates, listing = comp.complete_with_listing(comp.serialize_app(app), words, 4, width=120)
+    assert "--show_progress" in candidates
+    assert listing is not None
+
+
 # --------- plain @command option flags (the `sairen run list` case) -------
 #
 # A plain @command (no config-file positional) must still surface its own

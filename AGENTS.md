@@ -330,6 +330,9 @@ project folder shadows the package.
   as the config and completes `--<path flag>=<files>`. (`tests/test_value_flag_equals.py`) §13.
 - At a flag position: a bool flag opens no value slot; option keys already typed drop out;
   global flags are never dropped (`--scope` repeats).
+- After a value-taking `--key` (a config key included), a word starting with `--`, `+` or `~` completes as an option,
+  never as the key's value — completion agrees with the parser's `grammar.looks_like_arg`; a one-dash word stays the
+  value (`-3`). (`tests/test_completion.py::test_a_word_the_parser_reads_as_an_option_completes_after_a_config_key`)
 - Every app declares the `liquifai.apps` entry point (name = binary = `LiquifyApp.name`). Keep
   the subprocess probe while any workspace app lacks it (TASKS.md). (the
   `declared_liquifai_apps` tests in `tests/test_completion.py`)
