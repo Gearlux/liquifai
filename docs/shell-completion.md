@@ -116,8 +116,9 @@ $ my-app fetch alpha --
 ```
 
 With a config on the line, the settings its author wrote first come before the command's options: the top-level
-keys of that file (never its includes'), in the file's order, then the scopes it and the files it includes declare
-(its own first; a scope declared in both is one row):
+keys of that file, in the file's order, then the scopes it and the files it includes declare (its own first; a scope
+declared in both is one row), then the keys each included file writes that the config does not, under the include
+as the config writes it. The object the config binds (`runnable`) is never offered — its parameters are:
 
 ```console
 $ my-app run catalog.yaml --<TAB><TAB>
@@ -128,9 +129,10 @@ options of catalog.yaml
   --setups_per_folder           0 = every setup (0)
 scopes of catalog.yaml
   -s quick                      A quick run: 20 setups a folder.
+options of pkg://my-app/config/base.yaml
+  --workers_per_run             Runs at once. (1)
 options of my-app run
   --dry_run                     Run nothing.
-  --runnable RUNNABLE           The object bound under runnable.
 runnable (BuildCatalog)
   --overwrite                   Catalog every setup again instead of resuming.
   --workers                     Processes reading setups at once. (4)
@@ -161,7 +163,9 @@ parameter shows none. A parameter a top-level key already feeds — written `!re
 — is listed once, as that key, never again with its block. A key's help is the comment lines directly above it (a section rule such as `# -- Knobs -----` is no key's help), else the comment at the end of its line — carried on through the comment lines below it whose `#` stands in the same column — else the `Args:` help
 of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
 `!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
-the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds.
+the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds
+— a `!class:` block the command's objects never reach (one only a list item references) included, titled as its TAB
+group.
 
 The line stays as you typed it; keep typing or TAB again. Only the candidates the typed word matches are listed
 (`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command's

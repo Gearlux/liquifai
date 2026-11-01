@@ -46,6 +46,13 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Fixed
 
+- **`--help` lists every option the TAB offers** — on a config that includes another
+  (`include: pkg://my-app/config/base.yaml`), `--help` left out the included file's settings and every `!class:` block
+  only a list item references; TAB listed the included settings under the command's own options. Both now show
+  them under `options of pkg://my-app/config/base.yaml` (the include as the config writes it), after the scopes, and
+  `--help` adds a table for such a block, titled as TAB titles its group (`captures (FileFormat)`). TAB no longer
+  offers the object the config binds (`--runnable`) or a parameter holding one (`--stream`), which `--help` never
+  listed: a typed value would replace the object.
 - **A value for a config key holding text stays text** — with `version: latest` in the config, `--version 1.3` reached
   the class as the float `1.3` (`Input should be a valid string`) and `--version 1.10` as `1.1`; the shell drops the
   quotes of `--version "1.3"`, so there was no way to say text. Both now arrive as typed (`'1.3'`, `'1.10'`). On such

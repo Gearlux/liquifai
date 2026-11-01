@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 # or an empty default).
 # v10: ``description`` (the node's), ``command_docs`` ``{cmd: first docstring line}`` and ``positional_docs``
 # ``{cmd: {positional: help}}``, so the listing names the commands and says which arguments are missing.
+# v13: ``object_params`` ``{cmd: [parameter, ...]}`` — a script command's parameters a config binds an object to
+# (``runnable: Any``), never offered as a flag (``report.config_object_params``, the rule ``--help`` follows).
 # v9: ``option_docs`` ``{cmd: [[path, --flag, help], ...]}`` and ``option_shorts`` ``{cmd: {letter: parameter}}``, so
 # the second TAB lists each option with its help, grouped (``engine.complete_with_listing``).
 # v8: ``flag_completions`` ``{cmd: {option: {key, kind, depends_on}}}`` (``--library <TAB>``); ``scope_completions``
@@ -52,7 +54,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 12
+CACHE_VERSION: int = 13
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -156,6 +158,9 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         "option_docs": option_docs,
         # {cmd: {letter: parameter}} — the command's declared ``short=`` spellings, shown as ``-b, --background``.
         "option_shorts": {cmd: dict(getattr(f, "__liquifai_short__", {}) or {}) for cmd, f in app._commands.items()},
+        # {cmd: [parameter, ...]} — a script command's parameters its config binds an object to (``runnable: Any``):
+        # never a flag, in the listing or as a candidate, as ``--help`` never shows one.
+        "object_params": _object_params(app),
         # Ordered positional-argument names per command; used by complete_from_tree
         # to emit ``<name>`` placeholder hints before flags when the cursor is at
         # an unfilled positional slot.
@@ -165,6 +170,14 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         # {cmd: {option: {key, kind, depends_on}}} — options whose value has a provider (``--library <TAB>``).
         "flag_completions": flag_completions,
     }
+
+
+def _object_params(app: Any) -> Dict[str, List[str]]:
+    """``{cmd: [parameter, ...]}`` of every script command with a parameter its config binds an object to."""
+    from liquifai.report import config_object_params  # serialize time only: the app (and Rich) is loaded
+
+    found = {cmd: config_object_params(func) for cmd, func in app._commands.items() if cmd in app._script_cmds}
+    return {cmd: names for cmd, names in found.items() if names}
 
 
 def _default_text(entry: Any) -> str:

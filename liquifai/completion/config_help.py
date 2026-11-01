@@ -1,12 +1,13 @@
 """What a config on the command line says about its settings — the help a TAB listing and ``--help`` show for it.
 
-A script command's config holds the settings its author put first: the top-level keys written in that file (never
-its includes') and the scope blocks of the document — its own, then its includes' (a scope activates wherever it is
-declared). :func:`read_config_help` reads them with their help — the comment lines directly above each key (else
-the comment at the end of its line, with the comment lines aligned under it), else the docstring of the class
-parameter the key feeds (through ``!ref:`` or by its name) — and every other key the document holds with its class's
-parameter help. Class docstrings are read from source (:func:`confluid.source_param_docs`), never by importing the
-class, so a TAB stays fast.
+A script command's config holds the settings its author put first: the top-level keys written in that file, then
+the scope blocks of the document — its own, then its includes' (a scope activates wherever it is declared) — then
+each included file's top-level keys the file itself does not write, grouped by the include as it is written
+(``pkg://other-project/config/base.yaml``). :func:`read_config_help` reads them with their help — the comment lines
+directly above each key (else the comment at the end of its line, with the comment lines aligned under it), else the
+docstring of the class parameter the key feeds (through ``!ref:`` or by its name) — and every other key the document
+holds with its class's parameter help. Class docstrings are read from source (:func:`confluid.source_param_docs`),
+never by importing the class, so a TAB stays fast.
 
 Stdlib-only at import, like every ``liquifai.completion`` module: confluid is imported inside the function.
 """
@@ -46,6 +47,17 @@ class ConfigScope:
 
 
 @dataclass
+class IncludedKeys:
+    """The top-level keys an included file writes that the config file itself does not."""
+
+    #: The include as the including file writes it (``base.yaml``, ``pkg://<distribution>/<path>``); the file's path
+    #: when it cannot be read back.
+    source: str
+    #: Its keys, in its file order.
+    keys: List[FocusedKey] = field(default_factory=list)
+
+
+@dataclass
 class ConfigHelp:
     """The settings a config offers on the command line, the ones its author wrote first."""
 
@@ -55,6 +67,9 @@ class ConfigHelp:
     keys: List[str] = field(default_factory=list)
     #: The top-level keys of the file itself, in file order.
     focused: List[FocusedKey] = field(default_factory=list)
+    #: The included files' top-level keys the file itself does not write, a group per file in the order they are
+    #: read; a key two includes write is listed with the first.
+    included: List[IncludedKeys] = field(default_factory=list)
     #: The scopes of the document, one per activation: the file's own in file order, then each include's in the
     #: order they are read; the help is the file's comment, else the first include's.
     scopes: List[ConfigScope] = field(default_factory=list)
@@ -68,6 +83,10 @@ class ConfigHelp:
     switches: Set[str] = field(default_factory=set)
     #: ``(path, class name)`` of every ``!class:`` block, the shallowest first, then in document order.
     blocks: List[Tuple[str, str]] = field(default_factory=list)
+    #: ``{dotted key: annotation}`` of a marker's parameters, as its class's source writes it (``Optional[int]``).
+    types: Dict[str, str] = field(default_factory=dict)
+    #: ``{dotted key: referenced key}`` of every marker parameter written ``!ref:<key>``.
+    references: Dict[str, str] = field(default_factory=dict)
     #: ``(class name, parameter)`` of every block parameter a top-level key already feeds — through ``!ref:`` or by
     #: its name — and that is therefore not listed with its block.
     fed: Set[Tuple[str, str]] = field(default_factory=set)
@@ -77,7 +96,9 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
     """The keys of the config at ``config_path``, its own top-level keys and every scope first, each with its help.
 
     ``exclude`` names keys that belong to the command (its parameters and positionals — ``runnable`` is what
-    ``run`` takes, not a setting of the file); they are never focused. ``with_docs=False`` reads the keys alone (the
+    ``run`` takes, not a setting of the file); they are never focused. A key that holds an object — an excluded one,
+    or a marker parameter holding a ``!class:`` block (``runnable.stream``) — is no key to type: a typed value
+    replaces the object, so only its parameters are listed. ``with_docs=False`` reads the keys alone (the
     candidates of a TAB that lists nothing). A file a key's comment or docstring cannot be read from leaves that help
     empty; the keys are read as :func:`confluid.load` reads them, and its error propagates.
     """
@@ -95,6 +116,7 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
     # Every parameter of a block's class is an option, written or not (``--overwrite`` with no ``overwrite:``),
     # read from the class's source — nothing is imported.
     switches: Set[str] = set()
+    types: Dict[str, str] = {}
     written = set(keys)
     for path, target in targets.items():
         for param in _params_of(confluid.source_params, target):
@@ -103,6 +125,8 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
                 values[key] = param.default
             if param.switch:
                 switches.add(key)
+            if param.annotation:
+                types[key] = param.annotation
             keys.append(key)
     # A block parameter a top-level key already feeds is that key's to list, not its block's: one written as
     # ``!ref:<key>``, or one the block does not write, named like a top-level key (which is broadcast into it).
@@ -117,11 +141,20 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
         if head in targets and leaf in top and key not in written:
             fed_paths.add(key)
     fed = {(_class_name(targets[path.rpartition(".")[0]]), path.rpartition(".")[2]) for path in fed_paths}
-    keys = [key for key in keys if key not in fed_paths]
+    skipped = set(exclude)
+    objects = {path for path in targets if "." in path or path in skipped}
+    keys = [key for key in keys if key not in fed_paths and key not in objects]
     order = {path: index for index, path in enumerate(targets)}
     blocks = [(path, _class_name(targets[path])) for path in sorted(targets, key=lambda p: (p.count("."), order[p]))]
     found = ConfigHelp(
-        source=config_path.name, keys=sorted(set(keys)), values=values, switches=switches, blocks=blocks, fed=fed
+        source=config_path.name,
+        keys=sorted(set(keys)),
+        values=values,
+        switches=switches,
+        blocks=blocks,
+        fed=fed,
+        types=types,
+        references=refs,
     )
     if not with_docs:
         return found
@@ -149,20 +182,31 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
                 return text
         return ""
 
+    def key_of(note: Any) -> FocusedKey:
+        value = document.get(note.name) if isinstance(document, dict) else None
+        return FocusedKey(note.name, help_of(note), _shown(value))
+
     entry = Path(config_path).resolve()
-    skipped = set(exclude)
+    read_notes = [(Path(read).resolve(), _notes(confluid.document_notes, read)) for read in paths or [entry]]
+    listed = {note.name for read, notes in read_notes if read == entry and notes is not None for note in notes.keys}
+    listed |= skipped
+    spellings = _include_spellings([read for read, _ in read_notes])
     seen: Dict[str, ConfigScope] = {}
-    for read in paths or [entry]:
-        notes = _notes(confluid.document_notes, read)
+    for read, notes in read_notes:
         if notes is None:
             continue
-        own = Path(read).resolve() == entry
+        own = read == entry
+        group = IncludedKeys(spellings.get(read, str(read)))
         for note in notes.keys:
             if own and note.name not in skipped:
-                value = document.get(note.name) if isinstance(document, dict) else None
-                found.focused.append(FocusedKey(note.name, help_of(note), _shown(value)))
+                found.focused.append(key_of(note))
             elif note.name not in found.docs:
                 found.docs[note.name] = help_of(note)
+            if not own and note.name not in listed:
+                group.keys.append(key_of(note))
+                listed.add(note.name)
+        if group.keys:
+            found.included.append(group)
         _add_scopes(notes, seen, found.scopes)
     _add_aliases(raw, seen, found.scopes)
     for key in found.keys:
@@ -191,6 +235,29 @@ def read_config_scopes(config_path: Path) -> List[ConfigScope]:
             _add_scopes(notes, seen, scopes)
     _add_aliases(raw, seen, scopes)
     return scopes
+
+
+def _include_spellings(reads: List[Path]) -> Dict[Path, str]:
+    """``{file: the include as written}`` for every file ``reads`` holds that another of them includes — the
+    entry's ``include: pkg://other-project/config/base.yaml`` names that file ``pkg://other-project/config/base.yaml``.
+
+    Read with :func:`confluid.locate.locate`, which resolves an include as :func:`confluid.load` does and imports
+    nothing; a confluid without it, or a file it cannot read, leaves the file unnamed (its path is shown).
+    """
+    try:
+        from confluid.locate import locate
+    except ImportError:  # a confluid older than its go-to-definition reader
+        return {}
+    spellings: Dict[Path, str] = {}
+    for read in reads:
+        try:
+            mentions = locate(read.read_text(encoding="utf-8"), read)
+        except Exception:  # an unreadable file: its includes stay unnamed, never a failed TAB
+            continue
+        for mention in mentions:
+            if mention.kind == "include" and mention.target is not None:
+                spellings.setdefault(Path(mention.target.path).resolve(), mention.text)
+    return spellings
 
 
 def _add_scopes(notes: Any, seen: Dict[str, ConfigScope], scopes: List[ConfigScope]) -> None:

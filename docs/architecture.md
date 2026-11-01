@@ -1070,6 +1070,28 @@ read_config_help(Path("masks.yaml")).scopes
 # [ConfigScope(activation='quick', help='A quick run: the first 5 folders of each dataset, 20 setups a folder.')]
 ```
 
+**Amendment (2026-10-31, includes): `--help` lists what TAB lists.** On a config including another
+(`render.yaml` over `pkg://other-project/config/render.yaml`), `--help` showed sixteen fewer settings than the TAB:
+TAB offered every key of the document and filed the included file's under `options of <app> <command>`, while
+`--help` printed the file's own keys and then only the objects the command's parameters reach — a top-level
+`captures: !class:…` that a list item references (`formats: [!ref:captures]`, folded into one `--ops` row) had no
+table, and the included keys none at all. The user chose to show them in both, under their own heading: an
+included file's top-level keys the file itself does not write are `ConfigHelp.included`, a group per include
+titled as the including file writes it (`confluid.locate.locate` reads the spelling and imports nothing; a confluid
+without it shows the file's path), placed after the scopes in both listings; a key two includes write is listed
+with the first. A `!class:` block no table of the walk lists — the walk reaches neither it nor a parameter that
+references it (`ConfigHelp.references`) — gets a `--help` table of its own after the walk's, from what the config
+says of it (`ConfigHelp.types`, `values`, `docs`), as TAB lists its group. The user also chose to drop from TAB
+the keys `--help` never showed: the object a script command's config binds (`runnable: Any`, the tree's
+`object_params`, v13) and a marker parameter holding a block (`runnable.stream`) — a typed value would replace the
+object; its parameters stay. Left as they were (user choice): `--recordings.formats` (help) beside `--formats`
+(TAB), and the values shown being the file's, not the line's (`--version 1.3` still shows `latest`).
+
+```python
+read_config_help(Path("render.yaml"), exclude=["runnable"]).included[0].source
+# 'pkg://other-project/config/render.yaml'
+```
+
 **Amendment (2026-10-31): `--scope <TAB>` completes those scopes.** The listing showed `-s quick` as a row that
 completes nothing, while `recordstream run masks.yaml -s <TAB>` offered nothing: `--scope`'s `value_kind="scope"`
 had no reader since `@command(config_files=...)` went (tree v12), so the engine's value-flag guard answered `[]`
