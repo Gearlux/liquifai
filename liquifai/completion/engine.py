@@ -25,6 +25,7 @@ from liquifai.grammar import (
     SCOPE_VALUE_FLAGS,
     SHELL_VALUE_FLAGS,
     flag_display,
+    looks_like_arg,
     looks_like_key,
     stops_positional,
 )
@@ -536,13 +537,15 @@ def _command_candidates(
     # NOT a value slot (fall through to hints/flags instead of silence):
     # a global non-value flag (``--debug``), a self-contained ``--key=value``
     # or polarity ``--key+``/``--key-`` token, and a known bool-typed command
-    # flag (``--append`` is store-true; its "value" is the next option).
+    # flag (``--append`` is store-true; its "value" is the next option), and a word the override parser reads as an
+    # option of its own (``--overwrite --sh<TAB>``: ``looks_like_arg`` — a ``--``/``+``/``~`` word is never a value).
     if (
         prev.startswith("--")
         and "=" not in prev
         and not prev.endswith(("+", "-"))
         and prev not in GLOBAL_FLAGS
         and prev not in bool_flags
+        and not looks_like_arg(incomplete)
     ):
         # An option whose value has a provider (``--library <TAB>``) offers its cached values.
         info = ((cur.get("flag_completions") or {}).get(cmd_name) or {}).get(prev[2:].replace("-", "_"))
