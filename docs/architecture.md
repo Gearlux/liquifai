@@ -1146,7 +1146,12 @@ from steps inside a list that `_walk_keys` never walks. Two changes, both on the
   has it. The keys the config lists itself (its keys, its command's options, a parameter a key feeds, a bare
   parameter name of its blocks) are its own and not repeated. A run that cannot be read lists nothing; the files
   being read are carried (`_reading`) so a run naming the workflow again stops there. Cost, measured on a four-run
-  workflow: 0.25 s on a cold keys-only TAB, 0.47 s more for the listing.
+  workflow: the installed distributions' entry points are scanned ONCE per process (`config_refs.reference_names`,
+  `lru_cache`; the scan opens 2 900 metadata files, 43 ms) — scanned for each run it was 0.21 s of a 0.31 s read —
+  and the runs then add 48 ms to a keys-only read and 159 ms to the listing's; a cold TAB went from 1.0–1.2 s to
+  0.5–0.7 s. A cache of the runs' options by file stamp was weighed and not built: their values depend on the
+  environment (`${env:DATA_ROOT}`), the scopes and the class sources as much as on the files, so a stamp of the
+  files would serve a stale list, and what is left to save is under 0.15 s.
 * *The knobs.* The top-level `standardize: {only: [], workers: auto}` beside `only: !ref:standardize.only` is a group
   of knobs, not one setting: `confluid.KeyNote.children` carries the keys under a plain mapping with their own
   comments and the parameters they feed, and the group is a knob group when some parameter reads it through `!ref:`.
