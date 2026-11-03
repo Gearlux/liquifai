@@ -1151,7 +1151,11 @@ from steps inside a list that `_walk_keys` never walks. Two changes, both on the
   and the runs then add 48 ms to a keys-only read and 159 ms to the listing's; a cold TAB went from 1.0–1.2 s to
   0.5–0.7 s. A cache of the runs' options by file stamp was weighed and not built: their values depend on the
   environment (`${env:DATA_ROOT}`), the scopes and the class sources as much as on the files, so a stamp of the
-  files would serve a stale list, and what is left to save is under 0.15 s.
+  files would serve a stale list. What the runs have in common is shared for ONE call only (`config_help._Shared`:
+  a class's parameters and docs read from its source, a file's notes), so nothing outlives the TAB that read it and
+  an edit between two TABs is seen; and naming the includes asks `confluid.locate` for the includes alone
+  (`kinds=("include",)`), where it also found the source line of every `!class:` of every file (0.1 s of the
+  listing). Measured: the runs add 25 ms to a keys-only read and 45 ms to the listing's; a cold TAB takes 0.4–0.7 s.
 * *The knobs.* The top-level `standardize: {only: [], workers: auto}` beside `only: !ref:standardize.only` is a group
   of knobs, not one setting: `confluid.KeyNote.children` carries the keys under a plain mapping with their own
   comments and the parameters they feed, and the group is a knob group when some parameter reads it through `!ref:`.

@@ -106,6 +106,7 @@ def read_config_help(
     exclude: Iterable[str] = (),
     with_docs: bool = True,
     _reading: FrozenSet[Path] = frozenset(),
+    _shared: Optional["_Shared"] = None,
 ) -> ConfigHelp:
     """The keys of the config at ``config_path``, its own top-level keys and every scope first, each with its help.
 
@@ -120,10 +121,12 @@ def read_config_help(
     its own comment (:attr:`ConfigHelp.knobs`). The configs the document's blocks run
     (:func:`liquifai.completion.config_refs.referenced_configs`) are read in turn and their options listed as
     :attr:`ConfigHelp.runs`; a run that cannot be read lists nothing. ``_reading`` holds the files being read (a
-    workflow naming itself, or a run naming the workflow, stops there).
+    workflow naming itself, or a run naming the workflow, stops there); ``_shared`` what the reads of one call have in
+    common (:class:`_Shared`: the runs of a workflow read the same classes and include the same files).
     """
     import confluid
 
+    shared = _shared if _shared is not None else _Shared()
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         raw, paths = confluid.load(config_path, until="raw", return_paths=True)
         dimensions = confluid.discover_dimensions(raw)
@@ -139,7 +142,7 @@ def read_config_help(
     types: Dict[str, str] = {}
     written = set(keys)
     for path, target in targets.items():
-        for param in _params_of(confluid.source_params, target):
+        for param in shared.params_of(target):
             key = f"{path}.{param.name}"
             if key not in written and param.default:
                 values[key] = param.default
@@ -177,23 +180,16 @@ def read_config_help(
         references=refs,
     )
     entry = Path(config_path).resolve()
-    read_notes = [(Path(read).resolve(), _notes(confluid.document_notes, read)) for read in paths or [entry]]
+    read_notes = [(Path(read).resolve(), shared.notes_of(read)) for read in paths or [entry]]
     for _, notes in read_notes:
         if notes is not None:
             found.knobs |= _knob_paths(notes)
     if not with_docs:  # the keys alone: what a TAB that lists nothing offers
-        found.runs = _runs_of(document, found, skipped, False, _reading | {entry})
+        found.runs = _runs_of(document, found, skipped, False, _reading | {entry}, shared)
         return found
 
-    class_docs: Dict[str, Dict[str, str]] = {}
-
     def docs_of(target: str) -> Dict[str, str]:
-        if target not in class_docs:
-            try:
-                class_docs[target] = confluid.source_param_docs(target)
-            except Exception:  # an unreadable source: no help, never a failed TAB
-                class_docs[target] = {}
-        return class_docs[target]
+        return shared.docs_of(target)
 
     def help_of(note: Any, top: bool = True) -> str:
         if note.comment:
@@ -243,7 +239,7 @@ def read_config_help(
         owner = targets.get(head)
         if owner is not None and key not in found.docs:
             found.docs[key] = docs_of(owner).get(leaf, "")
-    found.runs = _runs_of(document, found, skipped, with_docs, _reading | {entry})
+    found.runs = _runs_of(document, found, skipped, with_docs, _reading | {entry}, shared)
     return found
 
 
@@ -281,7 +277,11 @@ def _include_spellings(reads: List[Path]) -> Dict[Path, str]:
     spellings: Dict[Path, str] = {}
     for read in reads:
         try:
-            mentions = locate(read.read_text(encoding="utf-8"), read)
+            text = read.read_text(encoding="utf-8")
+            try:
+                mentions = locate(text, read, kinds=("include",))  # the classes' sources are not read for this
+            except TypeError:  # a confluid whose locate takes no kinds
+                mentions = locate(text, read)
         except Exception:  # an unreadable file: its includes stay unnamed, never a failed TAB
             continue
         for mention in mentions:
@@ -315,6 +315,48 @@ def _add_aliases(raw: Any, seen: Dict[str, ConfigScope], scopes: List[ConfigScop
         scopes.append(seen[name])
 
 
+@dataclass
+class _Shared:
+    """What the reads of ONE call have in common — a config and the runs it starts read the same classes and include
+    the same files — kept for that call only, so a source edited between two TABs is read again by the next.
+
+    The class docs and parameters are read from source (``ast`` of the defining file), a file's notes by composing
+    its YAML; each is asked for once per call, however many runs name it.
+    """
+
+    docs: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    params: Dict[str, Any] = field(default_factory=dict)
+    notes: Dict[Path, Optional[Any]] = field(default_factory=dict)
+
+    def docs_of(self, target: str) -> Dict[str, str]:
+        """``{parameter: help}`` of the class ``target``; empty when its source cannot be read."""
+        if target not in self.docs:
+            import confluid
+
+            try:
+                self.docs[target] = confluid.source_param_docs(target)
+            except Exception:  # an unreadable source: no help, never a failed TAB
+                self.docs[target] = {}
+        return self.docs[target]
+
+    def params_of(self, target: str) -> Any:
+        """The constructor parameters of the class ``target``, read from its source; none when it cannot be read."""
+        if target not in self.params:
+            import confluid
+
+            self.params[target] = _params_of(confluid.source_params, target)
+        return self.params[target]
+
+    def notes_of(self, path: Any) -> Optional[Any]:
+        """The notes of the config file ``path`` (:func:`confluid.document_notes`), or None when it cannot be read."""
+        key = Path(path).resolve()
+        if key not in self.notes:
+            import confluid
+
+            self.notes[key] = _notes(confluid.document_notes, path)
+        return self.notes[key]
+
+
 def _knob_paths(notes: Any) -> Set[str]:
     """The top-level plain mappings of ``notes`` some marker parameter reads through ``!ref:`` — a group of knobs, as
     ``standardize: {workers: auto}`` beside ``only: !ref:standardize.only`` — and every key under them."""
@@ -344,7 +386,12 @@ def _at(document: Any, path: str) -> Any:
 
 
 def _runs_of(
-    document: Any, found: ConfigHelp, skipped: Set[str], with_docs: bool, reading: FrozenSet[Path]
+    document: Any,
+    found: ConfigHelp,
+    skipped: Set[str],
+    with_docs: bool,
+    reading: FrozenSet[Path],
+    shared: "_Shared",
 ) -> List[IncludedKeys]:
     """The options of the runs the document starts, as bare keys, grouped by kind and listed once each.
 
@@ -368,7 +415,7 @@ def _runs_of(
     read = 0
     for path in paths:
         try:
-            child = read_config_help(path, with_docs=with_docs, _reading=reading | {path})
+            child = read_config_help(path, with_docs=with_docs, _reading=reading | {path}, _shared=shared)
         except Exception:  # a run that cannot be read lists nothing, never a failed TAB
             continue
         read += 1

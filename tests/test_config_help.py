@@ -280,6 +280,33 @@ def test_a_package_include_is_named_as_the_config_writes_it(tmp_path: Path) -> N
     ]
 
 
+def test_the_includes_are_named_without_finding_a_classs_source(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Naming an include as written asks ``locate`` for the includes alone: finding each class's definition reads its
+    source, and a config holds dozens (0.1 s of a four-run workflow's listing)."""
+    import confluid.locate as locate_mod
+
+    asked: List[Any] = []
+    real = locate_mod.locate
+
+    def recording(text: str, path: Any, kinds: Any = None) -> Any:
+        asked.append(kinds)
+        return real(text, path, kinds=kinds)
+
+    monkeypatch.setattr(locate_mod, "locate", recording)
+    assert [group.source for group in read_config_help(config).included] == ["shared.yaml"]
+    assert asked and all(tuple(kinds) == ("include",) for kinds in asked)
+
+
+def test_a_confluid_whose_locate_takes_no_kinds_still_names_the_includes(
+    config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import confluid.locate as locate_mod
+
+    real = locate_mod.locate
+    monkeypatch.setattr(locate_mod, "locate", lambda text, path: real(text, path))  # no `kinds`
+    assert [group.source for group in read_config_help(config).included] == ["shared.yaml"]
+
+
 def test_an_include_that_cannot_be_named_shows_its_files_path(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A confluid without its go-to-definition reader names no include: the file's path stands in."""
     monkeypatch.setitem(sys.modules, "confluid.locate", None)
