@@ -380,6 +380,30 @@ def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None
             data[head] = data.pop(head)
 
 
+def _report_candidate(key: str) -> Tuple[str, str, str, str, bool]:
+    """``key`` as the report spells it: ``(candidate, head, dot, tail, dotted_at_name)``.
+
+    A glob-headed override keeps its full key (a ``'**'`` block registers per leaf as ``**.lr``), a named dotted
+    override is its HEAD block (``--opt.lr`` expands to a top-level ``opt:`` mapping), a bare override is the key
+    itself.
+    """
+    head, dot, tail = key.partition(".")
+    dotted_at_name = bool(dot) and head not in ("*", "**")
+    return (head if dotted_at_name else key), head, dot, tail, dotted_at_name
+
+
+def unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> List[str]:
+    """The keys of ``overrides`` the REPORT says matched nothing, in the order typed.
+
+    The question :func:`warn_unused_overrides` asks, answered as a list: a command that does something else with
+    such a key than warn about it (``recordstream run`` hands it to the runs of a workflow) asks it here. The
+    report is confluid's: a key is unused only when the pass it covers materialized the objects that could take it,
+    so a command that builds nothing inside ``confluid.collect_report()`` gets an empty answer.
+    """
+    unused = set(report.unused)
+    return [key for key in overrides if _report_candidate(key)[0] in unused]
+
+
 def warn_unused_overrides(
     overrides: Dict[str, Any], report: ConfigurationReport, config_path: Optional["os.PathLike[str]"] = None
 ) -> None:
@@ -414,13 +438,8 @@ def warn_unused_overrides(
     Do NOT downgrade to debug/trace: an override the operator typed and did
     not get is exactly the actionable condition ``warning`` is reserved for.
     """
-    unused = set(report.unused)
-    for key in overrides:
-        head, dot, tail = key.partition(".")
-        dotted_at_name = bool(dot) and head not in ("*", "**")
-        candidate = head if dotted_at_name else key
-        if candidate not in unused:
-            continue
+    for key in unused_overrides(overrides, report):
+        _, head, dot, tail, dotted_at_name = _report_candidate(key)
         if dotted_at_name:
             logger.warning(
                 f"Override {key!r} matched nothing and was ignored: no configured object is named "

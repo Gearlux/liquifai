@@ -1133,6 +1133,31 @@ parse_globals(tokenize(["--scope=quick", "-s=task=a"])).scopes
 # ['quick', 'task=a']
 ```
 
+**Fourth step (2026-11-03): a config that starts other runs lists their options, and its knobs in full.** A workflow
+config (`steps: [RunConfig(config: a.yaml), …]`) showed only its own options: `--show_progress`, a parameter of the
+processor each run builds, reached no run and appeared nowhere, because the runs are separate processes started
+from steps inside a list that `_walk_keys` never walks. Two changes, both on the one reader:
+
+* *The runs.* A package registers a class whose parameter names a config under the `liquifai.config_refs`
+  entry-point group (`<module>.<Class>.<parameter>`, the `liquifai.values` shape; liquifai names no consumer).
+  `config_refs.referenced_configs` walks the document's blocks (lists included) for such a class and resolves each
+  file as `confluid.resolve_config_path` does (`pkg://…` or the run folder's path); `read_config_help` reads each in
+  turn and unions their options as `ConfigHelp.runs`, bare as typed, each once, `[n of m runs]` when not every run
+  has it. The keys the config lists itself (its keys, its command's options, a parameter a key feeds, a bare
+  parameter name of its blocks) are its own and not repeated. A run that cannot be read lists nothing; the files
+  being read are carried (`_reading`) so a run naming the workflow again stops there. Cost, measured on a four-run
+  workflow: 0.25 s on a cold keys-only TAB, 0.47 s more for the listing.
+* *The knobs.* The top-level `standardize: {only: [], workers: auto}` beside `only: !ref:standardize.only` is a group
+  of knobs, not one setting: `confluid.KeyNote.children` carries the keys under a plain mapping with their own
+  comments and the parameters they feed, and the group is a knob group when some parameter reads it through `!ref:`.
+  Each key is listed under its full name, and TAB no longer shortens `standardize.workers` to `--workers`, which
+  bare is a key a class parameter takes (the old shortening offered a flag that did not do what its row said).
+  A mapping nothing reads (`Class:` blocks, a scope's settings) stays one row.
+
+What a typed key reaches is not liquifai's: the listing says what the runs accept, the command says what it does with
+a key it does not use. `overrides.unused_overrides` splits the verdict `warn_unused_overrides` gave from the warning,
+so `recordstream run` hands the unused keys of a workflow to its steps (`recordstream/docs/architecture.md` §32).
+
 ## 14. The resolved configuration is written by the run itself — `--dump-config`, `--save-config` (2026-10-30)
 
 **Context.** A config sets a few keys; the run uses many more — every constructor default, the values its includes

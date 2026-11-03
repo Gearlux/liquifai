@@ -282,7 +282,8 @@ def _render_positionals(target: Any, positionals: List[str], layout: HelpLayout)
 
 def _render_config_help(config_help: ConfigHelp, layout: HelpLayout) -> None:
     """The config's own top-level keys, then its scopes, then each included file's keys the config does not write —
-    each with its help, in the file's order."""
+    each with its help, in the file's order — then the options of the runs the config starts (the keys it hands them).
+    """
     console = Console()
     source = config_help.source
     if layout == "lines":
@@ -294,7 +295,7 @@ def _render_config_help(config_help: ConfigHelp, layout: HelpLayout) -> None:
             for scope in config_help.scopes:
                 spelling = f"-s {scope.activation}".ljust(scope_w)
                 console.print(f"  [bold white]{escape(spelling)}[/bold white]  [dim]{escape(scope.help)}[/dim]")
-        for group in config_help.included:
+        for group in [*config_help.included, *config_help.runs]:
             _render_key_lines(console, f"Options of {group.source}", group.keys)
         return
     if config_help.focused:
@@ -306,7 +307,7 @@ def _render_config_help(config_help: ConfigHelp, layout: HelpLayout) -> None:
         for scope in config_help.scopes:
             table.add_row(escape(f"-s {scope.activation}"), escape(scope.help))
         console.print(table)
-    for group in config_help.included:
+    for group in [*config_help.included, *config_help.runs]:
         _render_key_table(console, f"Options of {group.source}", group.keys)
 
 

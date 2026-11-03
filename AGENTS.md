@@ -303,6 +303,20 @@ project folder shadows the package.
   choice 2026-10-31). `completion.config_help.read_config_help` is the one reader
   for both (help: the key's comment, else the fed parameter's docstring read from source — never an import of the
   class on the TAB path). (user request 2026-10-30; `tests/test_config_help.py`) §13.
+- **A config that starts other runs lists their options, and its knobs in full.** A package registers a class
+  whose parameter names a config another run reads under the `liquifai.config_refs` entry-point group
+  (`"<module>.<Class>.<parameter>" = "<module>:<Class>"`, read with `importlib.metadata`, the class never imported —
+  `completion.config_refs`); `read_config_help` reads each such config a block of the document names and lists, as
+  `ConfigHelp.runs`, the runs' top-level keys (`options of the runs`) and the parameters of each top-level block
+  (`options of the runs' runnable (<Class>)`), BARE as typed, a key once, `[2 of 4 runs]` when not every run has it, its
+  value only where the runs agree. A key the config lists itself — its keys, its command's options, a parameter a key
+  feeds — is the config's and is not repeated; a run that cannot be read lists nothing; a run naming the config again
+  stops there. A top-level plain mapping some marker parameter reads through `!ref:` (`standardize: {workers: auto}`
+  beside `only: !ref:standardize.only`) is a group of knobs (`ConfigHelp.knobs`): the mapping is no option, its keys
+  are, each with its own comment (`confluid.KeyNote.children`) and typed in FULL — `--standardize.workers` — never
+  shortened to `--workers`, which is another key; a mapping nothing reads stays one row. The same list serves TAB
+  (first TAB, keys alone, and the listing) and `--help`. Which typed keys the runs receive is the command's:
+  `liquifai.overrides.unused_overrides` is the verdict (`recordstream run`, §32). (`tests/test_config_help_runs.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on

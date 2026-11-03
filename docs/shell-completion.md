@@ -167,6 +167,25 @@ the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in 
 — a `!class:` block the command's objects never reach (one only a list item references) included, titled as its TAB
 group.
 
+A config that starts other runs lists their options too, after its own. A class whose parameter names a config another
+run reads (a workflow step that runs `other.yaml`) is registered by its package, and no class is imported:
+
+```toml
+[project.entry-points."liquifai.config_refs"]
+"mypkg.workflow.RunConfig.config" = "mypkg.workflow:RunConfig"
+```
+
+For `my-app run flow.yaml`, whose `steps:` hold `RunConfig` blocks, the listing adds `options of the runs` (the runs'
+top-level keys) and `options of the runs' runnable (BuildCatalog)` (the parameters of their top-level blocks), each key
+bare as it is typed (`--overwrite`, `--workers`), helped by the run's own file, and marked `[2 of 4 runs]` when not
+every run has it. A key the flow lists itself is not repeated, and a run that cannot be read lists nothing. What a
+typed key reaches is the command's to say (liquifai only lists): `recordstream run` hands a key the workflow does not
+use to every run.
+
+A top-level mapping some class parameter reads through `!ref:` is a group of knobs — `flow: {only: [], workers: 2}`
+beside `only: !ref:flow.only` lists `--flow.only` and `--flow.workers`, each with its own comment, and TAB offers them
+in full: `--workers` alone is another key (the one a class parameter takes). A mapping nothing reads stays one row.
+
 The line stays as you typed it; keep typing or TAB again. Only the candidates the typed word matches are listed
 (`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command's
 help is the first line of its docstring, an argument's or option's its `Args:` line. The first TAB is unchanged: it still fills in the part the matches share. An option's values
