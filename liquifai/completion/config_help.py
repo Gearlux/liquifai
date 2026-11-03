@@ -18,7 +18,7 @@ import io
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 #: The widest value a focused key's row shows; a longer one (a list of markers) shows none.
 _VALUE_MAX = 60
@@ -90,9 +90,23 @@ class ConfigHelp:
     #: ``(class name, parameter)`` of every block parameter a top-level key already feeds — through ``!ref:`` or by
     #: its name — and that is therefore not listed with its block.
     fed: Set[Tuple[str, str]] = field(default_factory=set)
+    #: A top-level plain mapping some parameter reads through ``!ref:`` (``standardize``) and the dotted keys under it
+    #: (``standardize.workers``): the mapping is no option, its keys are, typed in full — a bare ``--workers`` is
+    #: another key, one a class parameter takes — so they are never shortened.
+    knobs: Set[str] = field(default_factory=set)
+    #: The options of the runs this config starts (:mod:`liquifai.completion.config_refs`), a group per kind
+    #: (``the runs``: their top-level keys; ``the runs' runnable (DatasetProcessor)``: the parameters of a block),
+    #: each key BARE as it is typed — a key the config does not use itself is handed to every run. A key is listed
+    #: once, in the first group that has it; one the config lists itself is not repeated here.
+    runs: List[IncludedKeys] = field(default_factory=list)
 
 
-def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: bool = True) -> ConfigHelp:
+def read_config_help(
+    config_path: Path,
+    exclude: Iterable[str] = (),
+    with_docs: bool = True,
+    _reading: FrozenSet[Path] = frozenset(),
+) -> ConfigHelp:
     """The keys of the config at ``config_path``, its own top-level keys and every scope first, each with its help.
 
     ``exclude`` names keys that belong to the command (its parameters and positionals — ``runnable`` is what
@@ -101,6 +115,12 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
     replaces the object, so only its parameters are listed. ``with_docs=False`` reads the keys alone (the
     candidates of a TAB that lists nothing). A file a key's comment or docstring cannot be read from leaves that help
     empty; the keys are read as :func:`confluid.load` reads them, and its error propagates.
+
+    A top-level key that holds a plain mapping (``standardize: {workers: auto}``) lists the keys under it, each with
+    its own comment (:attr:`ConfigHelp.knobs`). The configs the document's blocks run
+    (:func:`liquifai.completion.config_refs.referenced_configs`) are read in turn and their options listed as
+    :attr:`ConfigHelp.runs`; a run that cannot be read lists nothing. ``_reading`` holds the files being read (a
+    workflow naming itself, or a run naming the workflow, stops there).
     """
     import confluid
 
@@ -156,7 +176,13 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
         types=types,
         references=refs,
     )
-    if not with_docs:
+    entry = Path(config_path).resolve()
+    read_notes = [(Path(read).resolve(), _notes(confluid.document_notes, read)) for read in paths or [entry]]
+    for _, notes in read_notes:
+        if notes is not None:
+            found.knobs |= _knob_paths(notes)
+    if not with_docs:  # the keys alone: what a TAB that lists nothing offers
+        found.runs = _runs_of(document, found, skipped, False, _reading | {entry})
         return found
 
     class_docs: Dict[str, Dict[str, str]] = {}
@@ -169,25 +195,28 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
                 class_docs[target] = {}
         return class_docs[target]
 
-    def help_of(note: Any) -> str:
+    def help_of(note: Any, top: bool = True) -> str:
         if note.comment:
             return str(note.comment)
         for target, param in note.feeds:
             text = docs_of(target).get(param, "")
             if text:
                 return text
-        for target in targets.values():  # a key named like a parameter broadcasts to it: that parameter's help
+        for target in targets.values() if top else ():  # a top-level key named like a parameter broadcasts to it
             text = docs_of(target).get(note.name, "")
             if text:
                 return text
         return ""
 
-    def key_of(note: Any) -> FocusedKey:
-        value = document.get(note.name) if isinstance(document, dict) else None
-        return FocusedKey(note.name, help_of(note), _shown(value))
+    def keys_of(note: Any, parent: str = "") -> List[FocusedKey]:
+        """The rows a note makes: its own, or — for a knob group, a plain mapping a parameter reads through ``!ref:`` —
+        one per key under it, typed in full. A mapping nothing reads (a ``Class:`` block, a scope's settings) is one
+        row."""
+        path = f"{parent}.{note.name}" if parent else note.name
+        if note.children and path in found.knobs:
+            return [row for child in note.children for row in keys_of(child, path)]
+        return [FocusedKey(path, help_of(note, top=not parent), _shown(_at(document, path)))]
 
-    entry = Path(config_path).resolve()
-    read_notes = [(Path(read).resolve(), _notes(confluid.document_notes, read)) for read in paths or [entry]]
     listed = {note.name for read, notes in read_notes if read == entry and notes is not None for note in notes.keys}
     listed |= skipped
     spellings = _include_spellings([read for read, _ in read_notes])
@@ -199,11 +228,11 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
         group = IncludedKeys(spellings.get(read, str(read)))
         for note in notes.keys:
             if own and note.name not in skipped:
-                found.focused.append(key_of(note))
+                found.focused.extend(keys_of(note))
             elif note.name not in found.docs:
                 found.docs[note.name] = help_of(note)
             if not own and note.name not in listed:
-                group.keys.append(key_of(note))
+                group.keys.extend(keys_of(note))
                 listed.add(note.name)
         if group.keys:
             found.included.append(group)
@@ -214,6 +243,7 @@ def read_config_help(config_path: Path, exclude: Iterable[str] = (), with_docs: 
         owner = targets.get(head)
         if owner is not None and key not in found.docs:
             found.docs[key] = docs_of(owner).get(leaf, "")
+    found.runs = _runs_of(document, found, skipped, with_docs, _reading | {entry})
     return found
 
 
@@ -283,6 +313,109 @@ def _add_aliases(raw: Any, seen: Dict[str, ConfigScope], scopes: List[ConfigScop
         names = targets if isinstance(targets, list) else [targets]
         seen[name] = ConfigScope(name, f"Alias of {', '.join(str(each) for each in names)}.")
         scopes.append(seen[name])
+
+
+def _knob_paths(notes: Any) -> Set[str]:
+    """The top-level plain mappings of ``notes`` some marker parameter reads through ``!ref:`` — a group of knobs, as
+    ``standardize: {workers: auto}`` beside ``only: !ref:standardize.only`` — and every key under them."""
+    found: Set[str] = set()
+
+    def add(note: Any, parent: str) -> None:
+        found.add(f"{parent}.{note.name}")
+        for child in note.children:
+            add(child, f"{parent}.{note.name}")
+
+    for note in notes.keys:
+        if note.children and note.feeds:
+            found.add(note.name)
+            for child in note.children:
+                add(child, note.name)
+    return found
+
+
+def _at(document: Any, path: str) -> Any:
+    """The value at the dotted ``path`` of ``document`` when every step is a mapping; else None."""
+    value = document
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _runs_of(
+    document: Any, found: ConfigHelp, skipped: Set[str], with_docs: bool, reading: FrozenSet[Path]
+) -> List[IncludedKeys]:
+    """The options of the runs the document starts, as bare keys, grouped by kind and listed once each.
+
+    A run is a config a block of the document names (:func:`liquifai.completion.config_refs.referenced_configs`). Its
+    own options are its top-level keys (``the runs``) and the parameters of each of its top-level blocks
+    (``the runs' runnable (DatasetProcessor)``); a key the run lists nowhere else is the union over the runs, marked
+    ``[2 of 4 runs]`` when not every run has it. A key the document lists itself (or that is one of its command's
+    options) is the document's, not repeated: a key the document does not use is what the command hands to the runs.
+    """
+    from .config_refs import referenced_configs
+
+    paths = [path for path in referenced_configs(document) if path not in reading]
+    if not paths:
+        return []
+    own = set(skipped) | set(found.keys) | {key.path for key in found.focused}
+    own |= {key.path for group in found.included for key in group.keys}
+    own |= {key.partition(".")[0] for key in found.keys}
+    own |= {parameter for _, parameter in found.fed}  # a parameter a key feeds (`only: !ref:flow.only`) is bare too
+    own |= {key.rpartition(".")[2] for key in found.keys if key not in found.knobs}  # `--only`, `--name`: bare
+    groups: Dict[str, Dict[str, List[Any]]] = {}
+    read = 0
+    for path in paths:
+        try:
+            child = read_config_help(path, with_docs=with_docs, _reading=reading | {path})
+        except Exception:  # a run that cannot be read lists nothing, never a failed TAB
+            continue
+        read += 1
+        for title, keys in _options_of(child):
+            held = groups.setdefault(title, {})
+            for key in keys:
+                entry = held.setdefault(key.path, [key, 0, set()])
+                entry[1] += 1
+                entry[2].add(key.value)
+    listed: Set[str] = set()
+    runs: List[IncludedKeys] = []
+    for title, held in groups.items():
+        keys = []
+        for name, (key, count, values) in held.items():
+            if name in own or name in listed:
+                continue
+            listed.add(name)
+            suffix = f" [{count} of {read} runs]" if count < read else ""
+            # the value the runs agree on; runs that set it differently show none
+            keys.append(FocusedKey(name, f"{key.help}{suffix}".strip(), key.value if len(values) == 1 else ""))
+        if keys:
+            runs.append(IncludedKeys(title, keys))
+    return runs
+
+
+def _options_of(run: ConfigHelp) -> List[Tuple[str, List[FocusedKey]]]:
+    """``(group title, options)`` of one run: its top-level keys, the parameters of each of its top-level blocks, and
+    the groups of the runs it starts in turn."""
+    blocks = [(path, name) for path, name in run.blocks if "." not in path]
+    objects = {path for path, _ in blocks}
+    top = [key for key in [*run.focused, *(k for group in run.included for k in group.keys)] if key.path not in objects]
+    if not run.focused and not run.included:  # read without docs: the document's own top-level keys, unhelped
+        top = [FocusedKey(key) for key in run.keys if "." not in key and key not in objects]
+    found: List[Tuple[str, List[FocusedKey]]] = [("the runs", top)] if top else []
+    for path, name in blocks:
+        depth = path.count(".") + 1
+        keys = [
+            FocusedKey(
+                key.rpartition(".")[2], run.docs.get(key, ""), "" if key in run.switches else run.values.get(key, "")
+            )
+            for key in run.keys
+            if key.startswith(path + ".") and key.count(".") == depth
+        ]
+        if keys:
+            found.append((f"the runs' {path} ({name})", keys))
+    found.extend((group.source, group.keys) for group in run.runs)
+    return found
 
 
 def _params_of(reader: Callable[[str], Any], target: str) -> Any:

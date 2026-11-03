@@ -703,8 +703,24 @@ def _command_candidates(
         except Exception:
             config_help = None
         yaml_paths = [key for key in config_help.keys if key not in objects] if config_help is not None else []
-        candidates.extend(f for f in _collapse_to_flags(option_paths + yaml_paths) if _not_used(f))
-        flag_paths = {flag: path for path, flag in _flag_display_map(option_paths + yaml_paths).items()}
+        # A knob (``standardize.workers``, a key under a mapping the file's parameters read) is typed in full: its
+        # leaf alone (``--workers``) is another key, one a class parameter takes.
+        knobs = config_help.knobs if config_help is not None else set()
+        shortened = [key for key in yaml_paths if key not in knobs]
+        candidates.extend(f for f in _collapse_to_flags(option_paths + shortened) if _not_used(f))
+        flag_paths = {flag: path for path, flag in _flag_display_map(option_paths + shortened).items()}
+        if config_help is not None:
+            # The knobs in full (a mapping itself is no option, its keys are), then the options of the runs the
+            # config starts, bare as they are typed: a key the config does not use is handed to every run. A flag
+            # the config already offers is the config's.
+            leaves = [path for path in knobs if path in yaml_paths and not any(o.startswith(path + ".") for o in knobs)]
+            more = {f"--{path}": path for path in sorted(leaves)}
+            more.update({f"--{key.path}": key.path for group in config_help.runs for key in group.keys})
+            for flag, path in more.items():
+                if flag not in flag_paths:
+                    flag_paths[flag] = path
+                    if _not_used(flag):
+                        candidates.append(flag)
     else:
         candidates.extend(f for f in signature_flags if _not_used(f) and f not in object_flags)
     # Prepend positional hint (if any) before flag candidates; _filter_prefix
@@ -770,7 +786,9 @@ def _listing(
     focused = {key.path: key for key in config_help.focused} if config_help is not None else {}
     included = list(config_help.included) if config_help is not None else []
     # A key an included file writes and the config does not: its own group, under the include's name.
-    named = {**{key.path: key for group in included for key in group.keys}, **focused}
+    runs = list(config_help.runs) if config_help is not None else []
+    named = {key.path: key for group in [*runs, *included] for key in group.keys}
+    named.update(focused)
     config_docs = config_help.docs if config_help is not None else {}
     config_values = config_help.values if config_help is not None else {}
     switches = config_help.switches if config_help is not None else set()
@@ -884,7 +902,8 @@ def _listing(
         scope_rows = [("", row([(f"-s {scope.activation}", "option")], scope.help)) for scope in config_help.scopes]
         if scope_rows:
             groups.append((title(f"scopes of {source}"), scope_rows))
-        for group in included:
+        # the includes' keys, then the options of the runs: what the config hands the keys it does not use
+        for group in [*included, *runs]:
             rows = [focused_rows[key.path] for key in group.keys if key.path in focused_rows]
             if rows:
                 groups.append((title(f"options of {group.source}"), rows))

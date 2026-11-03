@@ -8,6 +8,20 @@ All notable changes to liquifai are documented here. The format follows
 
 ### Added
 
+- **A config that starts other runs lists their options** — in the second TAB's listing, in `--help` and as TAB
+  candidates, after the options it lists itself: `options of the runs` (their top-level keys) and `options of the
+  runs' runnable (DatasetProcessor)` (the parameters of their top-level blocks), bare as typed (`--show_progress`,
+  `--workers`), with the help of the run's own file, `[2 of 4 runs]` when not every run has the key. A package
+  registers the class whose parameter names a config under the `liquifai.config_refs` entry-point group
+  (`"mypkg.workflow.RunConfig.config" = "mypkg.workflow:RunConfig"`); liquifai names no consumer. A run that cannot
+  be read lists nothing.
+- **A group of knobs is listed key by key, typed in full** — a top-level mapping some class parameter reads through
+  `!ref:` (`standardize: {workers: auto}` beside `only: !ref:standardize.only`) lists `--standardize.workers` with its
+  own comment instead of one `--standardize` row, and TAB no longer shortens it to `--workers`, which is another key.
+- **`liquifai.overrides.unused_overrides(overrides, report)`** — the keys the configuration report says matched
+  nothing, in the order typed: the question `warn_unused_overrides` asks, for a command that does something else with
+  them (`recordstream run` hands them to the runs of a workflow).
+
 - **`--scope <TAB>` completes the config's scopes** — `my-app run run.yaml -s <TAB>` (or `--scope <TAB>`,
   `--scope=<TAB>`, or with `--config run.yaml`) offers the scopes the config and its includes declare, a keyed one as
   `KEY=VAL`, then its `scope_aliases:` (in the second TAB's `scopes of` listing too, `Alias of quick.`), leaving out
