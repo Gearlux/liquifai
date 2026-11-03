@@ -20,6 +20,7 @@ Stdlib-only at import, like every ``liquifai.completion`` module: confluid is im
 
 from __future__ import annotations
 
+from functools import lru_cache
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -30,8 +31,13 @@ from .config_values import _blocks, _clean
 GROUP = "liquifai.config_refs"
 
 
+@lru_cache(maxsize=1)
 def reference_names() -> Dict[str, Set[str]]:
-    """``{class: {parameter, …}}`` of every parameter some installed package registers as naming a config."""
+    """``{class: {parameter, …}}`` of every parameter some installed package registers as naming a config.
+
+    Read once per process: the scan opens the metadata of every installed distribution (43 ms with 2 900 files), and
+    one TAB reads a config, and each of its runs, through this. A package installed meanwhile is seen by the next TAB,
+    which is a new process."""
     found: Dict[str, Set[str]] = {}
     for entry in entry_points(group=GROUP):
         owner, _, parameter = entry.name.rpartition(".")
