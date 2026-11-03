@@ -276,3 +276,61 @@ def test_the_installed_distributions_are_scanned_once_however_many_runs_are_read
         assert scans == [config_refs.GROUP]
     finally:
         _SHIPPED_REFERENCE_NAMES.cache_clear()
+
+
+def _counting(monkeypatch: pytest.MonkeyPatch, name: str) -> List[Any]:
+    """Wrap ``confluid.<name>`` so each call is recorded by its first argument."""
+    import confluid
+
+    real = getattr(confluid, name)
+    calls: List[Any] = []
+
+    def counted(first: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(str(first))
+        return real(first, *args, **kwargs)
+
+    monkeypatch.setattr(confluid, name, counted)
+    return calls
+
+
+@pytest.fixture
+def sharing_flow(tmp_path: Path) -> Path:
+    """Two runs naming the same class and including the same file."""
+    _write(tmp_path, "shared.yaml", "# Written again.\noverwrite: false\n")
+    for name in ("child_a", "child_b"):
+        _write(tmp_path, f"{name}.yaml", f"include: shared.yaml\nrunnable: !class:{HERE}.Processor\n")
+    return _write(
+        tmp_path,
+        "flow.yaml",
+        f"""\
+        runnable: !class:{HERE}.Flow
+          steps:
+            - !class:{HERE}.Step {{config: child_a.yaml}}
+            - !class:{HERE}.Step {{config: child_b.yaml}}
+        """,
+    )
+
+
+def test_the_runs_of_one_read_share_the_classes_and_files_they_have_in_common(
+    sharing_flow: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two runs name one class and include one file: each is read from source once per call, not once per run."""
+    params = _counting(monkeypatch, "source_params")
+    docs = _counting(monkeypatch, "source_param_docs")
+    notes = _counting(monkeypatch, "document_notes")
+    found = read_config_help(sharing_flow)
+    assert [key.path for group in found.runs for key in group.keys].count("workers") == 1  # still both runs' options
+    processor = f"{HERE}.Processor"
+    assert params.count(processor) == 1 and docs.count(processor) == 1
+    shared = str(sharing_flow.parent / "shared.yaml")
+    assert notes.count(shared) == 1, notes
+
+
+def test_a_second_call_reads_the_sources_again_so_an_edit_between_two_tabs_is_seen(
+    sharing_flow: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    params = _counting(monkeypatch, "source_params")
+    read_config_help(sharing_flow)
+    first = len(params)
+    read_config_help(sharing_flow)
+    assert first > 0 and len(params) == 2 * first

@@ -14,7 +14,9 @@ All notable changes to liquifai are documented here. The format follows
   `--workers`), with the help of the run's own file, `[2 of 4 runs]` when not every run has the key. A package
   registers the class whose parameter names a config under the `liquifai.config_refs` entry-point group
   (`"mypkg.workflow.RunConfig.config" = "mypkg.workflow:RunConfig"`); liquifai names no consumer. A run that cannot
-  be read lists nothing.
+  be read lists nothing. Reading the runs adds 25 ms to a TAB and 45 ms to the listing: the installed packages are
+  scanned once per process, the runs of one call share the classes and files they have in common (nothing outlives
+  the call), and an include is named without finding the source of every class.
 - **A group of knobs is listed key by key, typed in full** — a top-level mapping some class parameter reads through
   `!ref:` (`standardize: {workers: auto}` beside `only: !ref:standardize.only`) lists `--standardize.workers` with its
   own comment instead of one `--standardize` row, and TAB no longer shortens it to `--workers`, which is another key.
