@@ -365,6 +365,8 @@ project folder shadows the package.
   `env={**os.environ, "NO_COLOR": "1"}` to its subprocess, because loguru colorizes under CI
   variables. Reproduce with `CI=true GITHUB_ACTIONS=true python examples/<name>.py`.
 - Public docs name no consumer and no corporate name: root "Published Projects Are Standalone".
+- The sdist carries `CHANGELOG.md` and every `docs/` page the README links: `MANIFEST.in` names them, since nothing
+  else pulls them in. (`tests/test_packaging.py`)
 - Release: bump `pyproject.toml`, add a dated `CHANGELOG.md` section (pre-1.0 breaks go under
   **Breaking**), then tag `v<version>`; `release.yml` builds, smoke-tests from `/tmp` and
   publishes. Order: loggair → confluid → liquifai. A new confluid or loggair API used here is
