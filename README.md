@@ -249,4 +249,5 @@ export LIQUIFAI_NO_LAZY_COMPLETE=1   # TAB reads the caches and never starts any
 Details: [Shell Completion](https://github.com/Gearlux/liquifai/blob/main/docs/shell-completion.md).
 
 ## License
-MIT
+
+[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0) (the `LICENSE` file): free for personal, academic and other noncommercial use. Commercial use needs a separate licence from the author.

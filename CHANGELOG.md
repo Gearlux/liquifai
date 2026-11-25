@@ -6,6 +6,9 @@ All notable changes to liquifai are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
+
 ### Added
 
 - **A config that starts other runs lists their options** — in the second TAB's listing, in `--help` and as TAB
