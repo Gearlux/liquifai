@@ -100,6 +100,22 @@ GLOBAL_FLAG_SPECS: Tuple[GlobalFlag, ...] = (
         value_kind="path",
         metavar="PATH",
     ),
+    # No value of its own (``takes_value=False``), so the walk never takes the next token for a path: the file is
+    # written ``--dump-config=PATH``, the one spelling no positional or override can be mistaken for.
+    GlobalFlag(
+        ("--dump-config",),
+        "dump_config",
+        "Print the resolved configuration and stop; `=PATH` writes it there.",
+        metavar="[=PATH]",
+    ),
+    GlobalFlag(
+        ("--save-config",),
+        "save_config",
+        "Write the resolved configuration to PATH, then run the command.",
+        takes_value=True,
+        value_kind="path",
+        metavar="PATH",
+    ),
     # ``-h`` is the universal convention, and its absence was not a smaller vocabulary but a TRAP:
     # a single-dash token is no override form, so ``-h`` fell through to the parser's dropped list
     # (a warning) and execution CONTINUED into the command. Measured 2026-08-26 on a live CLI:
@@ -161,7 +177,12 @@ SHELL_VALUE_FLAGS: Set[str] = {
     f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.value_kind == "shell" for f in spec.flags
 }
 
-#: Every visible value-taking flag (completion stays silent after these).
+#: Flags whose value is a scope activation (completion offers the scopes of the config on the line).
+SCOPE_VALUE_FLAGS: Set[str] = {
+    f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.value_kind == "scope" for f in spec.flags
+}
+
+#: Every visible value-taking flag (completion stays silent after the ones without a set above).
 GLOBAL_VALUE_FLAGS: Set[str] = {
     f for spec in GLOBAL_FLAG_SPECS if not spec.hidden and spec.takes_value for f in spec.flags
 }

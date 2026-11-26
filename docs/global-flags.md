@@ -7,15 +7,20 @@ derive from that single table, so they can never drift apart.
 | Flag | Effect |
 |---|---|
 | `--config PATH`, `-c` | Configuration file (script commands can also take it as their first positional — see [config promotion](commands-and-di.md)). |
-| `--scope NAME` / `--scope KEY=VAL`, `-s` | Activate a confluid [scope](https://github.com/Gearlux/confluid/blob/main/docs/scopes.md); repeatable. Dimension-bound `--KEY VAL` flags (e.g. `--task classification`) are forwarded as `KEY=VAL` scopes automatically. The `os` / `device` [host facts](host-facts.md) are activated on every run without a flag; `--scope os=linux` overrides one. |
+| `--scope NAME` / `--scope KEY=VAL`, `-s` | Activate a confluid [scope](https://github.com/Gearlux/confluid/blob/main/docs/scopes.md); repeatable, several comma-separated (`-s quick,val`). Dimension-bound `--KEY VAL` flags (e.g. `--task classification`) are forwarded as `KEY=VAL` scopes automatically; a bare scope (`!scope:quick`) has no flag of its own — `--quick` is a config key, and when nothing takes it the warning names `--scope quick`. The `os` / `device` [host facts](host-facts.md) are activated on every run without a flag; `--scope os=linux` overrides one. A bare `--scope NAME` no scope block of the config declares (nor its `scope_aliases:`) is refused before anything runs (`Error: No scope block declares 'vla' (the scopes of /path/to/cfg.yaml: quick, val)`); a `--scope KEY=VAL` whose dimension the config never declares changes nothing, so a CLI can pass a dimension to every config. |
 | `--debug`, `-d` | Enable debug mode — expected CLI failures propagate with a full traceback instead of a clean one-line error (see [error handling](error-handling.md)). Also raises the console level to `DEBUG` unless `--console-level` names one. |
 | `--level LEVEL` | Set both console and file log level. Omitted, the levels come from the hierarchy below. |
 | `--console-level LEVEL` | Console log level only; beats `--level` for that sink. |
 | `--file-level LEVEL` | File log level only; beats `--level` for that sink. |
 | `--log-dir DIR` | Redirect the log file directory. Omitted, `LOGGAIR_DIR` and the config files apply. |
+| `--dump-config`, `--dump-config=PATH` | Print the resolved configuration — every setting of every class — and stop; the command does not run. With `=PATH` it is written to `PATH` instead. See [below](#--dump-config-and---save-config--the-resolved-configuration). |
+| `--save-config PATH` | Write the resolved configuration to `PATH`, then run the command as usual. |
 | `--help` | Rich options table extracted from the command signature + docstrings. With a config named, also the **Scope Dimensions** block — see below. |
 | `--docs` | The same code-extracted documentation as `--help`, one option per line. |
 | `--install-completion [SHELL]` / `--show-completion [SHELL]` / `--refresh-completions` | Shell completion management (see [shell completion](shell-completion.md)). |
+
+A flag's value follows a space or an `=`: `--level=DEBUG`, `-c=run.yaml` and `--scope=quick` are `--level DEBUG`,
+`-c run.yaml` and `--scope quick` (the completion flags take theirs after a space).
 
 ## Where a log level comes from
 
@@ -51,6 +56,49 @@ this resolution; liquifai only forwards the flags you typed. Run
 `python -m loggair` to see which layers a machine actually has and what they
 resolve to.
 
+## `--dump-config` and `--save-config` — the resolved configuration
+
+A config writes a few keys; a run uses every setting of every class it builds. `--dump-config` shows them all:
+
+```yaml
+# run.yaml
+epochs: 3
+runnable: !class:mypkg.Trainer
+  optimizer: !class:mypkg.Optimizer
+    lr: 0.01
+```
+
+```console
+$ my-app run.yaml --lr 0.05 --dump-config
+epochs: 3
+runnable:
+  _target_: mypkg.Trainer
+  optimizer:
+    _target_: mypkg.Optimizer
+    lr: 0.05
+    momentum: 0.9
+    nesterov: false
+  epochs: 3
+  seed: 0
+  run_name: demo
+lr: 0.05
+```
+
+The text is the document after its includes, the active scopes, the positionals and the command-line keys, every
+object built and listed with each constructor parameter, written or defaulted. Objects are built without
+`solidify()`, so nothing is downloaded or loaded. Each class is named by its importable path, so the file runs again
+as written: `my-app resolved.yaml` runs the same configuration. The `platform:` block of
+[host facts](host-facts.md) is left out unless the config wrote a value into it.
+
+| Command | What it does |
+|---|---|
+| `my-app run.yaml --dump-config` | prints the configuration, runs nothing |
+| `my-app run.yaml --dump-config=resolved.yaml` | writes `resolved.yaml` (its folder created), runs nothing |
+| `my-app run.yaml --save-config resolved.yaml` | writes `resolved.yaml`, then runs |
+
+A deferred slot (`_partial_: true`, built later by the run) is listed with its defaults too; a parameter without a default (an optimizer's `params`, passed in by the run) is left out. A command with no config
+file refuses both flags: `Error: --dump-config: no configuration file was given — name one (...)`.
+
 ## `--help` with a config — the Scope Dimensions block
 
 When the command has a config (`my-app train cfg.yaml --help`), help also lists
@@ -82,4 +130,5 @@ data, different layout (`liquifai.report.show_configuration(..., layout="lines")
 ## Runnable example
 
 [`examples/global_flags_app.py`](../examples/global_flags_app.py) runs one app
-under different log levels and finishes with the greppable `--docs` layout.
+under different log levels, dumps and saves its resolved configuration, and finishes with the greppable `--docs`
+layout.

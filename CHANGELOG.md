@@ -4,6 +4,159 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
+## [0.4.0] - 2026-11-26
+
+### Breaking
+
+- **An option of a declared type other than `bool` needs a value** — `my-app show --name --dry-run` ran with
+  `name=True`, a text option holding `True` (an `int` or a list option the same); it now stops with
+  `Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>``, exit 1
+  (`MissingOptionValueError`). A switch, a config key and an unannotated parameter keep the implicit `True`.
+- **A `bool` parameter takes the word after it only when it is a yes/no value** (`true`/`false`/`yes`/`no`/`on`/
+  `off`/`0`/`1`). `my-app run c.yaml --dry-run name=x` used to bind `dry_run='name=x'` and lose the `name` override
+  without a warning; it now gives `dry_run=True` and applies `name=x`. Any other word after a switch is read on its
+  own (an unrecognised one warns, or is refused under `strict_flags`). Every other key, and every config key, keeps
+  the `--key value` form (`docs/cli-overrides.md`).
+- **A `completions=` key that names no parameter of the command is refused when it is decorated**
+  (`CommandDefinitionError: review: completions key 'libary' names no parameter — did you mean 'library'?`). It used
+  to be kept and complete nothing.
+
+### Changed
+
+- **liquifai requires confluid 0.5.0** (`confluid>=0.5.0`, was `>=0.3.0`): `overrides.py` imports
+  `discover_boolean_scopes`, and `--dump-config` / `--save-config` pass `dump(defaults=True)`; both are new in
+  confluid 0.5.0. Against an older confluid liquifai does not import.
+- **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
+
+### Added
+
+- **A config that starts other runs lists their options** — in the second TAB's listing, in `--help` and as TAB
+  candidates, after the options it lists itself: `options of the runs` (their top-level keys) and `options of the
+  runs' runnable (DatasetProcessor)` (the parameters of their top-level blocks), bare as typed (`--show_progress`,
+  `--workers`), with the help of the run's own file, `[2 of 4 runs]` when not every run has the key. A package
+  registers the class whose parameter names a config under the `liquifai.config_refs` entry-point group
+  (`"mypkg.workflow.RunConfig.config" = "mypkg.workflow:RunConfig"`); liquifai names no consumer. A run that cannot
+  be read lists nothing. Reading the runs adds 25 ms to a TAB and 45 ms to the listing: the installed packages are
+  scanned once per process, the runs of one call share the classes and files they have in common (nothing outlives
+  the call), and an include is named without finding the source of every class.
+- **A group of knobs is listed key by key, typed in full** — a top-level mapping some class parameter reads through
+  `!ref:` (`standardize: {workers: auto}` beside `only: !ref:standardize.only`) lists `--standardize.workers` with its
+  own comment instead of one `--standardize` row, and TAB no longer shortens it to `--workers`, which is another key.
+- **`liquifai.overrides.unused_overrides(overrides, report)`** — the keys the configuration report says matched
+  nothing, in the order typed: the question `warn_unused_overrides` asks, for a command that does something else with
+  them (`recordstream run` hands them to the runs of a workflow).
+
+- **`--scope <TAB>` completes the config's scopes** — `my-app run run.yaml -s <TAB>` (or `--scope <TAB>`,
+  `--scope=<TAB>`, or with `--config run.yaml`) offers the scopes the config and its includes declare, a keyed one as
+  `KEY=VAL`, then its `scope_aliases:` (in the second TAB's `scopes of` listing too, `Alias of quick.`), leaving out
+  one already typed; after a comma, the list's next scope. It used to offer nothing.
+
+- **A config key's value completes on TAB** — `my-app run run.yaml name=<TAB>` (or `--name <TAB>`, `--name=<TAB>`)
+  offers what the provider of the class parameter the key feeds lists, given the block's other settings. A package
+  registers the provider under the `liquifai.values` entry-point group, named by the parameter's dotted path
+  (`"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"`). The provider runs in the background refresh, never
+  on the TAB. The scopes typed on the line (`-s folder`) are applied first, so a key a scope gives another meaning
+  completes for the one typed. In bash, a candidate after `key=` is now inserted without repeating the `key=`.
+
+- **`script_command(config_keys=fn)`: keys a command adds to its configuration** — `fn` gets the loaded document
+  (command-line keys applied) and returns `{key: value}`, merged in after the typed keys, before `--dump-config` /
+  `--save-config` and before the objects are built. A command that forces a setting shows it in the dumped file.
+- **A choice parameter refuses a value outside its choices** — a command parameter typed `Literal["text", "json"]`
+  (or `Optional[...]` of one, or a union of `Literal`s) given `xml`, from the command line or a config key, stops the
+  command with `Error: my-app show: --plan_format must be one of text, json; got 'xml'` (`InvalidChoiceError`, exit
+  1) before it runs. It used to reach the command as typed. A type mixing a choice with an open type is not judged.
+- **`--dump-config` and `--save-config`: the configuration a run resolves to** — every setting of every class, the
+  defaults the file leaves out included. `my-app run.yaml --dump-config` prints it and runs nothing;
+  `--dump-config=PATH` writes it to `PATH` instead; `--save-config PATH` writes it and then runs. Includes, scopes,
+  positionals and command-line keys are applied, a slot the run builds later (`_partial_: true`) shows its defaults
+  too, classes are named by their importable path, and the file runs again as written. `--dump-config` used to become the config key `dump_config: true` while the command ran.
+- **A config's own settings come first, with their help** — in the second TAB's listing and in `--help`. With
+  `my-app run catalog.yaml`, `options of catalog.yaml` lists the top-level keys written in that file and `scopes of
+  catalog.yaml` its scope blocks (`-s quick`), before the command's own options. A key's help is the comment above
+  it (or ending its line), else the help of the class parameter it feeds; a marker's keys show their class's
+  `Args:` help, which the listing used to leave blank. `--help` lists a list of objects as one row (`--datasets`)
+  instead of a row per field of each item.
+- **A group per `!class:` block, with every parameter of its class** — the listing's `runnable (BuildCatalog)`
+  group offers `--overwrite` even when the config never writes `overwrite:`, each parameter with its help and its
+  value or default, but a parameter a top-level key already feeds (`datasets: !ref:setup_datasets`) — listed once,
+  as that key. `--help` shows a table per object, titled by its path and class, instead of one table with an
+  "Applies to" column.
+- **The second TAB lists the candidates grouped, with their help** (bash, zsh): `my-app <TAB><TAB>` shows
+  `commands of my-app`, `arguments of my-app open` (each argument typed with its value, each missing one with its
+  help, the next one's values under it), `options of my-app open`, then `global options`, a row each, instead of one
+  alphabetical list — in colour (titles cyan, commands blue, a typed argument green, a missing one yellow, the next
+  one marked `▸`), an option's default after its help. `LIQUIFAI_COMPLETION_LIST=plain` brings back the shell's own
+  sorted list, `LIQUIFAI_COMPLETION_COLOR=never` (or `NO_COLOR`) the listing without colour. Run
+  `my-app --install-completion` again to get it. Completion-tree cache v11.
+- **The wheel ships the example configs** (`examples/*.yaml`) under `share/liquifai/examples/`, where
+  `pkg://liquifai/examples/<file>.yaml` names them from any install.
+- **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
+  `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
+- **A list's next word completes after a comma** — positionals and option values: `pictures all a,<TAB>`
+  → `a,b a,c`, the words already listed left out.
+- **`--help` shows the values TAB offers** in a "Values" block, read from the completion cache (no provider runs);
+  a dependent slot answers for the words typed before `--help`.
+
+### Fixed
+
+- **`--help` lists every option the TAB offers** — on a config that includes another
+  (`include: pkg://my-app/config/base.yaml`), `--help` left out the included file's settings and every `!class:` block
+  only a list item references; TAB listed the included settings under the command's own options. Both now show
+  them under `options of pkg://my-app/config/base.yaml` (the include as the config writes it), after the scopes, and
+  `--help` adds a table for such a block, titled as TAB titles its group (`captures (FileFormat)`). TAB no longer
+  offers the object the config binds (`--runnable`) or a parameter holding one (`--stream`), which `--help` never
+  listed: a typed value would replace the object.
+- **A value for a config key holding text stays text** — with `version: latest` in the config, `--version 1.3` reached
+  the class as the float `1.3` (`Input should be a valid string`) and `--version 1.10` as `1.1`; the shell drops the
+  quotes of `--version "1.3"`, so there was no way to say text. Both now arrive as typed (`'1.3'`, `'1.10'`). On such
+  a key the command line no longer gives a number, a list or `null`: `--version null` is the text `'null'`.
+
+- **A global option's value may follow an `=`** — `--scope=quick`, `--level=DEBUG`, `--config=run.yaml`,
+  `--log-dir=logs`, `--save-config=out.yaml` (and `-s=`, `-c=`) work as `--scope quick` and the rest. `--scope=quick`
+  ran with no scope and said nothing (it became the config key `scope`, `--level=DEBUG` the key `level`), and
+  `-s=quick` warned that it was an unrecognised token. A `--level=` with nothing after it is refused
+  (`Error: --level= gives no LEVEL — write `--level LEVEL` or `--level=LEVEL`.`). `--config=<TAB>`,
+  `--log-dir=<TAB>` and `--save-config=<TAB>` complete files.
+- **A config's scopes include those of the files it includes** — `my-app run masks.yaml --<TAB><TAB>` and `--help`
+  showed no scopes when the only one (`quick`) was declared in an included file; `scopes of masks.yaml` now lists
+  `-s quick` with its comment. The file's own scopes come first; a scope declared twice is listed once.
+- **A section rule above a key is not its help** — under `# -- Knobs -----…`, `--fft_size` showed the rule as its
+  help; it now shows the comment ending its own line (confluid's `document_notes`).
+- **A bare `--scope NAME` the config does not declare is refused** — `my-app run cfg.yaml --scope vla` printed
+  nothing and ran as if no scope were typed (the default split); it now stops with `Error: No scope block declares
+  'vla' (the scopes of /path/to/cfg.yaml: quick, val)` before anything runs — confluid's refusal, so an alias and a
+  scope declared in a scope block's own include still activate. A `--scope KEY=VAL` of a dimension the config never
+  declares still changes nothing. Needs the confluid release that refuses it.
+- **`--quick` beside a `!scope:quick` block names `--scope quick`** — a bare scope has no flag of its own, so
+  `my-app run catalog.yaml --quick` ran the whole catalog with only the generic "Check the spelling" warning.
+  The warning now ends "The configuration declares a scope 'quick': to activate it, use `--scope quick`
+  (`-s quick`)."
+- **`--help` with a config lists the command's own options** — `my-app run job.yaml --help` shows `Options of run`
+  (`--dry_run  bool  False  …`) between the config's options and the objects' tables, in the same columns. They
+  were in no table: only the raw `Args:` text under the description named them. That `Args:` block is no longer
+  printed (the tables carry each parameter's help), a type reads `text | json` instead of `Literal` (confluid's
+  `type_label`), and a script command's `Any` parameter — the object its config binds, `runnable` — is not listed
+  as a `--runnable` flag, with or without a config.
+- **`--help` without a config titles and heads its table as with one** — `Options of <command>` with the columns
+  `Option`, `Type`, `Current Value`, `Description`, a text value quoted (`'text'`). It said `Command Configuration
+  Options` over `Option (Shortest Unique)`, `Current/Default Value` and `Documentation`.
+
+- **An app typed alone prints its help when its default command has nothing to run** — a default command whose
+  argument only the command line can give (a config runner's `runnable`) used to end a bare `my-app` in
+  `Error: my-app run: missing required argument 'runnable' — pass it as `--runnable <value>``. Anything typed
+  (`my-app run`, a flag) still gets that error; a default command whose arguments have defaults still runs alone.
+- **A script command handed a config file that does not exist stops with one line** — `my-app train missing.yaml`
+  prints `Error: Configuration file not found: missing.yaml` and exits 1. It used to warn `Ignoring unrecognized CLI
+  token 'missing.yaml'` and run the command with no config. A `pkg://<distribution>/<path>` argument now names a
+  config an installed distribution ships (confluid's spelling).
+- **A command-line key reaches the config's `${…}` placeholders**, as a line written at the end of the file would:
+  with `output_dir: /runs/${run.name}`, `myapp run c.yaml run.name=pilot` now gives `/runs/pilot` (it gave the
+  file's own name: the placeholder was filled in before the key was read).
+- **Help text keeps its square brackets.** A docstring, description or default like `a list ("[epochs=1]")` printed as
+  `a list ("")`: help is rendered through Rich markup, which read the brackets as a style tag. Every text an app's
+  author wrote — the app's description, a command's docstring, the argument and option tables, the command index —
+  is now printed as written.
+
 ## [0.3.1] - 2026-10-14
 
 ### Breaking

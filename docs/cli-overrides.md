@@ -9,7 +9,7 @@ config override. All forms interoperate in one invocation:
 | `--key=value` | `--trainer.lr=0.001` | equals form; dotted keys target nested blocks |
 | `key=value` | `model.dropout=0.2` | bare form, no dashes |
 | `--key+` / `--key-` | `--debug+` | polarity: explicit `True` / `False` |
-| `--key` | `--verbose` | implicit `True` |
+| `--key` | `--verbose` | implicit `True` — a switch or a config key; an option of another declared type needs a value |
 | `+key=value` | `+new_feature=true` | add a new key |
 | `~key` | `~trainer.stale` | delete the dotted key from the config |
 
@@ -25,6 +25,40 @@ hyphen cannot appear in a Python identifier, so a hyphenated key could not have 
 a parameter under any spelling. Only **keys** are normalised — a URL or a negative number
 keeps its hyphens, and the polarity suffix is read first, so `--default-nodes-` still means
 *false* rather than a key ending in a separator.
+
+**A `bool` parameter is a switch.** A parameter the command declares `bool` (or `Optional[bool]`) takes the word
+after it only when that word is a yes/no value — `true`, `false`, `yes`, `no`, `on`, `off`, `0` or `1`; any other
+word is read on its own, so a switch can stand anywhere on the line:
+
+```text
+my-app run c.yaml --dry-run name=x      ->  dry_run=True, and name=x applied
+my-app run c.yaml --dry-run false       ->  dry_run=False
+my-app run c.yaml --dry-run x           ->  dry_run=True, and the warning: Ignoring unrecognized CLI token 'x'
+```
+
+Every other key keeps the `--key value` form: `--count 3`, and a config key, which has no declared type
+(`--trainer.fast x` sets `trainer.fast` to `x`).
+
+**An option of another declared type needs a value.** `--name` alone — or `--name --dry-run`, another option right
+after it — would put `True` where the command declared text, a number or a list, so the command stops before it
+runs:
+
+```text
+Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>`
+```
+
+A switch, a config key and a parameter without a type annotation keep the implicit `True` (`--verbose`).
+
+**A choice takes only its values.** A parameter typed as a closed set — `plan_format: Literal["text", "json"]`,
+`Optional[Literal[...]]`, a union of `Literal`s — refuses any other value before the command runs, whether it was
+typed or written as a config key of that name:
+
+```text
+Error: my-app show: --plan_format must be one of text, json; got 'xml'
+```
+
+The comparison is exact: `JSON` is not `json`. A type mixing a choice with an open type (`Union[int, Literal["auto"]]`)
+is not judged.
 
 ## How a value is typed
 
@@ -45,10 +79,20 @@ text that was never meant to be parsed:
 | `--note yes` | `'yes'` | `True` |
 | `--note "  padded  "` | `'  padded  '` | `'padded'` — stripped |
 
-`Optional[str]` counts as `str`. Everything else keeps YAML typing: a parameter
-annotated `int`/`bool`/`list`, any key the command does not declare, and every
-**dotted** key — `--opt.note` addresses a nested config object, not the command
-signature, so the signature cannot vouch for it.
+`Optional[str]` counts as `str`.
+
+**The same holds for a top-level key the config holds as text.** With
+`version: latest` in the config, `--version 1.3` arrives as `'1.3'` and
+`--version 1.10` as `'1.10'` — read as YAML they would be the floats `1.3` and
+`1.1`. Quoting cannot help: the shell removes the quotes of `--version "1.3"`
+before the command sees them. The value is then exactly the text typed, so
+`--version null` is `'null'` and `--exclude "[a, b]"` the text `'[a, b]'`, not a
+list.
+
+Everything else keeps YAML typing: a parameter annotated `int`/`bool`/`list`, a
+key the config holds as a number, a list or `null`, a key it does not hold, and
+every **dotted** key — `--opt.note` addresses a nested config object, not the
+command signature, so the signature cannot vouch for it.
 
 If you need a multi-line value for a key that is *not* a declared `str`
 parameter, YAML's block scalar still works:
@@ -88,9 +132,10 @@ $ myapp restart -b                 # == --background
 $ myapp restart -p 9000            # == --port 9000   (-p=9000 also works)
 
 $ myapp restart --help
- Option (Shortest Unique)  Type  Current/Default Value  Documentation
- -b, --background          bool  False                  Start detached.
- --port                    int   8188                   Port to use.
+                      Options of restart
+ Option            Type  Current Value  Description
+ -b, --background  bool  False          Start detached.
+ -p, --port        int   8188           Port to use.
 ```
 
 A letter that is reserved by a global, declared twice, longer than one character, or names no
@@ -184,6 +229,20 @@ Trainer:
 lr: 0.9                   # so it now beats this — and 0.1 is what trains
 ```
 
+The file's `${…}` placeholders read a flag as they would a line written at the end of the file — a dotted
+`${a.b}` reads the document, a bare `${NAME}` an environment variable:
+
+```yaml
+run:
+  name: base
+output_dir: /runs/${run.name}
+```
+
+```bash
+myapp where c.yaml                   # output_dir = /runs/base
+myapp where c.yaml run.name=pilot    # output_dir = /runs/pilot
+```
+
 Because flags are appended *in the order typed*, their relative order matters
 exactly like lines in a file — the last flag wins where they overlap:
 
@@ -222,6 +281,17 @@ way:
 Override 'max_pcaks' matched nothing and was ignored: no configured object
 accepts 'max_pcaks'. Check the spelling against the declared parameters
 (`--help` lists them).
+```
+
+A bare key that names a bare scope of the configuration (`--quick` beside a
+`quick: !scope:quick` block) is a scope meant to be switched on. Only a keyed
+scope binds to a flag (`--task seg` is `--scope task=seg`); a bare one is
+activated by `--scope` alone, and the warning says so:
+
+```
+Override 'quick' matched nothing and was ignored: no configured object accepts
+'quick'. The configuration declares a scope 'quick': to activate it, use
+`--scope quick` (`-s quick`).
 ```
 
 A bare key that lands on *some* nodes and not others stays silent — that is

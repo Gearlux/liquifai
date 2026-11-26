@@ -46,6 +46,16 @@ class MissingArgumentError(LiquifaiError, TypeError):
     """
 
 
+class MissingOptionValueError(LiquifaiError, ValueError):
+    """An option of a declared type other than ``bool`` was given without a value (``--name`` alone, or another
+    option right after it) — it would otherwise have received ``True``."""
+
+
+class InvalidChoiceError(LiquifaiError, ValueError):
+    """A parameter typed as a closed set of values (a ``Literal``) received a value outside it — from the command line
+    or a config key of the same name. Refused before the command runs, as help promised the set."""
+
+
 class ConfigNotFoundError(LiquifaiError, FileNotFoundError):
     """The requested configuration file does not exist.
 

@@ -8,9 +8,10 @@ repeated here.
 
 The app framework the workspace CLIs are built on. `LiquifyApp` sets up loggair and confluid
 and injects config-built objects into command signatures by type annotation, so an app declares
-commands and nothing else. Published on PyPI (0.3.1) from a public repo. It requires
-`confluid>=0.3.0`: `overrides.py` imports `accepts_key`/`accepts_broadcast`/`accepts_any_key`
-at module level, so an older confluid fails at import.
+commands and nothing else. Published on PyPI (0.4.0) from a public repo. It requires
+`confluid>=0.5.0`: `overrides.py` imports `accepts_key`/`accepts_broadcast`/`accepts_any_key`
+and `discover_boolean_scopes` at module level, so an older confluid fails at import, and
+`dump.py` passes `dump(defaults=True)`.
 
 Three ways to register:
 - `@app.command()`: a hand-written CLI handler.
@@ -21,7 +22,7 @@ Three ways to register:
 Modules: `core.py` (`LiquifyApp`, phase orchestration) · `walk.py` (tokenizer, the one argv
 walk) · `router.py` (its live-app adapter) · `flags.py` (global-flag parsing) · `grammar.py`
 (the flag table, token rules) · `overrides.py` · `di.py` · `host.py` (`os`/`device`) ·
-`context.py` · `report.py` (all Rich help) · `exceptions.py` · `introspection.py` (signature
+`context.py` · `dump.py` (the resolved configuration, `--dump-config`) · `report.py` (all Rich help) · `exceptions.py` · `introspection.py` (signature
 surgery for CLI and MCP wrappers) · `tools.py` (`make_mcp_tools`) · `completion/` (stdlib-only)
 · `completion_cli.py` (Rich glue for the completion flags) · `_fast_complete.py`
 (`liquifai-complete`) · `bridge/` (provisional SDK bridge, §6).
@@ -35,7 +36,8 @@ project folder shadows the package.
 - No app writes bootstrap code: `run()` configures loggair and loads the config.
 - `run()` runs in this order, and nothing is skipped or reordered: completion flags
   short-circuit → route (the walk) → help → parse globals → bind dimension flags → host facts →
-  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → execute.
+  context + `_bootstrap` (logging, then config) → bind positionals → apply overrides → the command's own keys
+  (`config_keys=`) → write the resolved configuration (`--dump-config` stops here) → execute.
   Logging is live only after `_bootstrap`, so a routing diagnostic is logged from `_prepare`
   (`_log_promotion_source`), never from the router.
 - `walk.walk_invocation` is the ONE descent, used by dispatch (`router._AppNav`) and completion
@@ -46,14 +48,27 @@ project folder shadows the package.
   resolves to an existing file through `confluid.resolve_config_path` (a bare name gains
   `.yaml`). A leading token that names no command goes to the default command: its config if it
   is a script command, otherwise its first positional. A token that resolves to no file is left
-  for the positional and override parsers. Resolve once; never add a second `.exists()` chain,
-  extend confluid's resolver instead. (`tests/test_config_search_paths.py`, `tests/test_walk.py`)
+  for the positional and override parsers — unless it NAMES a config file (`walk.names_a_config`:
+  a `.yaml`/`.yml` suffix or `pkg://`): then `_prepare` refuses it, `Configuration file not
+  found: <token>` (user request 2026-10-27: it was read as a stray override and the command ran on
+  no config). A `pkg://` token goes to confluid as text, never through `Path`. Resolve once; never add a second `.exists()` chain,
+  extend confluid's resolver instead. (`tests/test_config_search_paths.py`, `tests/test_walk.py`, `tests/test_missing_config.py`)
 - Positionals bind only as leading tokens, as verbatim strings, into the TOP level of the
   config, before overrides, so `--name` wins its slot. (`tests/test_positionals.py`) §5.
 - Host facts: the detected scope activations are PREPENDED, the `platform:` key is merged UNDER
   the document, and only the detected copy is filtered against the document's declared values,
   so a typed `--scope` keeps confluid's typo error. `--os`/`--device` stay ordinary overrides,
   never implicit dimension flags. No environment variable is set or read. (`tests/test_host.py`) §8.
+- A typed bare `--scope NAME` (no `=`) no block of the config declares is refused by CONFLUID's `load()` after its
+  settle loop (confluid §1 amendment 2026-10-30, `ScopeError` → one `Error:` line here), never by a check of
+  liquifai's: one on the raw document refused an alias and a name a scope block's own include declares (user choice
+  2026-10-30). A keyed `--scope KEY=VAL` of an undeclared dimension stays inert (matrainer passes
+  `--scope framework=<name>` to every config); host facts are keyed and filtered by `host.auto_scopes`.
+  (`tests/test_undeclared_scope.py`)
+- `script_command(config_keys=fn)` (user choice 2026-10-30): `_apply_command_keys` calls `fn` with the document after
+  the typed keys and merges what it returns through `overrides.apply_overrides` — after the typed keys, never into
+  `cli_overrides`, never re-resolving placeholders, never without a config file. A non-callable is refused at
+  decoration, a non-mapping result at run time (`CommandDefinitionError`). (`tests/test_command_config_keys.py`) §15.
 - A log flag the user did not type is forwarded as `None`. Never restate loggair's defaults and
   never read a `LOGGAIR_*` variable here.
   (`tests/test_log_levels.py::test_no_level_literal_reaches_loggair_when_no_flag_is_given`) §9.
@@ -72,9 +87,23 @@ project folder shadows the package.
   (`tests/test_short_options.py`, `tests/test_help_flag.py`)
 - Flag KEYS are normalised `-` → `_` per dotted segment, after polarity is read
   (`--default-nodes-` means False). Flag VALUES are never normalised. (`tests/test_flag_spelling.py`)
-- A value for a bare key the active command declares `str` or `Optional[str]` is kept verbatim;
-  everything else keeps YAML typing (`confluid.parse_value`). Do not grow this into a per-type
-  coercion table or a new value spelling. (`tests/test_override_str_verbatim.py`)
+- A value for a bare key the active command declares `str` or `Optional[str]` is kept verbatim, and so is one for a
+  top-level key the loaded document holds as text (`overrides.text_config_keys`, user choice 2026-10-31: `--version
+  1.10` was the float `1.1`); everything else keeps YAML typing (`confluid.parse_value`). Do not grow this into a
+  per-type coercion table or a new value spelling — no quote stripping. (`tests/test_override_str_verbatim.py`) §17.
+- A bare key the active command declares `bool` or `Optional[bool]` is a switch (`overrides.bool_param_names`, user
+  approval 2026-10-30): it takes the next word only when that word is a yes/no value (`true`/`false`/`yes`/`no`/
+  `on`/`off`/`0`/`1`), else it is `True` and the word is read on its own — the parser agrees with completion's
+  `signature_bool_flags`. Dotted keys and every other parameter keep `--key value`. (`tests/test_bool_flag_values.py`)
+- A bare key naming a parameter with a declared type other than `bool` (`overrides.valued_param_names`; not `Any`,
+  not unannotated) given without a value raises `MissingOptionValueError`, named by `_command_path` in `core`
+  — never the implicit `True` (user approval 2026-10-30). A switch, a config key and an unannotated parameter keep
+  it. (`tests/test_option_values.py`)
+- `--dump-config[=PATH]` prints (or writes) the resolved configuration and runs NOTHING; `--save-config PATH` writes it
+  and runs (user choice 2026-10-30). Both write `dump.resolved_config_text`: the document after overrides, built as DI
+  builds it, never solidified, dumped `qualified=True, defaults=True` (a deferred slot shows its defaults), the `platform:` block dropped when it holds only the detected
+  facts. `--dump-config`'s path is taken only after `=` (never the next token), and neither flag ever reaches the config; a missing
+  config, an empty `=` or a `--save-config` without a file is refused. (`tests/test_dump_config.py`) §14.
 - `strict_flags` stays OFF by default. When on, it judges only BARE keys, against the command's
   parameters plus the config's top-level keys MINUS the override keys themselves; dotted keys are
   left to `warn_unused_overrides`. (`tests/test_strict_flags.py`)
@@ -86,6 +115,11 @@ project folder shadows the package.
   Never reorder flags relative to each other, and never ask confluid for a "CLI beats YAML" tier.
   (the seating group in `tests/test_override_broadcast.py`, e.g.
   `::test_a_specific_flag_typed_after_a_bare_flag_wins_on_its_class`) §4.
+- A flag reaches the document's `${…}` placeholders as an appended line would: with flags given, the raw document
+  (`LiquifyContext.raw_document`) is resolved AGAIN with the positionals, then the flags, appended last in typed
+  order (`_resolved_with_lines`), before `apply_overrides` — never a merge into the already-resolved document alone
+  (a `${run.name}` folder kept the scope's name while the run took the typed one). (`tests/test_override_interpolation.py`)
+  §4 amendment 2026-10-27.
 - Settability is confluid's question. Dotted `--<name>.<key>` asks `accepts_key`; bare
   `--<key>` asks `accepts_any_key` first and SKIPS such a `**kwargs` target (confluid's broadcast
   delivers it as an attribute), then `accepts_broadcast`. Never reintroduce a local accept list,
@@ -95,6 +129,10 @@ project folder shadows the package.
 - An override that reached nothing is a WARNING, judged by `confluid.collect_report()` around DI
   and emitted before the command body runs. Never a local heuristic, never debug/trace.
   (`tests/test_override_broadcast.py::test_end_to_end_a_doomed_override_warns_from_the_real_run`)
+- A bare scope (`!scope:NAME`) gets NO implicit `--NAME` flag (only keyed dimensions bind, `--KEY VAL`): a
+  `--NAME` would stop reaching a class's `NAME` parameter once the document gains the block (§8's reason for
+  `--os`/`--device`). An unused bare `--NAME` naming one instead warns with `--scope NAME`, the file read raw
+  only on that path (user choice 2026-10-30). (`tests/test_unused_override_scope_hint.py`)
 - A token that matches no override form gets one warning per token (an `UnknownFlagError` under
   `strict_flags`). Making it an error by default needs the user's sign-off (TASKS.md).
   (`tests/test_override_grammar.py`)
@@ -119,15 +157,34 @@ project folder shadows the package.
 - A parameter without a default that nothing supplied (checked after DI) raises
   `MissingArgumentError`, naming the CLI path and both spellings.
   (`tests/test_missing_argument.py`, `examples/pypeek/run.py`)
+- A parameter typed as a closed set (`Literal`, `Optional[Literal]`, a union of `Literal`s, inside `Annotated` too —
+  `core.choice_params`) given a value outside it raises `InvalidChoiceError` after DI (`_check_choices`, beside the
+  missing-argument check, so a config key of its name is judged as a typed value), naming the command, the option
+  (`<name>` for a positional), the values (an Optional's `None` accepted, never listed) and the one given; the match is
+  type-exact (`True` is not `1`). A union with an open member (`Union[int, Literal["auto"]]`) is not judged — never
+  grow this into type validation (user approval 2026-10-30). (`tests/test_choice_values.py`)
 - A displayed command name comes from `LiquifyApp._command_path`, never from the function's
   `__name__`. (`tests/test_core_extended.py::test_help_names_*`)
 - `report.py` renders all help; `core._show_help` only orchestrates. `--docs` is `--help` with
   `layout="lines"`: same data. Help for an app's default command lists the other commands first.
   (`tests/test_core_extended.py::test_bare_help_lists_the_commands_even_when_a_default_command_answers_it`,
   `tests/test_completion.py::test_run_docs_flag_renders_lines`)
+- The app typed ALONE (empty argv) shows the help instead of running its default command when that command
+  has a parameter with no default that is not `@configurable` (`core.needs_typed_argument`, read on the
+  signature before bootstrap — nothing is built, no log folder made). Anything typed keeps the
+  `MissingArgumentError`. (`tests/test_missing_argument.py::TestABareDefaultCommand`)
+- Every text an app's author wrote reaches Rich ESCAPED (`rich.markup.escape`): the description,
+  a docstring, every table cell, the command index — `[epochs=1]` is otherwise a style tag and
+  vanishes. (`tests/test_command_scopes.py::test_help_text_keeps_square_brackets`)
 - A positional is never advertised as a `--flag` in help or completion, though that spelling
   still parses. (`tests/test_help_with_config.py`, the `_version_create_app` cases in
   `tests/test_completion.py`)
+- A command's own plain parameters are an options table in EVERY help view, titled `Options of <command>` with the
+  flowed tables' columns (`Option`, `Type`, `Current Value`, `Description`) and value spelling: with a config,
+  between the config's options and the objects' tables (`report._command_option_rows`; the instance walk lists objects
+  only). The description is `report.command_description`: the docstring without its `Args:` block, which the tables
+  carry. A script command's `Any` parameter is the object its config binds (`report.config_object_params`): never a
+  flag row. A type is spelled by `confluid.type_label` (`text | json`), never `Literal`. (`tests/test_help_command_options.py`)
 
 ## Code shape
 
@@ -208,12 +265,89 @@ project folder shadows the package.
   `cache._spawn_throttled`, which honours it.
   (`tests/test_completion.py::test_tree_refresh_is_throttled_and_can_be_opted_out`)
 - A new field in the serialized tree bumps `completion.tree.CACHE_VERSION`.
+- The second TAB shows `commands of <app> <sub-app…>`, `arguments of <app> <command>`, `options of <app> <command>`,
+  then `global options` LAST — in that order (user correction 2026-10-28: the global options never come before the
+  command's own), a row each with its help
+  (`engine.complete_with_listing`) — wherever more than one candidate is offered but at an option's value. The
+  arguments group lists EVERY positional (a script command's config first): typed → its value, given as its flag →
+  said, missing → `<name>` and its help, the next one's values or config files under it; it stays above the options
+  so the user sees what is missing (user request 2026-10-28). A line that is no candidate is `("", row)` in the
+  listing and `\x1e<row>` on the wire; zsh puts those lines into its group's header. bash's wrapper draws the
+  listing and redraws the prompt and line (`_liquifai_reply`), zsh shows it as its own groups (`_liquifai_zreply`).
+  It reaches only a wrapper that sets `LIQUIFAI_COMPLETE_WIRE=2`; `LIQUIFAI_COMPLETION_LIST=plain` keeps
+  liquifai-complete's output byte for byte as before. bash hands the list back to readline whenever its drawing
+  could be wrong (cursor inside the line, a line wider or a list taller than the terminal, bash < 4.4); never let
+  readline list after liquifai drew. Colour (user choices 2026-10-28): `engine.COLOURS` per role — titles bold cyan,
+  commands BLUE, options bold, placeholders dim cyan, typed arguments green, missing ones yellow, help dim — the
+  next argument marked `▸` (`NEXT_MARK`), a value option's default after its help (a flag shows none);
+  `LIQUIFAI_COMPLETION_COLOR=auto|always|never` (`shells.completion_colour`; auto: no `NO_COLOR`, a named, non-dumb
+  `TERM`); widths and the cut are measured on the visible text, and the text is the same with the codes taken out.
+  zsh passes the codes through in rows and titles but measures them as characters: its wrapper sets
+  `LIQUIFAI_COMPLETE_SHELL=zsh` and the cut counts the codes too (`codes_count`), else a row near the edge garbles
+  (`\x1b[ \x08`). Pin the behaviour in a real terminal, never by reading the script text.
+  (`tests/test_completion_listing.py`, `tests/test_completion_shells.py`) §13.
+- With a config on the line, `options of <config>` (the top-level keys written in THAT file, never its includes',
+  in file order, the command's parameters and positionals left out) and `scopes of <config>` (`-s <activation>`, rows
+  that complete nothing; every scope of the document — the file's own first, then each include's, one row per
+  activation, user request 2026-10-30), then `options of <include as written>` (`pkg://…/base.yaml`: each included
+  file's top-level keys THAT file does not write, the first include writing a key lists it; `confluid.locate` names
+  it, else the file's path — user choice 2026-10-31) come between the arguments and the command's options;
+  `--help`/`--docs` render the same blocks first and fold a list of objects into one row. After the command's
+  options, a group per `!class:` block
+  (`<path> (<Class>)`, the shallowest first, then in document order) lists EVERY constructor parameter of its class,
+  written or not (`confluid.source_params`), but a parameter a top-level key feeds (`!ref:<key>`, or unwritten and
+  named like a top-level key) — that key's row, never the block's, nor a candidate (user correction 2026-10-30);
+  `--help` renders a table per object the same way, and one for each block its instance walk never reaches (neither
+  the block nor a parameter referencing it — a block only a list item references), so `--help` lists every option
+  TAB offers (user choice 2026-10-31). Neither offers a key holding an object: a script command's `Any` parameter
+  (tree `object_params`) or a marker parameter holding a block (`runnable.stream`) — only their parameters (user
+  choice 2026-10-31). `completion.config_help.read_config_help` is the one reader
+  for both (help: the key's comment, else the fed parameter's docstring read from source — never an import of the
+  class on the TAB path). (user request 2026-10-30; `tests/test_config_help.py`) §13.
+- **A config that starts other runs lists their options, and its knobs in full.** A package registers a class
+  whose parameter names a config another run reads under the `liquifai.config_refs` entry-point group
+  (`"<module>.<Class>.<parameter>" = "<module>:<Class>"`, read with `importlib.metadata`, the class never imported —
+  `completion.config_refs`); `read_config_help` reads each such config a block of the document names and lists, as
+  `ConfigHelp.runs`, the runs' top-level keys (`options of the runs`) and the parameters of each top-level block
+  (`options of the runs' runnable (<Class>)`), BARE as typed, a key once, `[2 of 4 runs]` when not every run has it, its
+  value only where the runs agree. A key the config lists itself — its keys, its command's options, a parameter a key
+  feeds — is the config's and is not repeated; a run that cannot be read lists nothing; a run naming the config again
+  stops there. A top-level plain mapping some marker parameter reads through `!ref:` (`standardize: {workers: auto}`
+  beside `only: !ref:standardize.only`) is a group of knobs (`ConfigHelp.knobs`): the mapping is no option, its keys
+  are, each with its own comment (`confluid.KeyNote.children`) and typed in FULL — `--standardize.workers` — never
+  shortened to `--workers`, which is another key; a mapping nothing reads stays one row. The same list serves TAB
+  (first TAB, keys alone, and the listing) and `--help`. Which typed keys the runs receive is the command's:
+  `liquifai.overrides.unused_overrides` is the verdict (`recordstream run`, §32). (`tests/test_config_help_runs.py`) §13.
 - A value with spaces stays one token. bash forwards `$COMP_LINE`/`$COMP_POINT`
   (`words_from_comp_line`); zsh and fish newline-join `$COMP_WORDS` (`split_comp_words`);
   candidates go through `escape_candidate`. Never `COMP_WORDS.split()` and never rely on
   `${COMP_WORDS[*]}`. A wrapper change needs `--install-completion` re-run.
+- A `completions=` key names a parameter or is refused at decoration. A key naming an OPTION completes its
+  value (kind `static`, or `prefix`: cached per prefix of typed positionals). After a comma every list slot completes the next word (`engine._list_candidates`). `--help`'s
+  "Values" block reads the same cache through `cache.read_slot_values` — never a provider.
+  (`tests/test_value_completion.py`)
+- A config key's value (`key=<TAB>`, `--key <TAB>`, `--key=<TAB>`, a config on the line) completes from the provider
+  a package registers under the `liquifai.values` entry-point group, named `<module>.<Class>.<parameter>`, for the
+  `!class:` blocks the key feeds (name, `!ref:`, dotted path) — `completion.config_values`. The provider gets the
+  block's other settings as text (the line's scopes applied to the document first) and runs only in
+  `--refresh-completion-value` (`tree.refresh_one`), cached per
+  settings; a key no provider answers for completes exactly as before (`value_candidates` returns None). The entry
+  points are read with `importlib.metadata`, never by importing the class. bash gets the part after the word's last
+  `=` (`shells.bash_word_tail`, COMP_LINE path only). (`tests/test_config_value_completion.py`) §16.
+- `--scope <TAB>` / `-s <TAB>` / `--scope=<TAB>` (`grammar.SCOPE_VALUE_FLAGS`) offers the scopes of the config on
+  the line — the promoted config or `--config PATH`, any command — from `config_help.read_config_scopes`, the list
+  `scopes of <config>` shows: its scopes, then its `scope_aliases:` (`Alias of …`); one an earlier `--scope` names
+  is left out, after a comma the next item; no or an unreadable config offers nothing (user request 2026-10-31).
+  (`tests/test_scope_completion.py`) §13.
+- Every value flag `parse_globals` consumes takes `--flag=VALUE` as `--flag VALUE` (`--scope=quick`,
+  `--level=DEBUG`, `-c=a.yaml`), through the one `flags._store`; `--flag=` alone is a `MissingOptionValueError`
+  naming the metavar; never the config key `scope`/`level` (user choices 2026-10-31). Completion reads `--config=PATH`
+  as the config and completes `--<path flag>=<files>`. (`tests/test_value_flag_equals.py`) §13.
 - At a flag position: a bool flag opens no value slot; option keys already typed drop out;
   global flags are never dropped (`--scope` repeats).
+- After a value-taking `--key` (a config key included), a word starting with `--`, `+` or `~` completes as an option,
+  never as the key's value — completion agrees with the parser's `grammar.looks_like_arg`; a one-dash word stays the
+  value (`-3`). (`tests/test_completion.py::test_a_word_the_parser_reads_as_an_option_completes_after_a_config_key`)
 - Every app declares the `liquifai.apps` entry point (name = binary = `LiquifyApp.name`). Keep
   the subprocess probe while any workspace app lacks it (TASKS.md). (the
   `declared_liquifai_apps` tests in `tests/test_completion.py`)
@@ -232,6 +366,8 @@ project folder shadows the package.
   `env={**os.environ, "NO_COLOR": "1"}` to its subprocess, because loguru colorizes under CI
   variables. Reproduce with `CI=true GITHUB_ACTIONS=true python examples/<name>.py`.
 - Public docs name no consumer and no corporate name: root "Published Projects Are Standalone".
+- The sdist carries `CHANGELOG.md` and every `docs/` page the README links: `MANIFEST.in` names them, since nothing
+  else pulls them in. (`tests/test_packaging.py`)
 - Release: bump `pyproject.toml`, add a dated `CHANGELOG.md` section (pre-1.0 breaks go under
   **Breaking**), then tag `v<version>`; `release.yml` builds, smoke-tests from `/tmp` and
   publishes. Order: loggair → confluid → liquifai. A new confluid or loggair API used here is

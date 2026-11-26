@@ -70,7 +70,17 @@ from .cache import (  # noqa: F401
     write_value_cache,
 )
 from .discover import declared_liquifai_apps, discover_liquifai_apps  # noqa: F401
-from .engine import complete, complete_from_tree  # noqa: F401
+from .engine import (  # noqa: F401
+    COLOURS,
+    GLOBAL_HEADER,
+    NEXT_MARK,
+    Listing,
+    ListingGroup,
+    ListingRow,
+    complete,
+    complete_from_tree,
+    complete_with_listing,
+)
 from .install import (  # noqa: F401
     _HELPERS_END_MARKER,
     _HELPERS_MARKER,
@@ -79,13 +89,23 @@ from .install import (  # noqa: F401
     install_script,
 )
 from .shells import (  # noqa: F401
+    COMPLETION_COLOURS,
+    COMPLETION_LISTS,
+    LISTING_WIRE,
     SHELLS,
+    WIRE_HEADER,
+    CompletionColour,
+    CompletionList,
+    bash_word_tail,
+    completion_colour,
+    completion_list_style,
     detect_shell,
     escape_candidate,
     render_helpers,
     render_script,
     split_comp_words,
     wants_forced_refresh,
+    wire_lines,
     words_from_comp_line,
 )
 from .tree import (  # noqa: F401

@@ -483,6 +483,38 @@ arbitration: the longest pattern wins regardless of flag order) is not
 expressible by seating at all; if that is ever wanted, it is a confluid-side
 override channel, not a cleverer seat order.
 
+### Amendment: a flag reaches the file's `${…}` placeholders (2026-10-27)
+
+**Context.** The config was resolved (`confluid.load(until="document")`, every `${…}` filled in) at load time, and
+the flags were merged into that resolved document afterwards. A `!ref:`, resolved later, saw a flag; a `${…}` inside
+a string never did. Measured on a training config whose folder is `output_dir: ${env:RUN_DIR}/…/${run.name}`:
+`--scope smoke run.name=zz` logged the run as `zz` and wrote it into `…/smoke/` — the scope's name, not the one
+typed — while the same document with the line `run.name: zz` appended resolved to `…/zz/`.
+
+**Decision.** When flags are given, the raw document read at load time (`LiquifyContext.raw_document`, the host
+facts merged in) is resolved AGAIN with the bound positionals and then the flags appended as its last lines, in the
+order typed (`LiquifyApp._resolved_with_lines`); `apply_overrides` then runs as before (the merge, the `Fluid`
+kwargs, the deletions). No flags, one load, as before.
+
+**Consequences.** Every `${…}` built from a key a flag sets follows the flag; a scope's value is beaten by a flag, a
+second typing of a key by the later one, as lines in a file. A document not read from a file is left as it is. The
+config is resolved twice when flags are given (milliseconds on the workspace's configs).
+
+**Example.**
+
+```yaml
+run:
+  name: base
+output_dir: /runs/${run.name}
+```
+
+```bash
+myapp where c.yaml run.name=pilot    # output_dir = /runs/pilot (was /runs/base)
+```
+
+**What you may change.** How the second resolve is done, never that a flag reaches a placeholder as a line at the
+end of the file would. Pins: `tests/test_override_interpolation.py`, `examples/overrides_app.py`.
+
 ---
 
 ## 5. Positionals bind as top-level config keys
@@ -842,3 +874,458 @@ class MyListPolicy:
 **What you may change.** Any policy's `options` set, and the wording of the refusal. Do not
 make an undeclared policy accept every setting again, and do not move the check to call time:
 the point is that a declaration mistake is an author's startup error.
+
+## 12. A command that runs its own config names it, and liquifai reads its scopes (2026-10-15)
+
+**Context.** `--scope` activates a scope of the app's own config. A command that hands a YAML of
+its own choosing to another tool (a runner of steps) has no app config: `tool compile run2 --scope
+onnx` activated `onnx` on nothing, printed nothing, and compiled without it. The only way through
+was a passthrough setting (`--settings "[--scope, onnx]"`) that neither help nor completion knew.
+
+**Decision.** `@app.command(config_files=provider)`: the command names the FILES it runs — the
+provider takes nothing, or the positionals typed so far as `{name: word}` (`{}` when none is) —
+and liquifai reads them (`config_scopes`: raw load, includes followed; bare scopes by name, keyed
+ones as `KEY=VAL`). For such a command `_prepare` takes the typed `--scope` values before dimension
+binding and host facts, refuses one any named file lacks (`UnknownScopeError`), binds them to the
+command's `scopes` parameter like a positional, and activates nothing on the app's config. Help
+reads the files for the words on the help line; completion caches their scopes under the slot
+`--scope` per prefix of typed positionals (kind `scopes`; `{}` first), so `--scope <TAB>` answers
+for the words typed before it.
+
+Rejected: the command listing its scopes itself (a second copy of what the YAML says, which drifts
+— a user ruling: liquifai reads the YAML); hiding the scopes a command's own words already choose
+(the command would have to declare those, a declaration again — it refuses the clash itself); a
+new flag beside `--scope` (two spellings of one idea).
+
+**Consequences.**
+
+- liquifai reads a config's bare scopes through `confluid.discover_boolean_scopes`: its confluid
+  floor is the release that has it.
+- The typed scopes never reach the app's own config for such a command; host facts still do.
+- A provider that raises (an unknown word) skips the check: the command's own refusal names the
+  word better than a missing file would.
+- `CACHE_VERSION` 7: the tree carries `scope_completions` (`{cmd: {key, typed}}`; `typed` false
+  for a provider that reads no words, cached once under `{}`).
+
+**Example.**
+
+```python
+@app.command(positionals=["run"], config_files=lambda: [CONFIGS / "compile.yaml"])
+def compile(run: str = "", scopes: Optional[List[str]] = None) -> None:
+    subprocess.run(["tool", "run", "compile.yaml", *(["--scope", ",".join(scopes)] if scopes else [])])
+```
+
+**What you may change.** The help block's wording, the parameter's name (one constant,
+`completion.tree.SCOPES_PARAM`). Do not let a `config_files=` command's typed scopes activate on
+the app's config as well, and do not read the scopes anywhere but `config_scopes`.
+
+**Amendment 2026-10-30 — removed (user choice).** `config_files=`, `config_scopes`, `UnknownScopeError`, the help
+block and the `--scope <TAB>` slot are gone, unreleased. Its one user, a runner of steps, became workflow configs
+run by the config runner, so every `--scope` is again a scope of the config on the command line, which confluid
+refuses when no block declares it (confluid §1 amendment 2026-10-30). Its reader was also wrong in two cases:
+reading the file raw, it refused a `scope_aliases:` name and a scope declared in a scope block's own include, both
+of which confluid loads. `CACHE_VERSION` 12 drops `scope_completions`.
+
+## 13. The second TAB lists the options grouped, drawn by the wrapper (2026-10-27)
+
+**Context.** liquifai-complete always sent the global options first and the command's own after them, but bash's
+readline sorts what it lists: `annotaide serve --<TAB><TAB>` printed one alphabetical grid, `--auto_port` beside
+`--config`, and nothing said which options were the command's. Readline has no groups, no headers and no
+descriptions; `compopt -o nosort` keeps the order but lays it out down columns, so the second group starts mid-column.
+
+**Decision.** On the listing TAB (`COMP_TYPE` 63) at a list of options alone, the bash wrapper prints liquifai's
+listing itself — `global options`, then `options of <app> <command>`, a row per option with its help, as
+`report.show_global_options` and the `Args:` docstrings give it — redraws `${PS1@P}` and the line, and leaves
+`COMPREPLY` empty with `compopt +o default`, so readline lists nothing and the line stays readline's. zsh gets the
+same groups through its own listing (`compadd -V <group> -X <header> -l -d <rows>`, short spellings `-n`: completable,
+unlisted). The wire carries it only to a wrapper that sets `LIQUIFAI_COMPLETE_WIRE=2`: a `\x1f<header>` line, then
+`candidate<TAB>row`; a tab is read only after a header, so a value is never split. `LIQUIFAI_COMPLETION_LIST=plain`
+(read on every TAB) gives today's output byte for byte. The engine's `complete_with_listing` returns the same
+candidates as `complete_from_tree` plus the listing; the listing exists only where the candidates are options alone
+and more than one.
+
+Rejected: header entries inside readline's grid (`<global options>` as a display-only candidate, with `nosort`) —
+the second group still starts mid-column and there is no room for help; `print-completions-horizontally` — a
+setting of the user's readline, not liquifai's.
+
+**Consequences.**
+
+- bash draws its own grid instead whenever the drawing could be wrong: the cursor inside the line, a line wider
+  than `COLUMNS`, a list taller than `LINES`, bash older than 4.4 (no `${PS1@P}`), `/dev/tty` not writable. Each is
+  driven in a real terminal by `tests/test_completion_shells.py`.
+- The redraw is the prompt's text: a prompt whose `PROMPT_COMMAND` changes it per line shows its last value.
+- Only the listing TAB is drawn: the first TAB (`COMP_TYPE` 9), `show-all-if-ambiguous` (33) and `menu-complete`
+  (37) stay readline's.
+- `CACHE_VERSION` 9: the tree carries `option_docs` (`{cmd: [[path, --flag, help]]}`) and `option_shorts`.
+- An installed script predating the listing keeps the old list until `--install-completion` runs again.
+
+**Example.**
+
+```python
+candidates, listing = complete_with_listing(tree, ["my-app", "serve", "--b"], cword=2, width=100)
+# listing == [("options of my-app serve", [("--background", "  -b, --background  run detached"), ...])]
+print("\n".join(wire_lines(candidates, listing)))  # what liquifai-complete prints for a v2 wrapper
+```
+
+**What you may change.** The headers' wording (`engine.GLOBAL_HEADER`, the `options of` line), the row layout,
+the limits that hand the list back to readline. Do not let readline list after liquifai has drawn (the stray
+`--` line and a second prompt), and do not draw at a list that is not options alone.
+
+**Amendment (2026-10-28): every candidate list, and the arguments' state.** The user's first try was
+`annotaide <TAB><TAB>`: a bare prompt mixes command names, the default command's `<workspace>` and the options, and
+the listing — options alone — handed it to readline's sorted grid. The listing now exists wherever more than one
+candidate is offered but at an option's value, in the order the user chose: `commands of <app> <sub-app…>` (each
+command's first docstring line, each sub-app's description), `arguments of <app> <command>`, `global options`,
+`options of <app> <command>`. At the user's request the arguments group lists every positional — a typed one with
+its value, one given as its flag said so, a missing one as `<name>` with its `Args:` help, the next one's values or a
+script command's config files indented under it — and stays above the options, so the missing ones show after `--`
+too. Such a line is no candidate: `("", row)` in the listing, `\x1e<row>` on the wire; zsh folds those lines into its
+group's header (`compadd -X`, or `-x` for a group of notes alone). `CACHE_VERSION` 10 adds the node's
+`description`, `command_docs` and `positional_docs`.
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+  <version>                     its version
+global options
+  …
+```
+
+**Amendment (2026-10-28): colour, defaults, the next argument.** The user asked for colour, chose the palette of
+`--help` with the commands set apart in blue after seeing it on a dark and a light background, and asked for each
+value option's default and a mark on the next argument. A row is built from pieces, each with a role
+(`engine.Role`); `_paint` wraps a piece in its SGR code from `COLOURS` only when the listing is in colour, so the
+padding stays plain, the width and the cut at `width - 1` are counted on the visible text, and the listing with the
+codes removed equals the plain one (pinned). Colour is decided per TAB by `shells.completion_colour`:
+`LIQUIFAI_COMPLETION_COLOR=always|never`, else `auto` — no `NO_COLOR` (no-color.org) and a `TERM` that is set and not
+`dumb`; the wrapper's output goes to the terminal bash reads, so `TERM` is the terminal's. zsh prints the codes in
+`compadd -d` rows and `-X` titles as they are (measured), so both shells get the same rows. A flag (a `bool`) shows
+no `(False)` and an empty default nothing: they add noise, not information. `CACHE_VERSION` 11 adds the default to
+each `option_docs` row.
+
+```python
+complete_with_listing(tree, ["my-app", "fetch", "alpha", "--"], cword=3, colour=True)
+# arguments: "  \x1b[32mname\x1b[0m … \x1b[32malpha\x1b[0m", "\x1b[33m▸ \x1b[0m\x1b[33m<version>\x1b[0m …"
+```
+
+**Amendment (2026-10-28): the global options last; zsh's width.** The user corrected the order: the global options
+come after the command's own (`commands`, `arguments`, `options of …`, `global options`) — the first request had
+been read as an order. And zsh, measured, counts a row's colour codes as characters: a coloured row near the edge
+made it write `\x1b[ \x08` and garble the line. Its wrapper now says `LIQUIFAI_COMPLETE_SHELL=zsh`, and the cut counts
+the codes (`codes_count`), so a long row ends in `…` about twenty characters earlier in zsh; bash measures the visible
+text and keeps the full width.
+
+**Amendment (2026-10-30): a config's own settings first, with their help.** The user asked for the settings a
+config's author put at the top of the file — `setup_datasets`, `catalog_csv`, the `quick` scope — to come first,
+with help written as comments in the YAML. With a config on the line the listing adds `options of <config>` (the
+top-level keys written in that file, in file order, the command's own parameters left out) and `scopes of <config>`
+(its scope blocks, `-s <activation>`, rows that complete nothing) between the arguments and the command's options;
+`--help` and `--docs` render the same blocks before the flowed table, and fold a list of objects into one row
+(`--datasets`, its class's help) where the instance walk reported a field per item. The help is
+`completion.config_help.read_config_help`: a key's comment (`confluid.document_notes`), else the docstring of the
+parameter it feeds (`!ref:` or its name), read from source (`confluid.source_param_docs`) — importing the class took
+2.7 s, the whole TAB now takes 0.3 s. The TAB still imports confluid only once a config is on the line.
+
+```python
+read_config_help(Path("catalog.yaml"), exclude=["runnable"]).focused[0]
+# FocusedKey(path='setup_folders', help='The folders searched (below them too) …', value='[]')
+```
+
+**Amendment (2026-10-30, later): a group per `!class:` block, every parameter of its class.** The shortened flags
+(`runnable.workers` → `--workers`) hid which block a flag belongs to, and a parameter the config never writes
+(`overwrite`) was not offered at all. The user chose a group per block, titled `<path> (<Class>)`, the shallowest
+first, then in document order (one of three shown: per block, one indented group, depth-sorted flat), and the
+unwritten parameters too: `read_config_help` adds every constructor parameter of each block's class from its source
+(`confluid.source_params` — still no import; the catalog TAB stays at 0.28 s), with the written value or the
+literal default; a yes/no parameter shows none. `--help` splits its flowed table the same way, a table per object
+titled by the keys that reach it and its class (`runnable.render (RenderViews)`), the "Applies to" column gone.
+
+```python
+read_config_help(Path("catalog.yaml")).blocks
+# [('render_views', 'RenderViews'), ('runnable', 'BuildSignalStudioCatalog')]
+```
+
+**Amendment (2026-10-30, last): a parameter is listed once.** With every parameter of a block listed, the catalog
+showed `--setup_datasets` with the config and `--datasets` with `runnable` — one setting under two names, since
+`datasets: !ref:setup_datasets`. The user ruled that the listing, not the YAML, removes the second: a block parameter
+a top-level key feeds — written as `!ref:<key>`, or not written by the block and named like a top-level key (which
+is broadcast into it) — is neither a candidate nor a row of its block (`ConfigHelp.fed`); `--help` drops it from its
+object's table by `(class, parameter)`. A parameter the block writes itself stays with the block.
+
+```python
+read_config_help(Path("catalog.yaml")).fed
+# {('BuildSignalStudioCatalog', 'datasets'), ('RenderViews', 'modes'), …}
+```
+
+**Amendment (2026-10-30, scopes): an included file's scopes are the config's.** A config whose only scope sat in a
+file it includes (`masks.yaml` over `_setups.yaml`'s `quick`) showed no `scopes of <config>` at all: the scopes
+were read from the typed file only, like its focused keys. A scope activates for the whole document wherever it is
+declared, so the user asked for every one: the file's own first, in file order, then each include's in the order
+`confluid.load` reads them; a scope declared twice is one row, its help the file's comment, else the include's.
+An included file's KEYS stay out of `options of <config>` — only scopes are gathered.
+
+```python
+read_config_help(Path("masks.yaml")).scopes
+# [ConfigScope(activation='quick', help='A quick run: the first 5 folders of each dataset, 20 setups a folder.')]
+```
+
+**Amendment (2026-10-31, includes): `--help` lists what TAB lists.** On a config including another
+(`render.yaml` over `pkg://other-project/config/render.yaml`), `--help` showed sixteen fewer settings than the TAB:
+TAB offered every key of the document and filed the included file's under `options of <app> <command>`, while
+`--help` printed the file's own keys and then only the objects the command's parameters reach — a top-level
+`captures: !class:…` that a list item references (`formats: [!ref:captures]`, folded into one `--ops` row) had no
+table, and the included keys none at all. The user chose to show them in both, under their own heading: an
+included file's top-level keys the file itself does not write are `ConfigHelp.included`, a group per include
+titled as the including file writes it (`confluid.locate.locate` reads the spelling and imports nothing; a confluid
+without it shows the file's path), placed after the scopes in both listings; a key two includes write is listed
+with the first. A `!class:` block no table of the walk lists — the walk reaches neither it nor a parameter that
+references it (`ConfigHelp.references`) — gets a `--help` table of its own after the walk's, from what the config
+says of it (`ConfigHelp.types`, `values`, `docs`), as TAB lists its group. The user also chose to drop from TAB
+the keys `--help` never showed: the object a script command's config binds (`runnable: Any`, the tree's
+`object_params`, v13) and a marker parameter holding a block (`runnable.stream`) — a typed value would replace the
+object; its parameters stay. Left as they were (user choice): `--recordings.formats` (help) beside `--formats`
+(TAB), and the values shown being the file's, not the line's (`--version 1.3` still shows `latest`).
+
+```python
+read_config_help(Path("render.yaml"), exclude=["runnable"]).included[0].source
+# 'pkg://other-project/config/render.yaml'
+```
+
+**Amendment (2026-10-31): `--scope <TAB>` completes those scopes.** The listing showed `-s quick` as a row that
+completes nothing, while `recordstream run masks.yaml -s <TAB>` offered nothing: `--scope`'s `value_kind="scope"`
+had no reader since `@command(config_files=...)` went (tree v12), so the engine's value-flag guard answered `[]`
+before the walk had found the config. `grammar.SCOPE_VALUE_FLAGS` is derived from the table like the path and shell
+sets; the engine answers it after the walk, from `read_config_scopes` — the scopes alone, the same list and order
+`read_config_help` gives, without reading the keys or any class's docs — filtered by the typed prefix, the scopes an
+earlier `--scope` names left out, the list's next item after a comma. No config, or one that cannot be read, offers
+nothing. The document's `scope_aliases:` follow its scopes, in the order the raw document merges them (an include's
+before the file's own: `include:` comes first), each helped `Alias of <its scopes>.` — confluid accepts an alias
+wherever a scope name goes (§1 amendment 2026-10-30), so `--scope fast` is as typeable as `--scope quick`.
+
+**Second step (same day): `--scope=NAME` activates the scope, and completes.** `parse_globals` read a value flag
+only as the NEXT token, so `--scope=quick` fell through to the overrides as the key `scope` — the run went on with
+no scope and no warning (`size = 1` where `--scope quick` gave `2`) — and `-s=quick` was an unrecognised token. The
+user chose to accept the spelling rather than refuse it: `--scope=NAME` / `-s=NAME` is `--scope NAME`, comma lists
+included, and `--scope=` with no name is refused like `--dump-config=`. Completion keeps the flag in front
+(`--scope=quick`; bash, which splits at `=`, gets `quick`).
+
+**Third step (same day): every value flag the parser reads takes `=`.** `--level=DEBUG` became the config key
+`level`, `--config=run.yaml` the key `config`, the same silent miss. The user asked for the spelling on all of them:
+`parse_globals` reads `--flag=VALUE` for every `takes_value` spec it consumes (`config_path`, `scopes`, the three
+levels, `log_dir`, `save_config`), through the same `_store` as `--flag VALUE`; `--flag=` alone is refused, naming
+the spec's metavar (`--level= gives no LEVEL`). The completion flags (`--install-completion`, `--show-completion`)
+are read by their own short-circuit and keep the next-token spelling. Completion reads `--config=PATH` as the config
+on the line and offers `--config=<files>` (`--log-dir=`, `--save-config=` too).
+
+```python
+flags = parse_globals(tokenize(["--level=DEBUG", "-c=a.yaml"]))
+flags.log_overrides, flags.config_path
+# ({'log_level': 'DEBUG'}, PosixPath('a.yaml'))
+```
+
+```python
+complete_from_tree(tree, ["recordstream", "run", "masks.yaml", "-s", "q"], 4)
+# ['quick']
+complete_from_tree(tree, ["recordstream", "run", "masks.yaml", "--scope=q"], 3)
+# ['--scope=quick']
+parse_globals(tokenize(["--scope=quick", "-s=task=a"])).scopes
+# ['quick', 'task=a']
+```
+
+**Fourth step (2026-11-03): a config that starts other runs lists their options, and its knobs in full.** A workflow
+config (`steps: [RunConfig(config: a.yaml), …]`) showed only its own options: `--show_progress`, a parameter of the
+processor each run builds, reached no run and appeared nowhere, because the runs are separate processes started
+from steps inside a list that `_walk_keys` never walks. Two changes, both on the one reader:
+
+* *The runs.* A package registers a class whose parameter names a config under the `liquifai.config_refs`
+  entry-point group (`<module>.<Class>.<parameter>`, the `liquifai.values` shape; liquifai names no consumer).
+  `config_refs.referenced_configs` walks the document's blocks (lists included) for such a class and resolves each
+  file as `confluid.resolve_config_path` does (`pkg://…` or the run folder's path); `read_config_help` reads each in
+  turn and unions their options as `ConfigHelp.runs`, bare as typed, each once, `[n of m runs]` when not every run
+  has it. The keys the config lists itself (its keys, its command's options, a parameter a key feeds, a bare
+  parameter name of its blocks) are its own and not repeated. A run that cannot be read lists nothing; the files
+  being read are carried (`_reading`) so a run naming the workflow again stops there. Cost, measured on a four-run
+  workflow: the installed distributions' entry points are scanned ONCE per process (`config_refs.reference_names`,
+  `lru_cache`; the scan opens 2 900 metadata files, 43 ms) — scanned for each run it was 0.21 s of a 0.31 s read —
+  and the runs then add 48 ms to a keys-only read and 159 ms to the listing's; a cold TAB went from 1.0–1.2 s to
+  0.5–0.7 s. A cache of the runs' options by file stamp was weighed and not built: their values depend on the
+  environment (`${env:DATA_ROOT}`), the scopes and the class sources as much as on the files, so a stamp of the
+  files would serve a stale list. What the runs have in common is shared for ONE call only (`config_help._Shared`:
+  a class's parameters and docs read from its source, a file's notes), so nothing outlives the TAB that read it and
+  an edit between two TABs is seen; and naming the includes asks `confluid.locate` for the includes alone
+  (`kinds=("include",)`), where it also found the source line of every `!class:` of every file (0.1 s of the
+  listing). Measured: the runs add 25 ms to a keys-only read and 45 ms to the listing's; a cold TAB takes 0.4–0.7 s.
+* *The knobs.* The top-level `standardize: {only: [], workers: auto}` beside `only: !ref:standardize.only` is a group
+  of knobs, not one setting: `confluid.KeyNote.children` carries the keys under a plain mapping with their own
+  comments and the parameters they feed, and the group is a knob group when some parameter reads it through `!ref:`.
+  Each key is listed under its full name, and TAB no longer shortens `standardize.workers` to `--workers`, which
+  bare is a key a class parameter takes (the old shortening offered a flag that did not do what its row said).
+  A mapping nothing reads (`Class:` blocks, a scope's settings) stays one row.
+
+What a typed key reaches is not liquifai's: the listing says what the runs accept, the command says what it does with
+a key it does not use. `overrides.unused_overrides` splits the verdict `warn_unused_overrides` gave from the warning,
+so `recordstream run` hands the unused keys of a workflow to its steps (`recordstream/docs/architecture.md` §32).
+
+## 14. The resolved configuration is written by the run itself — `--dump-config`, `--save-config` (2026-10-30)
+
+**Context.** A config sets a few keys; the run uses many more — every constructor default, the values its includes
+and scopes supply, the top-level keys broadcast into classes, the command-line keys. Nothing showed that whole set
+before a run, and `--dump-config` typed anyway became the config key `dump_config: true` while the command ran.
+
+**Decision.** Two global flags (user choice 2026-10-30, of: dump and stop / dump and run / both as two flags).
+`--dump-config` prints the resolved configuration and stops; `--dump-config=PATH` writes it to `PATH` instead (the
+`=` form only, so the walk never takes a positional for its path). `--save-config PATH` writes it and runs the
+command. Both write the text of `dump.resolved_config_text`, made after the overrides (phase 5b,
+`LiquifyApp._write_resolved_config`): the document is built as DI builds a node (`confluid.load(document,
+context=document)`), without `solidify()`, and dumped with `confluid.dump(..., qualified=True)` — each class by its
+importable path, every declared parameter written or defaulted. The `platform:` block is dropped when it holds only
+the detected host facts. The text is the same whatever the command's `flow_mode`: a manual command (a config runner)
+builds its objects itself, so liquifai builds its own copy to dump.
+
+Rejected: dumping the command's DI kwargs (a manual command's are unbuilt markers, and a reload loses the top-level
+keys a run broadcasts); `--dump-config PATH` with a space (the path is indistinguishable from a positional or a
+stray override); writing the file from the command (each app would repeat it).
+
+**Consequences.**
+
+- A config runner builds its objects twice under `--save-config` — once to dump, once to run. Constructors only
+  store values (the lazy-initialization rule), so that is cheap; a class that breaks the rule pays it twice.
+- A dump that stops warns about a command-line key that reached nothing, as the run would; `--save-config` leaves
+  that to the run, so it is said once.
+- A deferred slot (`_partial_: true`) is built later, by the run; it is dumped with its defaults too
+  (`confluid.dump(..., defaults=True)`, amendment 2026-10-30), a parameter without a default left out.
+- A parameter DI builds from its type annotation alone, with no key in the document, is not in the file.
+- Without a config file both flags are refused (`ConfigNotFoundError`): there is nothing to resolve.
+
+**Example.**
+
+```console
+$ my-app run.yaml --lr 0.05 --dump-config
+epochs: 3
+runnable:
+  _target_: mypkg.Trainer
+  optimizer:
+    _target_: mypkg.Optimizer
+    lr: 0.05
+    momentum: 0.9
+    nesterov: false
+  epochs: 3
+  seed: 0
+lr: 0.05
+```
+
+**What you may change.** The flags' help wording; where the written-file line is logged. Do not make the text depend
+on the command (it is the document's), do not solidify while dumping, and do not let either flag reach the config.
+
+## 15. A command adds keys to its configuration — `config_keys=` (2026-10-30)
+
+**Context.** `--dump-config` writes the configuration after the command line (§14), but a command may force a
+setting in its body: a trainer's `evaluate` verb sets `runnable.task = "test"` on the built object, so the dump
+showed the file's `task: fit`. Writing the key on the command line instead (`--runnable.task test`) is right only
+where the runnable takes a `task`; on one that does not, it is an undeclared attribute, warned about on every run.
+
+**Decision.** `script_command(config_keys=fn)` (user choice 2026-10-30, of: this / the consumer reading the config
+itself first / leave it documented). `_apply_command_keys` runs after `_apply_overrides` and before
+`_write_resolved_config`: it calls `fn` with the loaded document — the one the run builds, scopes resolved, so the
+function sees the class `--framework` picks — and merges the returned keys through `overrides.apply_overrides`.
+The function decides where a key belongs (`confluid.accepts_key`), so no key lands where nothing takes it.
+
+Rejected: the consumer loading the config before liquifai (a second load, and a second scope resolution that can
+drift from this one); appending the keys to the typed ones (they would be judged by the unused-override warning,
+which is about what the user typed).
+
+**Consequences.**
+
+- An added key wins over the same key typed: it is merged after them.
+- A `${…}` placeholder already resolved does not see an added key — the document is not resolved again.
+- A consumer using it needs a liquifai that has it: its floor rises with the release.
+
+**Example.**
+
+```python
+@app.script_command(name="evaluate", config_keys=lambda doc: {"runnable.task": "test"})
+def evaluate(runnable: Any = None) -> None: ...
+```
+
+**What you may change.** The function's signature may grow a second, optional argument (the typed positionals) if a
+command needs them. Do not merge the keys before the typed ones, and do not report them as typed keys.
+
+## 16. A config key's value completes from a provider its class's package registers (2026-10-31)
+
+**Context.** A config key that names a dataset (`dataset=<TAB>`) completed nothing: completion knew the keys a config
+holds (§13) but no value of one. The values belong to the class the key feeds — only its package knows which datasets
+exist — and TAB may not import that class (the fast path reads caches, §2).
+
+**Decision.** A package registers `provider(settings) -> Iterable[str]` for one parameter of one of its classes under
+the `liquifai.values` entry-point group, named by the parameter's dotted path (`mypkg.sources.Catalog.name`). With a
+config on the line, `completion.config_values` finds the `!class:` blocks the key feeds — by name (broadcast), through
+`!ref:`, or by dotted path — and reads the cache of each block's provider for its other settings (the line's, else
+the file's, else the class's source defaults, all as text). A missing or old cache detaches the same
+`--refresh-completion-value` a dependent positional uses; `tree.refresh_one` runs the provider (`config_values.provide`)
+and writes a dependent cache keyed by the settings. bash replaces only what follows a word's last `=`
+(`$COMP_WORDBREAKS`), so `_fast_complete` gives it that tail (`shells.bash_word_tail`); zsh and fish get the word.
+
+Rejected: a class attribute naming the provider (TAB would have to import the class or parse its source for it); a
+provider keyed by the config key (the same class read by two configs under two keys would need two registrations);
+keying the cache on the settings the provider reads (TAB cannot know them without importing it, so every setting of
+the block is the key).
+
+**Consequences.**
+
+- An entry point is found with the standard library alone, about 45 ms in a large environment, and only at a value
+  slot with a config on the line.
+- A cache is per combination of the block's settings: a changed setting the provider ignores still asks again once.
+- `--refresh-completions` cannot fill these caches: it reads no config.
+- The scopes typed on the line (`-s`, `--scope`, `=` spellings, comma lists) are applied to the document first: a
+  key a scope gives another meaning (`folder`: a dataset's folder, or with `-s folder` the folder read) completes
+  for the one typed. A scope the config does not declare completes nothing, as the run refuses it.
+- bash now inserts only the value after `key=` for every candidate holding the word's `=` — `--scope KEY=VAL`'s too.
+
+**Example.**
+
+```toml
+[project.entry-points."liquifai.values"]
+"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"
+```
+
+`my-app run run.yaml kind=huge name=<TAB>` → `name=huge-one name=huge-two`, `catalog_names` having been called with
+`{"kind": "huge", ...}` in the background.
+
+**What you may change.** The settings a provider gets may grow (a parameter the line names in another spelling); the
+lookup may cache the entry points in a file if 45 ms shows. Do not run a provider on the TAB itself, and do not make a
+key with no provider complete differently from before.
+
+## 17. A config key holding text takes a typed value as text (2026-10-31)
+
+**Context.** `run render.yaml --version "1.3"` failed: `MelodyDatasetFiles` takes `version: str`, but the shell drops
+the quotes, and an override value is read as YAML, so `1.3` arrived as a float. `--version 1.10` arrived as `1.1` —
+another version, which a class converting numbers back to text would have read silently. The verbatim rule (a command
+parameter declared `str` keeps the typed text) did not apply: `version` is a key of the config, which carries no type.
+
+**Decision.** A top-level key whose value in the loaded document is a string is declared text by that value:
+`overrides.text_config_keys(config_data)` joins `str_param_names` in the verbatim set `_apply_overrides` passes to
+`parse_override_args`. Only the top level counts, the keys a bare flag names; a dotted key keeps YAML typing.
+
+Rejected: converting a number back to text in the class (`1.10` → `'1.1'`, lossy); stripping a pair of quotes typed
+inside the shell's (`"'1.3'"`), a new value spelling the verbatim rule forbids; reading the type of the class
+parameter the key feeds (the key may feed several classes, and the classes are built after the overrides).
+
+**Consequences.**
+
+- On a key the config holds as text, the command line cannot give a number, a list or `null`: `--version null` is
+  `'null'`, `--exclude "[a, b]"` the text `'[a, b]'`.
+- `--version "'1.3'"` is now `"'1.3'"`, quotes included.
+- A key held as text only in a scope not activated keeps YAML typing.
+
+**Example.**
+
+```yaml
+version: latest
+source: !class:mypkg.Source {}
+```
+
+`my-app run cfg.yaml --version 1.10` → `Source(version='1.10')`; `--limit 30` on `limit: 20` stays the int `30`.
+
+**What you may change.** The set may come from somewhere that knows more (a declared type of the key). Do not add a
+second spelling for text, and do not reach into nested keys without a rule for which object a dotted key addresses.

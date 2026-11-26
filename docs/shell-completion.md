@@ -79,6 +79,155 @@ After installing, restart your shell (or `source ~/.zshrc` / `~/.bashrc`).
 For fish the script is written to `~/.config/fish/completions/<app>.fish`
 and auto-loads in the next session.
 
+## The second TAB lists the candidates grouped, with their help
+
+In bash and zsh, the second TAB groups what can be typed next, each with its help, like `--help` does: the
+commands, the command's arguments, the command's own options, then the global options:
+
+```console
+$ my-app <TAB><TAB>
+commands of my-app
+  open                          Serve a workspace.
+  stop                          Stop the server.
+arguments of my-app open
+▸ <workspace>                   the workspace file to serve
+options of my-app open
+  -b, --background              run detached
+  --port PORT                   the port to serve on (8787)
+global options
+  -c, --config PATH             Configuration file.
+  -d, --debug                   Enable debug mode.
+  …
+$ my-app
+```
+
+The arguments group says each argument's state: one you typed shows its value, one still missing shows as
+`<name>` with its help, and the next one's values — or a script command's config files — are listed under it. It
+stays above the options, so after `--` you still see what is missing:
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+▸ <version>                     its version
+global options
+  …
+$ my-app fetch alpha --
+```
+
+With a config on the line, the settings its author wrote first come before the command's options: the top-level
+keys of that file, in the file's order, then the scopes it and the files it includes declare (its own first; a scope
+declared in both is one row), then the keys each included file writes that the config does not, under the include
+as the config writes it. The object the config binds (`runnable`) is never offered — its parameters are:
+
+```console
+$ my-app run catalog.yaml --<TAB><TAB>
+arguments of my-app run
+  config                        catalog.yaml
+options of catalog.yaml
+  --setup_folders               The folders searched. ([])
+  --setups_per_folder           0 = every setup (0)
+scopes of catalog.yaml
+  -s quick                      A quick run: 20 setups a folder.
+options of pkg://my-app/config/base.yaml
+  --workers_per_run             Runs at once. (1)
+options of my-app run
+  --dry_run                     Run nothing.
+runnable (BuildCatalog)
+  --overwrite                   Catalog every setup again instead of resuming.
+  --workers                     Processes reading setups at once. (4)
+global options
+  …
+```
+
+for a config written as
+
+```yaml
+setup_folders: []
+setups_per_folder: 0    # 0 = every setup
+
+# A quick run: 20 setups a folder.
+quick: !scope:quick
+  setups_per_folder: 20
+
+runnable: !class:my_package.catalog.BuildCatalog
+  source_dirs: !ref:setup_folders
+  max_cases_per_dir: !ref:setups_per_folder
+```
+
+Each `!class:` block gets a group of its own, titled by its path and class — the shallowest first, then in the
+order the document writes them — listing every parameter of that class, written in the config or not
+(`--overwrite` above), each with its `Args:` help and the value the config writes, else its default; a yes/no
+parameter shows none. A parameter a top-level key already feeds — written `!ref:<key>` (`source_dirs:
+!ref:setup_folders` above), or not written by its block and named like a top-level key, which is broadcast into it
+— is listed once, as that key, never again with its block. A key's help is the comment lines directly above it (a section rule such as `# -- Knobs -----` is no key's help), else the comment at the end of its line — carried on through the comment lines below it whose `#` stands in the same column — else the `Args:` help
+of the class parameter it feeds — through `!ref:`, or by its name when a parameter is named like it. A key inside a
+`!class:` marker shows that class's `Args:` help, read from the class's source file (the class is not imported, so
+the TAB stays fast). `my-app run catalog.yaml --help` shows the same blocks, in the same order, and a table per object the config builds
+— a `!class:` block the command's objects never reach (one only a list item references) included, titled as its TAB
+group.
+
+A config that starts other runs lists their options too, after its own. A class whose parameter names a config another
+run reads (a workflow step that runs `other.yaml`) is registered by its package, and no class is imported:
+
+```toml
+[project.entry-points."liquifai.config_refs"]
+"mypkg.workflow.RunConfig.config" = "mypkg.workflow:RunConfig"
+```
+
+For `my-app run flow.yaml`, whose `steps:` hold `RunConfig` blocks, the listing adds `options of the runs` (the runs'
+top-level keys) and `options of the runs' runnable (BuildCatalog)` (the parameters of their top-level blocks), each key
+bare as it is typed (`--overwrite`, `--workers`), helped by the run's own file, and marked `[2 of 4 runs]` when not
+every run has it. A key the flow lists itself is not repeated, and a run that cannot be read lists nothing. What a
+typed key reaches is the command's to say (liquifai only lists): `recordstream run` hands a key the workflow does not
+use to every run.
+
+A top-level mapping some class parameter reads through `!ref:` is a group of knobs — `flow: {only: [], workers: 2}`
+beside `only: !ref:flow.only` lists `--flow.only` and `--flow.workers`, each with its own comment, and TAB offers them
+in full: `--workers` alone is another key (the one a class parameter takes). A mapping nothing reads stays one row.
+
+The line stays as you typed it; keep typing or TAB again. Only the candidates the typed word matches are listed
+(`--b<TAB><TAB>` shows `options of my-app serve` alone), and an option you already typed drops out. A command's
+help is the first line of its docstring, an argument's or option's its `Args:` line. The first TAB is unchanged: it still fills in the part the matches share. An option's values
+(`--port <TAB>`) are listed as before.
+
+bash shows its own list instead (sorted alphabetically) whenever liquifai cannot draw its own reliably: the cursor
+is inside the line, the line is wider than the terminal, the list is taller than it, or bash is older than 4.4
+(macOS's `/bin/bash`). zsh shows the same groups through its own completion listing, so no such limits apply there.
+fish lists the candidates as before.
+
+In zsh, which measures a row's colour codes as characters, a long coloured row is cut a little earlier so it never
+runs past the terminal's edge.
+
+In a colour terminal the listing is coloured: the group titles bold cyan, command names blue, options bold with
+their value's placeholder (`PATH`) dim cyan, a typed argument green, a missing one yellow, help dim. An option that
+takes a value shows its default after its help (`the port to serve on (8787)`), and the argument to type next is
+marked `▸`:
+
+```console
+$ my-app fetch alpha --<TAB><TAB>
+arguments of my-app fetch
+  name                          alpha
+▸ <version>                     its version
+```
+
+The colour follows `LIQUIFAI_COMPLETION_COLOR`, read on every TAB:
+
+```bash
+export LIQUIFAI_COMPLETION_COLOR=never   # auto (the default), always or never
+```
+
+`auto` colours it unless `NO_COLOR` is set or the terminal is `dumb`.
+
+To go back to the shell's own sorted list everywhere, set:
+
+```bash
+export LIQUIFAI_COMPLETION_LIST=plain   # grouped (the default) or plain; read on every TAB
+```
+
+An installed completion script predating this listing keeps the old list: run `my-app --install-completion`
+again to get it.
+
 ## Aliases
 
 Shell aliases don't inherit completion automatically (bash and zsh bind
@@ -257,9 +406,95 @@ double-TAB signal and keep the age-gated behaviour. It needs the up-to-date
 wrapper: **re-run `my-app --install-completion`** (or `liquifai-install-completions`)
 once and re-source, otherwise the double-TAB is treated as an ordinary TAB.
 
+### An option's value (`--library <TAB>`)
+
+A `completions=` key that names an OPTION rather than a positional completes that option's value:
+
+```python
+@app.command(positionals=["option"], completions={"option": options, "library": lambda: ["unofficial", "complete"]})
+def review(option: str = "", library: str = "") -> None: ...
+```
+
+`review a --library <TAB>` → `unofficial complete`. Its provider takes nothing, or the positionals
+typed so far (`{name: word}`, `{}` when none is) — cached per prefix of them, like a command's
+config scopes. A key that names no parameter of the command is refused when it is decorated
+(`CommandDefinitionError`, with the closest parameter): a misspelt key would complete nothing.
+
+### A scope (`-s <TAB>`)
+
+With a config on the line — the command's config, or `--config PATH` — `--scope <TAB>` and `-s <TAB>` offer the
+scopes that config declares, the ones `scopes of <config>` lists: its own first, then its includes', a keyed one as
+`KEY=VAL`, then its `scope_aliases:`. `--scope=<TAB>` completes the same scopes, the flag kept in front
+(`--scope=quick`). A scope an earlier `--scope` names is left out:
+
+```console
+$ my-app run catalog.yaml -s <TAB>
+quick
+$ my-app run catalog.yaml -s quick -s <TAB>
+$ my-app run -s <TAB>
+```
+
+The last two offer nothing: `catalog.yaml` has no other scope, and without a config there is none to offer.
+
+A global option's value completes in its `=` spelling too, the option kept in front: `--config=<TAB>`,
+`--log-dir=<TAB>` and `--save-config=<TAB>` offer files, `--scope=<TAB>` the scopes.
+
+### A list's next word (`a,<TAB>`)
+
+After a comma, a positional, an option's value and `--scope` complete the list's next item:
+`pictures all a,<TAB>` → `a,b a,c …`, the words already in the list left out. Shells keep a comma
+inside the word, so the candidate is the whole list.
+
+### A config key's value (`name=<TAB>`)
+
+With a config on the line, `key=<TAB>`, `--key <TAB>` and `--key=<TAB>` complete the value of a key
+that feeds a parameter of a `!class:` block — by its name (a bare key is broadcast to every block
+whose class takes it), through `!ref:<key>`, or by its dotted path (`runnable.source.name=`) — when
+the class's package registers a provider for that parameter under the `liquifai.values`
+entry-point group. The name is the parameter's dotted path, the class as a `!class:` tag spells it:
+
+```toml
+[project.entry-points."liquifai.values"]
+"mypkg.sources.Catalog.name" = "mypkg.sources:catalog_names"
+```
+
+```python
+def catalog_names(settings: Mapping[str, str]) -> List[str]:
+    """The catalogs a Catalog with these settings can read."""
+    return list_catalogs(kind=settings["kind"])
+```
+
+```console
+$ my-app run run.yaml name=<TAB>
+name=small-one  name=small-two
+$ my-app run run.yaml kind=huge --name <TAB>
+huge-one  huge-two
+```
+
+The provider gets the block's other parameters as text: the command line's, else the file's (the
+block's own, the key a `!ref:` names, a broadcast top-level key), else the class's defaults as its
+source writes them, a yes/no parameter as `true` / `false`. The scopes typed on the line (`-s
+folder`) are applied first, so a key a scope gives another meaning completes for the one typed — or,
+when the scope leaves no block with a provider, as before. It runs only when its cache is
+refreshed, in the app's process: the first TAB for a combination of settings offers nothing and
+starts that refresh in the background, the next TAB offers what it listed, and a double-TAB asks
+again. A provider that raises caches nothing. A key no installed package registers a provider for
+completes as before. bash is given the part after the `=` (it replaces only that part of the word);
+zsh and fish get the whole word. `--refresh-completions` does not run these providers: it reads no
+config.
+
+### The same values in `--help`
+
+`<command> --help` ends with a "Values" block: each slot with a provider and the values TAB would
+offer it, read from the same cache — never by running a provider, which may query a server. A slot
+that depends on a positional not typed shows nothing (`download --help` vs `download cifar10
+--help`); an empty cache says to run `<app> --refresh-completions`. Long lists show 20 values and a
+count.
+
 ## Runnable example
 
 [`examples/completion_providers.py`](../examples/completion_providers.py) wires
 a static and a dependent provider onto a command's positionals and prints the
 candidates each would contribute. Shell interaction itself (TAB, wrappers,
-caches) can't run in CI — install the app and try `download <TAB>` live.
+caches) can't run in CI — install the app and try `download <TAB>` live. It also
+prints the grouped listing the second TAB shows for `download rfuav v1 --`.

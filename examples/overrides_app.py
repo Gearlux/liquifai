@@ -28,6 +28,14 @@ trainer: !class:Trainer
   lr: 0.5
 """
 
+# A `${run.name}` placeholder in the file reads the run's name — and `run.name=pilot` on the command line, being a
+# line appended to the file, reaches it as a line written there would.
+INTERPOLATION_CONFIG = """
+run:
+  name: base
+output_dir: /runs/${run.name}
+"""
+
 
 @configurable
 class Trainer:
@@ -53,6 +61,12 @@ def show(trainer: Trainer) -> None:
     print(f"RESULT lr={trainer.lr} max_epochs={trainer.max_epochs} verbose={trainer.verbose}")
 
 
+@app.command()
+def where(output_dir: str = "") -> None:
+    """Print the folder the config spells from the run's name."""
+    print(f"RESULT output_dir={output_dir}")
+
+
 def demo() -> None:
     cases = [
         (["show", "--max_epochs", "3"], "flag + value"),
@@ -68,15 +82,22 @@ def demo() -> None:
     with tempfile.TemporaryDirectory() as td:
         cfg = Path(td) / "precedence.yaml"
         cfg.write_text(textwrap.dedent(PRECEDENCE_CONFIG))
+        named = Path(td) / "named.yaml"
+        named.write_text(textwrap.dedent(INTERPOLATION_CONFIG))
         cases += [
             (["show", "--config", str(cfg)], "config alone: the node's `lr` wins, being later"),
             (["show", "--config", str(cfg), "--lr", "0.9"], "the CLI beats it — an override applies last"),
+            (["where", "--config", str(named)], "the file's own `${run.name}`"),
+            (["where", "--config", str(named), "run.name=pilot"], "the CLI's value reaches `${run.name}`"),
         ]
+        results = []
         for argv, label in cases:
             proc = subprocess.run([sys.executable, __file__, *argv], capture_output=True, text=True, check=True)
             result = [line for line in proc.stdout.splitlines() if line.startswith("RESULT")][0]
+            results.append(result)
             shown = " ".join("<config>" if a.endswith(".yaml") else a for a in argv)
             print(f"$ overrides-demo {shown:<24} # {label}\n  {result}")
+        assert results[-2:] == ["RESULT output_dir=/runs/base", "RESULT output_dir=/runs/pilot"], results[-2:]
 
 
 if __name__ == "__main__":

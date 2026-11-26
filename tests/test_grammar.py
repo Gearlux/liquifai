@@ -46,7 +46,7 @@ def test_hidden_flags_excluded_from_all_derived_sets() -> None:
 
 
 def test_path_and_shell_value_flags() -> None:
-    assert PATH_VALUE_FLAGS == {"--config", "-c", "--log-dir"}
+    assert PATH_VALUE_FLAGS == {"--config", "-c", "--log-dir", "--save-config"}
     assert SHELL_VALUE_FLAGS == {"--install-completion", "--show-completion"}
 
 

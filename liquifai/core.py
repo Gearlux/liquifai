@@ -1,9 +1,24 @@
 import difflib
 import inspect
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, Literal, Optional, Set, get_args
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Set,
+    Union,
+    get_args,
+    get_origin,
+)
 
 import confluid
 import loggair
@@ -12,19 +27,30 @@ from rich.console import Console
 from rich.markup import escape
 
 from liquifai import completion_cli, di, flags, host, overrides, report, router
+from liquifai.completion.config_help import ConfigHelp, read_config_help
 from liquifai.context import LiquifyContext, set_context
+from liquifai.dump import resolved_config_text, write_config_text
 from liquifai.exceptions import (
     CommandDefinitionError,
     ConfigNotFoundError,
+    InvalidChoiceError,
     LiquifaiError,
     MissingArgumentError,
+    MissingOptionValueError,
     UnknownCommandError,
     UnknownFlagError,
     UnknownOperationError,
 )
 from liquifai.grammar import GLOBAL_FLAG_SPECS, HELP_FLAGS
 from liquifai.introspection import CONTEXT_PARAM, graft_signature, split_context_param
-from liquifai.overrides import expand_strings, parse_override_args, str_param_names
+from liquifai.overrides import (
+    bool_param_names,
+    expand_strings,
+    parse_override_args,
+    str_param_names,
+    text_config_keys,
+    valued_param_names,
+)
 from liquifai.walk import Token, literal_texts, option_texts, tokenize
 
 FlowMode = Literal["manual", "auto"]
@@ -39,6 +65,66 @@ HelpLayout = Literal["table", "lines"]
 
 console = Console()
 logger = get_logger("liquifai.core")
+
+
+def needs_typed_argument(func: Callable[..., Any]) -> bool:
+    """Whether ``func`` has a parameter that, with nothing typed, nothing supplies.
+
+    With no token there is no config, so only dependency injection could fill a parameter without a default: a
+    ``@configurable``-annotated one is built with its defaults, any other is left missing
+    (:meth:`LiquifyApp._check_missing_arguments` would refuse it). Read on the signature only — nothing is built.
+    """
+    registry = confluid.get_registry()
+    return any(
+        param.default is inspect.Parameter.empty
+        and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and not registry.is_configurable(param.annotation)
+        for param in inspect.signature(func).parameters.values()
+    )
+
+
+def choice_params(func: Callable[..., Any]) -> Dict[str, tuple]:
+    """``{parameter: its allowed values}`` for each parameter of ``func`` typed as a closed set.
+
+    A ``Literal`` (inside ``Annotated`` too) is its values; ``Optional[Literal[...]]`` adds ``None``; a union of
+    literals joins them. Any other member in a union (``int``) opens the set, and the parameter is not listed.
+    """
+    try:
+        parameters = inspect.signature(func, eval_str=True).parameters
+    except Exception:  # an annotation naming what the module cannot import: nothing to judge
+        return {}
+    found: Dict[str, tuple] = {}
+    for name, param in parameters.items():
+        allowed = _closed_values(param.annotation)
+        if allowed:
+            found[name] = allowed
+    return found
+
+
+def _closed_values(annotation: Any) -> tuple:
+    """The values a closed-set annotation allows, or ``()`` when it is not one."""
+    origin, args = get_origin(annotation), get_args(annotation)
+    if origin is Annotated:
+        return _closed_values(args[0])
+    if origin is Literal:
+        return args
+    if origin is Union or origin is types.UnionType:
+        values: tuple = ()
+        for member in args:
+            if member is type(None):
+                values += (None,)
+                continue
+            closed = _closed_values(member)
+            if not closed:
+                return ()
+            values += closed
+        return values
+    return ()
+
+
+def _same_value(given: Any, allowed: Any) -> bool:
+    """``given`` is ``allowed`` — the same value of the same type, so ``True`` is not the choice ``1``."""
+    return type(given) is type(allowed) and given == allowed
 
 
 @dataclass
@@ -71,6 +157,9 @@ class Invocation:
     #: parsers. Tokens, not strings, so those parsers can tell an option from a
     #: post-``--`` literal (which they must never consume).
     remaining_tokens: List[Token]
+    #: A token in the config's place that names a config file resolving to none (``walk.names_a_config``):
+    #: :meth:`LiquifyApp._prepare` refuses it unless ``--config`` names the file instead.
+    missing_config: Optional[str] = None
 
 
 #: Single-dash spellings the global grammar already owns. A command short may not take one:
@@ -118,6 +207,39 @@ def _validated_shorts(func: Callable[..., Any], cmd_name: str, short: Optional[D
             )
         validated[letter] = param
     return validated
+
+
+def _validated_completions(
+    func: Callable[..., Any], cmd_name: str, completions: Optional[Dict[str, Callable[..., Any]]]
+) -> Dict[str, Callable[..., Any]]:
+    """Check a command's ``completions=`` at DECORATION time: each key names a parameter (a positional, or an option
+    whose value TAB completes) — a misspelt key would complete nothing, silently."""
+    if not completions:
+        return {}
+    try:
+        params = set(inspect.signature(func).parameters)
+    except (ValueError, TypeError):  # pragma: no cover - defensive: unintrospectable callable
+        return dict(completions)
+    for name in completions:
+        if params and name not in params:
+            close = difflib.get_close_matches(name, sorted(params), n=1)
+            hint = f" — did you mean {close[0]!r}?" if close else ""
+            raise CommandDefinitionError(f"{cmd_name}: completions key '{name}' names no parameter{hint}")
+    return dict(completions)
+
+
+#: ``script_command(config_keys=...)``: the loaded document in, ``{key: value}`` to merge in after the command line.
+ConfigKeys = Callable[[Dict[str, Any]], Mapping[str, Any]]
+
+
+def _validated_config_keys(cmd_name: str, config_keys: Optional[ConfigKeys]) -> Optional[ConfigKeys]:
+    """Check a command's ``config_keys=`` function at DECORATION time: it must be callable."""
+    if config_keys is not None and not callable(config_keys):
+        raise CommandDefinitionError(
+            f"{cmd_name}: config_keys= takes a callable — the loaded document in, {{key: value}} out — "
+            f"got {config_keys!r}."
+        )
+    return config_keys
 
 
 def expand_shorts(texts: List[str], shorts: Dict[str, str]) -> List[str]:
@@ -338,7 +460,7 @@ class LiquifyApp:
             setattr(f, "__liquifai_positionals__", list(positionals or []))
             # {positional: Callable[[], List[str]]} value providers (Q2 dynamic
             # completion). Read by completion.serialize_app / iter_completion_providers.
-            setattr(f, "__liquifai_completions__", dict(completions or {}))
+            setattr(f, "__liquifai_completions__", _validated_completions(f, cmd_name, completions))
             setattr(f, "__liquifai_short__", _validated_shorts(f, cmd_name, short))
             if default:
                 self._default_cmd = f
@@ -352,6 +474,7 @@ class LiquifyApp:
         flow_mode: FlowMode = "manual",
         positionals: Optional[List[str]] = None,
         default: bool = False,
+        config_keys: Optional[ConfigKeys] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Register a command that supports config-promotion.
 
@@ -377,6 +500,15 @@ class LiquifyApp:
                 :meth:`command`). The config-file promotion peek runs first, so
                 a ``script_command`` consumes its config path before binding
                 positionals.
+            config_keys: Keys the command adds to its configuration: called with the loaded document
+                (includes, scopes, positionals and the command-line keys applied), it returns
+                ``{key: value}`` — a dotted key reaches a nested object, as a dotted override does —
+                and liquifai merges them in AFTER the command-line keys, so they win over the same
+                key typed, before ``--dump-config`` / ``--save-config`` write the configuration and
+                before the command's objects are built. A command that forces a setting (a trainer
+                verb's task) thereby shows it in the dumped file, and can add it only where the
+                document accepts it. Not called without a config file; an added key is never
+                reported as a typed key that reached nothing.
         """
         if flow_mode not in ("manual", "auto"):
             raise CommandDefinitionError(f"flow_mode must be one of manual/auto; got {flow_mode!r}")
@@ -387,6 +519,8 @@ class LiquifyApp:
             # Store the mode on the function itself; run_command looks it up
             # via getattr, no per-app registry needed.
             setattr(f, "__liquifai_flow_mode__", flow_mode)
+            # Read by _prepare, after the command-line keys are applied (_apply_command_keys).
+            setattr(f, "__liquifai_config_keys__", _validated_config_keys(cmd_name, config_keys))
             return self.command(name=cmd_name, positionals=positionals, default=default)(f)
 
         return decorator
@@ -552,12 +686,21 @@ class LiquifyApp:
         # documentation one option per line (greppable / pipe-friendly) instead of
         # a Rich table.
         wants_docs = "--docs" in flags
-        if flags & HELP_FLAGS or wants_docs or (not inv.target_func and not inv.target_app._default_cmd):
+        # The app typed ALONE shows its help when its default command needs an argument only the command line can
+        # give (a config runner's ``runnable``): it would otherwise end in a missing-argument error.
+        bare_with_nothing_to_run = not argv and inv.target_func is not None and needs_typed_argument(inv.target_func)
+        if (
+            flags & HELP_FLAGS
+            or wants_docs
+            or (not inv.target_func and not inv.target_app._default_cmd)
+            or bare_with_nothing_to_run
+        ):
             self._show_help(
                 inv.target_app,
                 inv.target_func,
                 config_path=inv.config_path,
                 layout="lines" if wants_docs else "table",
+                typed=dict(zip(inv.positional_names, inv.positional_values)),
             )
             # Refresh the completion cache so freshly added commands appear under
             # TAB without first requiring a successful real run — a hidden
@@ -576,6 +719,8 @@ class LiquifyApp:
         # OTHER exception is a bug and always propagates with its traceback.
         try:
             self._prepare(inv)
+            if self._write_resolved_config():
+                return None
             return self._execute(inv)
         except (LiquifaiError, confluid.ConfluidError) as exc:
             if flags & {"--debug", "-d"} or (self.context is not None and self.context.debug):
@@ -611,6 +756,8 @@ class LiquifyApp:
         final_tokens = globals_.remaining
         if globals_.config_path:
             config_path = globals_.config_path
+        if config_path is None and inv.missing_config is not None:
+            raise ConfigNotFoundError(f"Configuration file not found: {inv.missing_config}")
         if config_path is not None:
             # Resolve once through confluid's search tiers so the context,
             # the not-found error, and the "Loaded configuration from:" line
@@ -649,6 +796,9 @@ class LiquifyApp:
             debug=debug,
             included_paths=included_paths,
             host_facts=facts,
+            dump_config=globals_.dump_config,
+            dump_config_path=globals_.dump_config_path,
+            save_config=globals_.save_config,
             **log_overrides,
         )
         set_context(self.context)
@@ -666,12 +816,69 @@ class LiquifyApp:
         if inv.positional_values and isinstance(self.context.config_data, dict):
             bound = dict(zip(inv.positional_names, inv.positional_values))
             self.context.config_data.update(bound)
+            self.context.bound_positionals = bound
             self.context.logger.debug(f"Bound positionals: {bound}")
 
         # 5. APPLY OVERRIDES (the command is known here, so its `short=` map can be expanded)
         self._active_func = inv.target_func
         self._apply_overrides(final_tokens)
+        # 5a. THE COMMAND'S OWN KEYS (`script_command(config_keys=...)`), after the typed ones, before any dump.
+        self._apply_command_keys(inv.target_func)
         self._warn_unbound_literals(inv)
+
+    def _write_resolved_config(self) -> bool:
+        """Phase 5b: ``--dump-config[=PATH]`` / ``--save-config PATH`` write the resolved configuration.
+
+        Runs after the overrides, so the text is what the command would build (:mod:`liquifai.dump`). ``--dump-config``
+        prints it (or writes ``PATH``) and returns True: the command does NOT run. ``--save-config`` writes its file and
+        returns False, so the run goes on; given both, both are written and nothing runs. A dump that stops judges the
+        command-line keys as a run would — one that reached nothing is warned about — since no run follows to do it;
+        a saved run leaves that to :meth:`run_command`, so the warning is not given twice.
+        """
+        context = self.context
+        if context is None or not (context.dump_config or context.save_config):
+            return False
+        flag = "--dump-config" if context.dump_config else "--save-config"
+        if context.config_path is None:
+            raise ConfigNotFoundError(
+                f"{flag}: no configuration file was given — name one (`{self.name} <config.yaml> {flag}`)."
+            )
+        if context.dump_config and context.cli_overrides:
+            with confluid.collect_report() as delivery:
+                text = resolved_config_text(context.config_data, context.host_facts)
+            overrides.warn_unused_overrides(context.cli_overrides, delivery, context.config_path)
+        else:
+            text = resolved_config_text(context.config_data, context.host_facts)
+        for path in (context.save_config, context.dump_config_path):
+            if path is not None:
+                context.logger.info(f"Wrote the resolved configuration to: {write_config_text(text, path)}")
+        if context.dump_config and context.dump_config_path is None:
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        return context.dump_config
+
+    def _apply_command_keys(self, func: Optional[Callable[..., Any]]) -> None:
+        """Phase 5a: merge the keys a command's ``config_keys=`` function returns into the loaded document.
+
+        Called with the document as the command line left it, after the typed keys — so an added key wins over the
+        same key typed — and merged as a dotted override is (``overrides.apply_overrides``). The keys are NOT added
+        to ``cli_overrides``: the unused-override warning is about what the user typed. A document already resolved
+        does not re-read its ``${…}`` placeholders for them. Without a config file nothing is called.
+        """
+        context = self.context
+        provider = getattr(func, "__liquifai_config_keys__", None) if func is not None else None
+        if provider is None or context is None or context.config_path is None:
+            return
+        added = provider(context.config_data)
+        if not isinstance(added, Mapping):
+            command = " ".join(self._command_path(func)) if func is not None else self.name
+            raise CommandDefinitionError(
+                f"{command}: config_keys= returned a {type(added).__name__}, not a mapping of keys to values."
+            )
+        if not added:
+            return
+        context.logger.debug(f"Keys the command adds to its configuration: {dict(added)}")
+        context.config_data = overrides.apply_overrides(context.config_data, dict(added), [])
 
     def _log_promotion_source(self, inv: "Invocation", config_path: Optional[Path]) -> None:
         """Record WHERE a promoted config token was resolved from.
@@ -785,6 +992,8 @@ class LiquifyApp:
             # `${platform.os}` / `${platform.device}` resolve in the interpolation pass
             # below — a bare `${os}` cannot, it is an env-var read (confluid/resolver.py:161).
             data = host.inject_facts(data, self.context.host_facts)
+            # Kept for phase 5: command-line keys are appended to THIS and it is resolved again.
+            self.context.raw_document = data
             # Resolve scopes/includes/markers, then expand `$VAR` / `~` in every
             # string primitive. Overrides get the same expansion later, in
             # `overrides.apply_overrides`.
@@ -807,11 +1016,23 @@ class LiquifyApp:
         # typed. `parse_value` ends in `yaml.safe_load`, which is right for an untyped
         # config override (`+trainer.lr=0.01` -> float) and destructive for declared text:
         # it folds a multi-line value onto one line, reads `#…` as a comment, `3:30` as
-        # sexagesimal, `012` as octal, `yes` as True.
-        verbatim = str_param_names(self._active_func)
-        parsed_overrides, deletions, dropped = parse_override_args(
-            expand_shorts(option_texts(tokens), shorts), verbatim_keys=verbatim
-        )
+        # sexagesimal, `012` as octal, `yes` as True. A top-level key the document holds as text
+        # (`version: latest`) is declared text too: `--version 1.10` must not become the float 1.1.
+        verbatim = str_param_names(self._active_func) | text_config_keys(self.context.config_data)
+        # A `bool` parameter is a switch: `--dry-run name=x` keeps the override instead of binding `dry_run='name=x'`.
+        switches = bool_param_names(self._active_func)
+        # An option of a declared non-bool type needs a value: `--name` alone is refused, never `name=True`.
+        valued = valued_param_names(self._active_func)
+        try:
+            parsed_overrides, deletions, dropped = parse_override_args(
+                expand_shorts(option_texts(tokens), shorts),
+                verbatim_keys=verbatim,
+                flag_keys=switches,
+                value_keys=valued,
+            )
+        except MissingOptionValueError as missing:
+            command = " ".join(self._command_path(self._active_func)) if self._active_func else self.name
+            raise MissingOptionValueError(f"{command}: {missing}") from None
 
         # A dropped token is almost always a typo'd override (``lr 0.1``
         # instead of ``--lr 0.1``) — silently ignoring one can cost an entire
@@ -838,8 +1059,28 @@ class LiquifyApp:
         self.context.cli_overrides = dict(parsed_overrides)
 
         self.context.logger.debug(f"Applying CLI overrides: {parsed_overrides}; deletions: {deletions}")
+        if parsed_overrides:
+            self.context.config_data = self._resolved_with_lines(parsed_overrides)
         self.context.config_data = overrides.apply_overrides(self.context.config_data, parsed_overrides, deletions)
         self.context.logger.trace(f"POST-OVERRIDE CONFIG STATE: {self.context.config_data}")
+
+    def _resolved_with_lines(self, parsed_overrides: Dict[str, Any]) -> Any:
+        """The raw document resolved again with the positionals, then the command-line keys, appended as its last
+        lines in the order typed — so every ``${key}`` placeholder sees the value a line at the end of the file
+        would give it (a ``!ref:`` saw it already, being resolved later). ``apply_overrides`` then merges the same
+        keys as before (into the ``Fluid`` kwargs, and the deletions); a document that was not read from a file, or
+        not as a mapping, is left as it is.
+        """
+        assert self.context is not None
+        raw = self.context.raw_document
+        current = self.context.config_data
+        if not isinstance(raw, dict) or not isinstance(current, dict):
+            return current
+        appended = dict(raw)
+        for key, value in [*self.context.bound_positionals.items(), *expand_strings(parsed_overrides).items()]:
+            appended.pop(key, None)  # a key written again moves to the end, as a later line would
+            appended[key] = value
+        return expand_strings(confluid.load(appended, until="document", scopes=self.context.scopes or None))
 
     def _check_strict_flags(self, func: Callable[..., Any]) -> None:
         """Under ``strict_flags``, refuse a bare override that names no parameter of ``func``.
@@ -914,10 +1155,11 @@ class LiquifyApp:
         if context.cli_overrides:
             with confluid.collect_report() as report:
                 kwargs = _materialize_kwargs()
-            overrides.warn_unused_overrides(context.cli_overrides, report)
+            overrides.warn_unused_overrides(context.cli_overrides, report, context.config_path)
         else:
             kwargs = _materialize_kwargs()
         self._check_missing_arguments(func, kwargs)
+        self._check_choices(func, kwargs)
         return func(**kwargs)
 
     def _check_missing_arguments(self, func: Callable[..., Any], kwargs: Dict[str, Any]) -> None:
@@ -952,6 +1194,25 @@ class LiquifyApp:
             f"{command}: missing required {noun} {', '.join(repr(n) for n in missing)} — "
             f"pass {pronoun} as {' or '.join(f'`{form}`' for form in forms)}."
         )
+
+    def _check_choices(self, func: Callable[..., Any], kwargs: Dict[str, Any]) -> None:
+        """Refuse a value outside a parameter's closed set (``Literal["text", "json"]``), naming the set.
+
+        Runs on the RESOLVED kwargs, like :meth:`_check_missing_arguments`: a value from the command line and one from
+        a config key of the same name are judged alike. A type mixing a choice with an open type
+        (``Union[int, Literal["auto"]]``) has no closed set and is left alone.
+        """
+        positionals: List[str] = getattr(func, "__liquifai_positionals__", [])
+        for name, allowed in choice_params(func).items():
+            if name not in kwargs or any(_same_value(kwargs[name], value) for value in allowed):
+                continue
+            command = " ".join(self._command_path(func)) or f"{self.name} {func.__name__}"
+            spelling = f"<{name}>" if name in positionals else f"--{name}"
+            # `None` (an Optional's unset value) is accepted but never listed: nobody types it.
+            listed = ", ".join(
+                repr(value) if not isinstance(value, str) else value for value in allowed if value is not None
+            )
+            raise InvalidChoiceError(f"{command}: {spelling} must be one of {listed}; got {kwargs[name]!r}")
 
     def _command_path(self, func: Callable[..., Any]) -> List[str]:
         """The tokens that select ``func`` from this app — ``["root", "dataset", "pull"]``.
@@ -1046,12 +1307,38 @@ class LiquifyApp:
             ctx.config_data = expand_strings(ctx.config_data)
         return ctx
 
+    def _show_slot_values(self, func: Callable[..., Any], typed: Dict[str, str], console: Console) -> None:
+        """The values TAB offers each slot of ``func`` with a provider, read from the completion cache — never by
+        running a provider (one may query a server). A slot depending on a word not typed shows nothing."""
+        providers = getattr(func, "__liquifai_completions__", {}) or {}
+        if not providers:
+            return
+        from liquifai.completion import cache as value_cache
+        from liquifai.completion.tree import _provider_spec, _slot_info
+
+        path = self._command_path(func)
+        groups, cmd = tuple(path[1:-1]), path[-1]
+        positionals = list(getattr(func, "__liquifai_positionals__", []))
+        rows: List[tuple] = []
+        answerable = False
+        for name, provider in providers.items():
+            info = _slot_info(_provider_spec(groups, cmd, name, provider, positionals))
+            if value_cache.slot_inputs(info, typed) is None:
+                continue
+            answerable = True
+            values = value_cache.read_slot_values(self.name, info, typed)
+            if values:
+                rows.append((f"<{name}>" if name in positionals else f"--{name}", values))
+        if answerable:
+            report.show_slot_values(rows, app_name=self.name, console=console)
+
     def _show_help(
         self,
         app: "LiquifyApp",
         target_func: Optional[Callable[..., Any]] = None,
         config_path: Optional[Path] = None,
         layout: HelpLayout = "table",
+        typed: Optional[Dict[str, str]] = None,
     ) -> None:
         """Beautiful help menu via Rich.
 
@@ -1064,9 +1351,9 @@ class LiquifyApp:
         ``"table"`` (default, Rich grid) or ``"lines"`` (one option per line —
         the ``--docs`` rendering).
         """
-        console.print(f"\n[bold]{app.name.upper()}[/bold] - Modular Framework")
+        console.print(f"\n[bold]{escape(app.name.upper())}[/bold] - Modular Framework")
         if app.description:
-            console.print(f"[dim]{app.description}[/dim]")
+            console.print(f"[dim]{escape(app.description)}[/dim]")
 
         if target_func:
             # A DEFAULT command answers the app's bare ``--help``, so rendering only ITS
@@ -1075,14 +1362,15 @@ class LiquifyApp:
             # only by already knowing their names. Show the index first, then the command.
             if target_func is app._default_cmd and (app._commands or app._sub_apps):
                 report.show_command_index(app, console)
-            desc = target_func.__doc__ or "No description."
             positionals = getattr(target_func, "__liquifai_positionals__", [])
             # The REGISTERED name, never the function's: a generated operation handler is called
             # `<op>_cmd`, and `@app.command("token-info")` may decorate any function name at all.
             cmd_name = app._command_path(target_func)[-1:] or [target_func.__name__.replace("_", "-")]
             usage = cmd_name[0] + "".join(f" <{p}>" for p in positionals)
-            console.print(f"\n[bold]Command:[/bold] {usage}")
-            console.print(f"[dim]{desc.strip()}[/dim]")
+            console.print(f"\n[bold]Command:[/bold] {escape(usage)}")
+            console.print(f"[dim]{escape(report.command_description(target_func.__doc__))}[/dim]")
+            # A script command's `Any` parameter is the object its config binds: listed by its options, never a flag.
+            objects = report.config_object_params(target_func) if cmd_name[0] in app._script_cmds else []
 
             from liquifai.report import show_configuration
 
@@ -1092,6 +1380,17 @@ class LiquifyApp:
                     flowed_kwargs = self.liquify(target_func, config_path=config_path)
                 except Exception as exc:
                     console.print("[dim]Config failed to flow; showing command signature only. " f"Reason: {exc}[/dim]")
+
+            config_help: Optional[ConfigHelp] = None
+            if config_path is not None:
+                # The settings the config's author wrote first (its own top-level keys, its scopes), with the
+                # help of their comments — the groups a TAB listing shows. The command's own parameters are not
+                # the file's settings.
+                exclude = [*inspect.signature(target_func).parameters, *positionals]
+                try:
+                    config_help = read_config_help(config_path, exclude=exclude)
+                except Exception as exc:  # a malformed config: help still renders, the reason is shown
+                    console.print(f"[dim]The config's own settings are unavailable: {escape(str(exc))}[/dim]")
 
             if flowed_kwargs is not None and config_path is not None:
                 console.print(
@@ -1105,15 +1404,22 @@ class LiquifyApp:
                     layout=layout,
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
+                    config_help=config_help,
+                    command=cmd_name[0],
+                    objects=objects,
                 )
             else:
                 show_configuration(
                     target_func,
-                    title="Command Configuration Options",
+                    title=f"Options of {cmd_name[0]}",
                     layout=layout,
                     positionals=positionals,
                     shorts=getattr(target_func, "__liquifai_short__", None),
+                    config_help=config_help,
+                    command=cmd_name[0],
+                    objects=objects,
                 )
+            self._show_slot_values(target_func, typed or {}, console)
         else:
             report.show_command_index(app, console)
 

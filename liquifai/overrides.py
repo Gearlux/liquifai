@@ -17,12 +17,22 @@ import inspect
 import os
 from typing import AbstractSet, Any, Dict, List, Optional, Set, Tuple
 
-from confluid import accepts_any_key, accepts_broadcast, accepts_key, deep_merge, expand_dotted_keys, parse_value
+from confluid import (
+    accepts_any_key,
+    accepts_broadcast,
+    accepts_key,
+    deep_merge,
+    discover_boolean_scopes,
+    expand_dotted_keys,
+    load,
+    parse_value,
+)
 from confluid.fluid import Fluid
 from confluid.registry import resolve_class
 from confluid.report import ConfigurationReport
 from loggair import get_logger
 
+from liquifai.exceptions import MissingOptionValueError
 from liquifai.grammar import looks_like_arg, looks_like_key
 
 logger = get_logger(__name__)
@@ -74,8 +84,91 @@ def str_param_names(func: Any) -> Set[str]:
     return names
 
 
+def text_config_keys(data: Any) -> Set[str]:
+    """Top-level keys the loaded document holds as text (``version: latest``).
+
+    A value typed for one of them is kept as typed, like a ``str`` parameter's (:func:`str_param_names`): the
+    document's own value already says the key is text, and YAML typing would turn ``--version 1.10`` into the float
+    ``1.1`` — another version. The shell drops the quotes of ``--version "1.3"`` before liquifai sees them, so the
+    user has no way to say "text" on the command line. Only the TOP level counts (the keys a bare flag names); a key
+    the document does not hold, or holds as a number, a list or ``null``, keeps YAML typing.
+    """
+    if not isinstance(data, dict):
+        return set()
+    return {key for key, value in data.items() if isinstance(key, str) and isinstance(value, str)}
+
+
+def bool_param_names(func: Any) -> Set[str]:
+    """Parameter names ``func`` annotates as ``bool`` (or ``Optional[bool]``): the command's switches.
+
+    A switch takes the word after it only when that word is a yes/no value (:func:`_takes_the_word`):
+    ``--dry-run name=x`` is ``dry_run=True`` plus the ``name`` override, never ``dry_run='name=x'`` — completion
+    already offers no value slot after a bool flag. Best-effort like :func:`str_param_names`.
+    """
+    if func is None:
+        return set()
+    try:
+        params = inspect.signature(func).parameters
+    except (ValueError, TypeError):  # pragma: no cover - defensive
+        return set()
+    names: Set[str] = set()
+    for name, param in params.items():
+        annotation = param.annotation
+        if annotation is bool or annotation == "bool":
+            names.add(name)
+            continue
+        args = getattr(annotation, "__args__", ())
+        if args and all(a is bool or a is type(None) for a in args) and bool in args:
+            names.add(name)
+    return names
+
+
+def valued_param_names(func: Any) -> Set[str]:
+    """Parameter names ``func`` declares with a type other than ``bool`` (``str``, ``int``, a list, …): an option of
+    one needs a value — ``--name`` alone would give it ``True`` (:func:`parse_override_args` refuses it). An
+    unannotated or ``Any`` parameter declares no type and keeps the implicit ``True``.
+    """
+    if func is None:
+        return set()
+    try:
+        params = inspect.signature(func).parameters
+    except (ValueError, TypeError):  # pragma: no cover - defensive
+        return set()
+    switches = bool_param_names(func)
+    return {
+        name
+        for name, param in params.items()
+        if param.annotation is not inspect.Parameter.empty
+        and param.annotation is not Any
+        and param.annotation != "Any"
+        and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in switches
+    }
+
+
+def _without_a_value(spelled: str, key: str, value_keys: AbstractSet[str]) -> Any:
+    """What ``--key`` with no value sets: ``True`` — but for a bare key naming an option that needs a value
+    (``value_keys``), which is refused."""
+    if "." not in key and key in value_keys:
+        raise MissingOptionValueError(f"{spelled} needs a value — pass it as `{spelled} <value>` or `{key}=<value>`")
+    return True
+
+
+def _takes_the_word(key: str, word: str, flag_keys: AbstractSet[str]) -> bool:
+    """Whether ``--key word`` gives ``key`` the value ``word``: always, but for a bare key naming a switch
+    (``flag_keys``), which takes it only when it reads as a yes/no value — ``true``/``false``/``yes``/``no``/
+    ``on``/``off`` or ``0``/``1``."""
+    if "." in key or key not in flag_keys:
+        return True
+    value = parse_value(word)
+    return isinstance(value, bool) or (isinstance(value, int) and value in (0, 1))
+
+
 def parse_override_args(
-    args: List[str], verbatim_keys: AbstractSet[str] = frozenset()
+    args: List[str],
+    verbatim_keys: AbstractSet[str] = frozenset(),
+    flag_keys: AbstractSet[str] = frozenset(),
+    value_keys: AbstractSet[str] = frozenset(),
 ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Tokenize ``args`` into an ``(overrides, deletions, dropped)`` triple.
 
@@ -99,6 +192,14 @@ def parse_override_args(
     exactly as typed instead of being coerced through ``confluid.parse_value`` — YAML
     typing is right for an untyped config override and wrong for declared text. A DOTTED
     key is never verbatim: it addresses a nested config object, not the signature.
+
+    ``flag_keys`` names the parameters the active command declares as ``bool`` (see :func:`bool_param_names`).
+    Such a BARE key takes the word after it only when that word is a yes/no value; otherwise the key is ``True``
+    and the word is read as a token of its own (``--dry-run name=x``).
+
+    ``value_keys`` names the parameters the active command declares with another type (see
+    :func:`valued_param_names`): such a BARE key given without a value raises
+    :class:`~liquifai.exceptions.MissingOptionValueError` instead of becoming ``True``.
 
     Any token that doesn't match a recognised form is collected into
     ``dropped`` (it is NOT applied). Callers surface these — a typo'd
@@ -137,11 +238,16 @@ def parse_override_args(
                 k, v = body.split("=", 1)
                 if k:
                     overrides[_normalize_key(k)] = _coerce(_normalize_key(k), v)
-            elif body and i + 1 < len(args) and not looks_like_arg(args[i + 1]):
+            elif (
+                body
+                and i + 1 < len(args)
+                and not looks_like_arg(args[i + 1])
+                and _takes_the_word(_normalize_key(body), args[i + 1], flag_keys)
+            ):
                 overrides[_normalize_key(body)] = _coerce(_normalize_key(body), args[i + 1])
                 i += 1
             elif body:
-                overrides[_normalize_key(body)] = True
+                overrides[_normalize_key(body)] = _without_a_value(arg, _normalize_key(body), value_keys)
             i += 1
             continue
 
@@ -162,11 +268,15 @@ def parse_override_args(
                 overrides[_normalize_key(key[:-1])] = False
                 i += 1
                 continue
-            if i + 1 < len(args) and not looks_like_arg(args[i + 1]):
+            if (
+                i + 1 < len(args)
+                and not looks_like_arg(args[i + 1])
+                and _takes_the_word(_normalize_key(key), args[i + 1], flag_keys)
+            ):
                 overrides[_normalize_key(key)] = _coerce(_normalize_key(key), args[i + 1])
                 i += 2
                 continue
-            overrides[_normalize_key(key)] = True
+            overrides[_normalize_key(key)] = _without_a_value(arg, _normalize_key(key), value_keys)
             i += 1
             continue
 
@@ -270,7 +380,33 @@ def _move_cli_keys_last(data: Dict[str, Any], overrides: Dict[str, Any]) -> None
             data[head] = data.pop(head)
 
 
-def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> None:
+def _report_candidate(key: str) -> Tuple[str, str, str, str, bool]:
+    """``key`` as the report spells it: ``(candidate, head, dot, tail, dotted_at_name)``.
+
+    A glob-headed override keeps its full key (a ``'**'`` block registers per leaf as ``**.lr``), a named dotted
+    override is its HEAD block (``--opt.lr`` expands to a top-level ``opt:`` mapping), a bare override is the key
+    itself.
+    """
+    head, dot, tail = key.partition(".")
+    dotted_at_name = bool(dot) and head not in ("*", "**")
+    return (head if dotted_at_name else key), head, dot, tail, dotted_at_name
+
+
+def unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport) -> List[str]:
+    """The keys of ``overrides`` the REPORT says matched nothing, in the order typed.
+
+    The question :func:`warn_unused_overrides` asks, answered as a list: a command that does something else with
+    such a key than warn about it (``recordstream run`` hands it to the runs of a workflow) asks it here. The
+    report is confluid's: a key is unused only when the pass it covers materialized the objects that could take it,
+    so a command that builds nothing inside ``confluid.collect_report()`` gets an empty answer.
+    """
+    unused = set(report.unused)
+    return [key for key in overrides if _report_candidate(key)[0] in unused]
+
+
+def warn_unused_overrides(
+    overrides: Dict[str, Any], report: ConfigurationReport, config_path: Optional["os.PathLike[str]"] = None
+) -> None:
     """Warn for each CLI override the materialization REPORT says matched nothing.
 
     This asks confluid instead of guessing: ``report.unused`` is authoritative
@@ -288,18 +424,22 @@ def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport
     itself. A command that materializes nothing registers no candidates, so
     the check degrades to silence rather than to guessing.
 
+    A bare key that names a bare scope of the file at ``config_path``
+    (``--quick`` beside a ``!scope:quick`` block) is a scope the user meant to
+    switch on: its warning names ``--scope quick`` instead of the spelling
+    advice. Only a keyed dimension binds to ``--KEY VAL``; a bare scope gets no
+    flag of its own, because a ``--quick`` would then stop reaching a class's
+    ``quick`` parameter the moment the document gains a ``!scope:quick`` block
+    (``docs/architecture.md`` → host facts). The file is read raw only when a
+    bare key matched nothing, so a run whose overrides all landed pays nothing.
+
     Called from ``core.run_command`` after DI materializes and BEFORE the
     command body runs — a doomed multi-hour run gets its warning up front.
     Do NOT downgrade to debug/trace: an override the operator typed and did
     not get is exactly the actionable condition ``warning`` is reserved for.
     """
-    unused = set(report.unused)
-    for key in overrides:
-        head, dot, tail = key.partition(".")
-        dotted_at_name = bool(dot) and head not in ("*", "**")
-        candidate = head if dotted_at_name else key
-        if candidate not in unused:
-            continue
+    for key in unused_overrides(overrides, report):
+        _, head, dot, tail, dotted_at_name = _report_candidate(key)
         if dotted_at_name:
             logger.warning(
                 f"Override {key!r} matched nothing and was ignored: no configured object is named "
@@ -307,12 +447,24 @@ def warn_unused_overrides(overrides: Dict[str, Any], report: ConfigurationReport
                 f"an instance by its YAML 'name:'; for a slot declared in code, use the bare form "
                 f"('--{tail} <value>') or set it inside that object's config block."
             )
+        elif not dot and key in _bare_scopes(config_path):
+            logger.warning(
+                f"Override {key!r} matched nothing and was ignored: no configured object accepts {key!r}. "
+                f"The configuration declares a scope {key!r}: to activate it, use `--scope {key}` (`-s {key}`)."
+            )
         else:
             logger.warning(
                 f"Override {key!r} matched nothing and was ignored: no configured object accepts "
                 f"{(tail or key)!r}. Check the spelling against the declared parameters "
                 f"(`--help` lists them)."
             )
+
+
+def _bare_scopes(config_path: Optional["os.PathLike[str]"]) -> Set[str]:
+    """The bare scopes (``!scope:NAME``) of ``config_path``, includes followed; none without a readable file."""
+    if config_path is None or not os.path.isfile(config_path):
+        return set()
+    return discover_boolean_scopes(load(config_path, until="raw"))
 
 
 def merge_overrides_into_fluids(data: Any, overrides: Dict[str, Any], _visited: Optional[Set[int]] = None) -> None:

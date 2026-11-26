@@ -121,7 +121,7 @@ def test_script_command_empty_word_lists_files_and_flags(app: LiquifyApp, tmp_pa
     """`myapp train <TAB>` (no config yet, empty word) reveals the command's
     override flags ALONGSIDE config-file candidates — not files only.
 
-    Regression: a script_command (e.g. `waivefront-helios convert-ops-export`)
+    Regression: a script_command (e.g. an app's `convert-ops-export`)
     hid its `--<key>` options behind a `--`, so a bare TAB showed only the
     cwd's files/dirs and never the command's own options."""
     monkeypatch.chdir(tmp_path)
@@ -182,6 +182,45 @@ def test_script_command_no_config_override_flag_silent(app: LiquifyApp) -> None:
     nothing."""
     out = comp.complete(app, ["myapp", "train", "--layers", ""], cword=3)
     assert out == []
+
+
+@pytest.mark.parametrize("word", ["--sh", "--"])
+def test_a_word_the_parser_reads_as_an_option_completes_after_a_config_key(
+    app: LiquifyApp, tmp_path: Path, word: str
+) -> None:
+    """`myapp train cfg.yaml --overwrite --sh<TAB>`: `--overwrite` is a config key, not a signature bool, but the
+    override parser never takes a `--`/`+`/`~` word as its value — so completion offers the options, as the parser
+    reads them, instead of keeping silent for a value."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--overwrite", word], cword=4)
+    assert "--show_progress" in out
+    assert "--overwrite" not in out  # already typed
+
+
+@pytest.mark.parametrize("word", ["", "tr", "-3"])
+def test_a_word_the_parser_takes_as_the_value_stays_silent_after_a_config_key(
+    app: LiquifyApp, tmp_path: Path, word: str
+) -> None:
+    """`--overwrite <TAB>`, `--overwrite tr<TAB>`, `--threshold -3<TAB>`: the parser takes these words as the key's
+    value (one dash is a negative number), so completion stays silent for the shell's own completion."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    out = comp.complete(app, ["myapp", "train", str(cfg), "--overwrite", word], cword=4)
+    assert out == []
+
+
+def test_the_listing_after_a_config_key_lists_the_options(app: LiquifyApp, tmp_path: Path) -> None:
+    """The second TAB after `--overwrite --` draws the options listing (bash/zsh wire), not nothing."""
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("overwrite: false\nshow_progress: false\n")
+
+    words = ["myapp", "train", str(cfg), "--overwrite", "--"]
+    candidates, listing = comp.complete_with_listing(comp.serialize_app(app), words, 4, width=120)
+    assert "--show_progress" in candidates
+    assert listing is not None
 
 
 # --------- plain @command option flags (the `sairen run list` case) -------
@@ -287,7 +326,7 @@ def test_bash_script_suppresses_trailing_space_for_directories() -> None:
 
 def test_bash_script_forwards_comp_line_for_quote_aware_tokenizing() -> None:
     """The bash wrapper must forward $COMP_LINE/$COMP_POINT so liquifai-complete can
-    re-tokenize quote-aware (bash's own $COMP_WORDS splits "Helios Base Model")."""
+    re-tokenize quote-aware (bash's own $COMP_WORDS splits "Raidar Base Model")."""
     script = comp.render_script("matrainer", "bash")
     assert 'COMP_LINE="$COMP_LINE"' in script
     assert 'COMP_POINT="$COMP_POINT"' in script
@@ -319,7 +358,7 @@ def test_zsh_script_suppresses_trailing_space_for_directories() -> None:
 
 # ------------------------- words_from_comp_line ---------------------------
 # Quote/escape-aware re-tokenization of bash's raw $COMP_LINE (bash's own
-# $COMP_WORDS splits "Helios Base Model" on spaces — see the mandate).
+# $COMP_WORDS splits "Raidar Base Model" on spaces — see the mandate).
 
 
 @pytest.mark.parametrize(
@@ -1255,7 +1294,7 @@ _VC_LINE = [
     "sairen",
     "dataset",
     "version-create",
-    "helios_train_embeddings",
+    "raidar_train_embeddings",
     "1.0",
     "--target_version",
     "2.0",
@@ -1268,7 +1307,7 @@ def test_positional_not_offered_as_flag() -> None:
     """A declared positional must never be advertised as a `--flag` — the flag
     spelling still PARSES at runtime (positional/`key=value`/`--flag` interop),
     it just isn't offered by TAB."""
-    out = comp.complete(_version_create_app(), ["sairen", "dataset", "version-create", "helios", ""], cword=4)
+    out = comp.complete(_version_create_app(), ["sairen", "dataset", "version-create", "raidar", ""], cword=4)
     assert out[0] == "<source_version>"  # the positional hint is the advertisement
     assert "--source_version" not in out
     assert "--name" not in out
@@ -1310,7 +1349,7 @@ def test_consumed_flag_not_reoffered() -> None:
     """Flags already typed on the line drop out of the candidate list."""
     # `… --target_version 2.0 <TAB>` — flags are offered here even pre-fix,
     # so this reproduces the re-offer on its own (not vacuously).
-    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", "2.0", ""]
+    words = ["sairen", "dataset", "version-create", "raidar", "1.0", "--target_version", "2.0", ""]
     out = comp.complete(_version_create_app(), words, cword=7)
     assert "--append" in out  # anchor: the flag branch is active
     assert "--target_version" not in out
@@ -1324,7 +1363,7 @@ def test_consumed_flag_not_reoffered() -> None:
 def test_value_flag_then_tab_still_silent() -> None:
     """`… --target_version <TAB>` expects a value — the silence (shell file
     completion) is still correct for value-taking flags."""
-    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version", ""]
+    words = ["sairen", "dataset", "version-create", "raidar", "1.0", "--target_version", ""]
     out = comp.complete(_version_create_app(), words, cword=6)
     assert out == []
 
@@ -1340,7 +1379,7 @@ def test_global_bool_flag_then_tab_not_silent() -> None:
 
 def test_key_equals_value_prev_not_silent() -> None:
     """`--key=value` is self-contained — the next word is not its value."""
-    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--target_version=2.0", ""]
+    words = ["sairen", "dataset", "version-create", "raidar", "1.0", "--target_version=2.0", ""]
     out = comp.complete(_version_create_app(), words, cword=6)
     assert "--append" in out
     assert "--target_version" not in out  # consumed via the equals form
@@ -1348,7 +1387,7 @@ def test_key_equals_value_prev_not_silent() -> None:
 
 def test_polarity_prev_not_silent() -> None:
     """`--key+` / `--key-` polarity forms are self-contained too."""
-    words = ["sairen", "dataset", "version-create", "helios", "1.0", "--append+", ""]
+    words = ["sairen", "dataset", "version-create", "raidar", "1.0", "--append+", ""]
     out = comp.complete(_version_create_app(), words, cword=6)
     assert "--target_version" in out
     assert "--append" not in out  # consumed via the polarity form
@@ -1357,7 +1396,7 @@ def test_polarity_prev_not_silent() -> None:
 def test_flag_provided_positional_skips_hint() -> None:
     """A positional supplied in its (still valid) `--flag` spelling counts as
     filled — the hint moves past it."""
-    words = ["sairen", "dataset", "version-create", "helios", "--source_version", "1.0", ""]
+    words = ["sairen", "dataset", "version-create", "raidar", "--source_version", "1.0", ""]
     out = comp.complete(_version_create_app(), words, cword=6)
     assert not any(c.startswith("<") for c in out)
 
@@ -1548,7 +1587,7 @@ def test_run_docs_flag_renders_lines(iso_cache: Path, capsys: Any, monkeypatch: 
     root.run()
     out = capsys.readouterr().out
     assert "--path" in out and "Destination directory." in out
-    assert "Current/Default Value" not in out  # lines layout, not the table
+    assert "Current Value" not in out  # lines layout, not the table
 
 
 def test_background_refresh_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

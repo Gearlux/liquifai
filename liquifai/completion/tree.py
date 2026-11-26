@@ -18,11 +18,24 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
-from . import cache
+from . import cache, config_values
 
 if TYPE_CHECKING:
     from liquifai.core import LiquifyApp
 
+# v12: ``scope_completions`` is gone (``@command(config_files=...)`` was removed).
+# v11: ``option_docs`` rows carry a fourth field, the option's default as shown (``8787``; ``""`` for a flag
+# or an empty default).
+# v10: ``description`` (the node's), ``command_docs`` ``{cmd: first docstring line}`` and ``positional_docs``
+# ``{cmd: {positional: help}}``, so the listing names the commands and says which arguments are missing.
+# v13: ``object_params`` ``{cmd: [parameter, ...]}`` — a script command's parameters a config binds an object to
+# (``runnable: Any``), never offered as a flag (``report.config_object_params``, the rule ``--help`` follows).
+# v9: ``option_docs`` ``{cmd: [[path, --flag, help], ...]}`` and ``option_shorts`` ``{cmd: {letter: parameter}}``, so
+# the second TAB lists each option with its help, grouped (``engine.complete_with_listing``).
+# v8: ``flag_completions`` ``{cmd: {option: {key, kind, depends_on}}}`` (``--library <TAB>``); ``scope_completions``
+# entries take the same shape (kind ``prefix``).
+# v7: ``scope_completions`` ``{cmd: {key, typed}}`` for a ``@command(config_files=...)`` command, so
+# ``--scope <TAB>`` offers its config files' scopes (cached per typed words); its ``scopes`` parameter is not a flag.
 # v6: declared positionals are EXCLUDED from ``signature_paths`` /
 # ``signature_flags`` (a required positional was also offered as its ``--flag``
 # spelling — the spelling still parses, it is just no longer advertised), and
@@ -41,7 +54,7 @@ if TYPE_CHECKING:
 # ``signature_flags`` (+ raw ``signature_paths``), replacing the v2
 # ``signature_keys`` ``{param: [subs]}`` map. Bumping invalidates stale caches
 # so they are rewritten on the next run / ``--help``.
-CACHE_VERSION: int = 6
+CACHE_VERSION: int = 13
 
 # ---------------------------------------------------------------------------
 # Cache (static command-tree snapshot)
@@ -82,13 +95,17 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
     command_paths: Dict[str, List[str]] = {}
     signature_flags: Dict[str, List[str]] = {}
     signature_bool_flags: Dict[str, List[str]] = {}
+    option_docs: Dict[str, List[List[str]]] = {}
+    positional_docs: Dict[str, Dict[str, str]] = {}
     for cmd, func in app._commands.items():
         hierarchy = _introspect_function_hierarchy(func)
-        pos = set(positionals_map[cmd])
+        pos = set(positionals_map[cmd])  # a positional is never a flag to offer
         paths = sorted(p for p in hierarchy if p.split(".", 1)[0] not in pos)
         command_paths[cmd] = paths
         display = _flag_display_map(paths)
         signature_flags[cmd] = list(dict.fromkeys(display[p] for p in paths))
+        option_docs[cmd] = [[p, display[p], _one_line(hierarchy[p]), _default_text(hierarchy[p])] for p in paths]
+        positional_docs[cmd] = {p: _one_line(hierarchy[p]) if p in hierarchy else "" for p in positionals_map[cmd]}
         bools: List[str] = []
         for p in paths:
             type_str = hierarchy[p][0] if isinstance(hierarchy[p], (tuple, list)) else None
@@ -98,28 +115,25 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
                 if spelling not in bools:
                     bools.append(spelling)
         signature_bool_flags[cmd] = bools
-    # Per-command completion info for positionals that registered a provider
-    # (``@command(..., completions={...})``): ``{positional: {key, kind, depends_on}}``.
-    # ``kind`` is ``dependent`` when the provider takes an argument (it receives the
-    # earlier positionals) else ``static``; ``depends_on`` lists the prior positionals
-    # a dependent provider is enumerated against. complete_from_tree reads this to
-    # offer cached real values instead of the ``<name>`` placeholder.
+    # Per-command completion info for every slot with a provider (``@command(..., completions={...})``):
+    # ``{name: {key, kind, depends_on}}``. A positional's ``kind`` is ``dependent`` when its provider takes an
+    # argument (it receives the earlier positionals) else ``static``; an OPTION's (a completions key that is no
+    # positional) is ``static`` or ``prefix`` (it receives the leading positionals typed). complete_from_tree reads
+    # these to offer cached real values instead of the ``<name>`` placeholder, or after ``--<option>``.
     positional_completions: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    flag_completions: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for cmd, func in app._commands.items():
         providers = getattr(func, "__liquifai_completions__", {}) or {}
-        if not providers:
-            continue
         pos_list = list(getattr(func, "__liquifai_positionals__", []))
-        positional_completions[cmd] = {
-            pos: {
-                k: v
-                for k, v in _provider_spec(_path, cmd, pos, provider, pos_list).items()
-                if k in ("key", "kind", "depends_on")
-            }
-            for pos, provider in providers.items()
-        }
+        for name, provider in providers.items():
+            spec = _slot_info(_provider_spec(_path, cmd, name, provider, pos_list))
+            (positional_completions if name in pos_list else flag_completions).setdefault(cmd, {})[name] = spec
     return {
         "name": app.name,
+        # The node's own description, the commands' first docstring lines: the listing's "commands of …" rows.
+        "description": " ".join(str(app.description or "").split()),
+        "command_docs": {cmd: _first_line(func.__doc__) for cmd, func in app._commands.items()},
+        "positional_docs": positional_docs,
         "commands": list(app._commands.keys()),
         "script_cmds": sorted(app._script_cmds),
         # The default command by name (None when the app has none): the walk binds
@@ -139,13 +153,56 @@ def serialize_app(app: "LiquifyApp", _path: Tuple[str, ...] = ()) -> Dict[str, A
         # flags; the engine consults this before treating the previous token
         # as a value slot.
         "signature_bool_flags": signature_bool_flags,
+        # {cmd: [[path, --flag, help], ...]} — each option's help, the listing's description column; by path too, so
+        # a config on the line (whose keys re-collapse the spellings) still finds it.
+        "option_docs": option_docs,
+        # {cmd: {letter: parameter}} — the command's declared ``short=`` spellings, shown as ``-b, --background``.
+        "option_shorts": {cmd: dict(getattr(f, "__liquifai_short__", {}) or {}) for cmd, f in app._commands.items()},
+        # {cmd: [parameter, ...]} — a script command's parameters its config binds an object to (``runnable: Any``):
+        # never a flag, in the listing or as a candidate, as ``--help`` never shows one.
+        "object_params": _object_params(app),
         # Ordered positional-argument names per command; used by complete_from_tree
         # to emit ``<name>`` placeholder hints before flags when the cursor is at
         # an unfilled positional slot.
         "positionals": positionals_map,
-        # {cmd: {positional: value-cache-key}} — only positionals with a provider.
+        # {cmd: {positional: {key, kind, depends_on}}} — only positionals with a provider.
         "positional_completions": positional_completions,
+        # {cmd: {option: {key, kind, depends_on}}} — options whose value has a provider (``--library <TAB>``).
+        "flag_completions": flag_completions,
     }
+
+
+def _object_params(app: Any) -> Dict[str, List[str]]:
+    """``{cmd: [parameter, ...]}`` of every script command with a parameter its config binds an object to."""
+    from liquifai.report import config_object_params  # serialize time only: the app (and Rich) is loaded
+
+    found = {cmd: config_object_params(func) for cmd, func in app._commands.items() if cmd in app._script_cmds}
+    return {cmd: names for cmd, names in found.items() if names}
+
+
+def _default_text(entry: Any) -> str:
+    """An option's default as the listing shows it after the help — ``8787`` — or ``""``: a flag (bool) shows none,
+    nor does a default of ``None`` or ``""``."""
+    if not isinstance(entry, (tuple, list)) or len(entry) < 2 or entry[0] == "bool":
+        return ""
+    default = entry[1]
+    return "" if default is None or default == "" else " ".join(str(default).split())
+
+
+def _first_line(doc: Optional[str]) -> str:
+    """A docstring's first line, as the command index of ``--help`` shows it."""
+    return doc.strip().split("\n")[0].strip() if doc and doc.strip() else ""
+
+
+def _one_line(entry: Any) -> str:
+    """An option's help (the third field of a hierarchy entry) on one line: a listing row is one line."""
+    doc = entry[2] if isinstance(entry, (tuple, list)) and len(entry) > 2 else ""
+    return " ".join(str(doc or "").split())
+
+
+def _slot_info(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """The JSON-safe part of a provider spec the fast path reads."""
+    return {k: v for k, v in spec.items() if k in ("key", "kind", "depends_on")}
 
 
 def _provider_arity(provider: Callable[..., Any]) -> int:
@@ -187,6 +244,16 @@ def _provider_spec(
     this independently — a drift hazard between the tree and the refreshers.
     """
     key = cache.value_cache_key(path, cmd, pos)
+    if pos not in pos_list and _provider_arity(provider) > 0:
+        # A slot that is no positional — an option's value — answering for the words typed: cached per PREFIX of
+        # typed positionals (``{}`` included). ``review a --mode`` asks the provider with ``{"option": "a"}``.
+        return {
+            "key": key,
+            "provider": provider,
+            "kind": "prefix",
+            "depends_on": list(pos_list),
+            "prior_keys": {d: cache.value_cache_key(path, cmd, d) for d in pos_list},
+        }
     if _provider_arity(provider) == 0:
         return {"key": key, "provider": provider, "kind": "static", "depends_on": [], "prior_keys": {}}
     idx = pos_list.index(pos) if pos in pos_list else 0
@@ -229,6 +296,26 @@ def _cross_product(prior: List[Tuple[str, List[str]]], cap: int) -> Iterator[Dic
         yield dict(zip(names, combo))
 
 
+def _prefixes(spec: Dict[str, Any], app_name: str, cap: int) -> Iterator[Dict[str, str]]:
+    """``{}``, then every combination of the first k positionals' cached values, k = 1 … all — up to ``cap`` in all.
+
+    A prefix stops at the first positional with no cached values (a free-text slot): its words cannot be enumerated.
+    """
+    yield {}
+    count = 1
+    prior: List[Tuple[str, List[str]]] = []
+    for dep in spec["depends_on"]:
+        values = cache.read_value_cache(app_name, spec["prior_keys"].get(dep, ""))
+        if not values:
+            return
+        prior.append((dep, values))
+        for inputs in _cross_product(prior, cap - count):
+            yield inputs
+            count += 1
+        if count >= cap:
+            return
+
+
 def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, int]:
     """Run every registered positional value-provider and cache its results.
 
@@ -255,6 +342,18 @@ def refresh_value_caches(app: "LiquifyApp", max_combos: int = 200) -> Dict[str, 
         except Exception:
             continue
         written[s["key"]] = len(values)
+    for s in specs:  # config scopes and option values — per prefix of the typed positionals, none typed first
+        if s["kind"] != "prefix":
+            continue
+        total = 0
+        for inputs in _prefixes(s, app.name, max_combos):
+            try:
+                values = [str(v) for v in (s["provider"](inputs) or [])]
+                cache.write_dependent_value_cache(app.name, s["key"], inputs, values)
+            except Exception:
+                continue
+            total += len(values)
+        written[s["key"]] = total
     for s in specs:  # dependent — cross-product of prior positionals' cached values
         if s["kind"] != "dependent":
             continue
@@ -294,31 +393,44 @@ def refresh_one(app: "LiquifyApp", cache_key: str, inputs: Dict[str, str]) -> Op
     ``<…>-updated`` notice). Returns the number of values written, or None on no match /
     provider failure.
     """
+    if config_values.is_value_key(cache_key):  # a config key's value: its class's registered provider
+        provided = config_values.provide(cache_key, inputs)
+        return None if provided is None else _write_dependent(app.name, cache_key, inputs, provided)
     want_dependent = bool(inputs)
     for s in iter_completion_providers(app):
-        if s["key"] != cache_key or (s["kind"] == "dependent") != want_dependent:
+        if s["key"] != cache_key:
+            continue
+        if s["kind"] == "prefix":  # keyed by any prefix of typed words, the empty one included
+            want_dependent = True
+        elif (s["kind"] == "dependent") != want_dependent:
             continue
         try:
             values = [str(v) for v in ((s["provider"](inputs) if want_dependent else s["provider"]()) or [])]
         except Exception:
             return None
+        if want_dependent:
+            return _write_dependent(app.name, cache_key, inputs, values)
         try:
-            if want_dependent:
-                old = cache.read_dependent_value_cache(app.name, cache_key, inputs)
-                # Stamp a change (drives the "<…>-updated" notice) on first population or
-                # change; keep the prior stamp on an unchanged refresh so it ages out.
-                changed_at = (
-                    time.time()
-                    if (old is None or old != values)
-                    else cache._dependent_changed_at(app.name, cache_key, inputs)
-                )
-                cache.write_dependent_value_cache(app.name, cache_key, inputs, values, changed_at=changed_at)
-            else:
-                cache.write_value_cache(app.name, cache_key, values)
+            cache.write_value_cache(app.name, cache_key, values)
         except Exception:
             return None
         return len(values)
     return None
+
+
+def _write_dependent(app_name: str, cache_key: str, inputs: Dict[str, str], values: List[str]) -> Optional[int]:
+    """Cache a dependent slot's ``values`` for ``inputs``; the number written, or None when the cache cannot be."""
+    try:
+        old = cache.read_dependent_value_cache(app_name, cache_key, inputs)
+        # Stamp a change (drives the "<…>-updated" notice) on first population or
+        # change; keep the prior stamp on an unchanged refresh so it ages out.
+        changed_at = (
+            time.time() if (old is None or old != values) else cache._dependent_changed_at(app_name, cache_key, inputs)
+        )
+        cache.write_dependent_value_cache(app_name, cache_key, inputs, values, changed_at=changed_at)
+    except Exception:
+        return None
+    return len(values)
 
 
 def has_stale_value_caches(app: "LiquifyApp", ttl: float) -> bool:
@@ -381,7 +493,7 @@ def _introspect_function_hierarchy(func: Any) -> Dict[str, Any]:
     completion and help can never diverge. ``get_hierarchy`` walks the command
     function's signature params, recurses into each ``@configurable`` param, and
     records only LEAF scalars (never the configurable container itself):
-    ``convert-ops-export(converter: TaidalOpsToHeliosConverter)`` yields
+    ``convert-ops-export(converter: OpsToCocoConverter)`` yields
     ``{"converter.class_name": ..., "converter.dst": ..., ...}`` — no bare
     ``converter`` root. A plain ``@command`` like ``run list`` yields its bare
     params (``experiment``, ``status``, ...). It reads ``__init__``/signature

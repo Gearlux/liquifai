@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 import confluid
 
-from liquifai.walk import Nav, Token, tokenize, walk_invocation
+from liquifai.walk import PACKAGE_SCHEME, Nav, Token, tokenize, walk_invocation
 
 if TYPE_CHECKING:
     from liquifai.core import Invocation, LiquifyApp
@@ -61,6 +61,14 @@ def _resolve_promoted_config(token: str) -> Optional[Path]:
     positional/override parsers instead of being swallowed. A bare name gains
     a ``.yaml`` suffix first — ``app train demo`` finds ``demo.yaml``.
     """
+    if token.startswith(PACKAGE_SCHEME):
+        # A `Path` folds `pkg://`'s `//`: the reference goes to confluid as the text it is. A distribution that is not
+        # installed, or lacks the file, raises — which here means "no file", left to `names_a_config`'s refusal.
+        try:
+            resolved = confluid.resolve_config_path(token)
+        except confluid.ConfluidError:
+            return None
+        return resolved if resolved.exists() else None
     candidate = Path(token) if Path(token).suffix else Path(token).with_suffix(".yaml")
     resolved = confluid.resolve_config_path(candidate)
     return resolved if resolved.exists() else None
@@ -83,6 +91,7 @@ def route(root_app: "LiquifyApp", argv: List[str]) -> "Invocation":
         target_func=target_func,
         config_path=walk.config_path,
         config_token=walk.config_token,
+        missing_config=walk.missing_config,
         positional_names=walk.positional_names,
         positional_values=walk.positional_values,
         remaining_tokens=walk.remaining,

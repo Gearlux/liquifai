@@ -13,7 +13,7 @@ older ``CACHE_VERSION``) → silent exit plus a detached ``<app> --refresh-compl
 repopulates it, so the next TAB is fast.
 
 ``COMP_LINE`` is preferred when present because bash's ``COMP_WORDS`` splits on
-whitespace WITHOUT honoring quotes/escapes — so a value like ``"Helios Base Model"``
+whitespace WITHOUT honoring quotes/escapes — so a value like ``"Raidar Base Model"``
 is shattered into three words. Re-tokenizing ``COMP_LINE`` (quote-aware) keeps it as
 one token; the ``COMP_WORDS`` path stays as a fallback for zsh/fish/old-bash.
 """
@@ -24,13 +24,19 @@ import os
 import sys
 
 from liquifai.completion import (
+    LISTING_WIRE,
+    bash_word_tail,
     complete_from_tree,
+    complete_with_listing,
+    completion_colour,
+    completion_list_style,
     escape_candidate,
     make_lazy_refresh_spawner,
     read_cache,
     spawn_tree_refresh,
     split_comp_words,
     wants_forced_refresh,
+    wire_lines,
     words_from_comp_line,
 )
 
@@ -46,7 +52,7 @@ def main() -> None:
         return
 
     # Prefer COMP_LINE/COMP_POINT (bash: quote-aware re-tokenization keeps
-    # "Helios Base Model" as ONE word); fall back to the pre-split COMP_WORDS
+    # "Raidar Base Model" as ONE word); fall back to the pre-split COMP_WORDS
     # (zsh/fish, already quote-aware, and old bash installs not yet re-sourced).
     # escape_candidate emits each candidate so the shell inserts it as a single
     # argument. The lazy-refresh spawner self-heals stale/missing DEPENDENT caches
@@ -68,10 +74,39 @@ def main() -> None:
             cword = int(os.environ.get("COMP_CWORD", "0"))
         except ValueError:
             cword = 0
-    for cand in complete_from_tree(
-        tree, words, cword, lazy_refresh=make_lazy_refresh_spawner(app_name), force_refresh=force_refresh
+    lazy_refresh = make_lazy_refresh_spawner(app_name)
+    # A wrapper that reads the grouped listing says so (LIQUIFAI_COMPLETE_WIRE); LIQUIFAI_COMPLETION_LIST=plain
+    # (or an older wrapper) gets one escaped candidate per line, as before the listing existed.
+    if os.environ.get("LIQUIFAI_COMPLETE_WIRE") == LISTING_WIRE and (
+        completion_list_style(os.environ.get("LIQUIFAI_COMPLETION_LIST")) == "grouped"
     ):
+        candidates, listing = complete_with_listing(
+            tree,
+            words,
+            cword,
+            width=_columns(),
+            lazy_refresh=lazy_refresh,
+            force_refresh=force_refresh,
+            colour=completion_colour(os.environ.get("LIQUIFAI_COMPLETION_COLOR"), os.environ),
+            # zsh measures a row's colour codes as characters (its wrapper says it is zsh): count them too.
+            codes_count=os.environ.get("LIQUIFAI_COMPLETE_SHELL") == "zsh",
+        )
+        if comp_line:  # bash replaces only what follows the word's last `=` (a config key's value)
+            candidates = bash_word_tail(candidates, words[cword])
+        for line in wire_lines(candidates, listing):
+            print(line)
+        return
+    candidates = complete_from_tree(tree, words, cword, lazy_refresh=lazy_refresh, force_refresh=force_refresh)
+    for cand in bash_word_tail(candidates, words[cword]) if comp_line else candidates:
         print(escape_candidate(cand))
+
+
+def _columns() -> int:
+    """The terminal's width the wrapper passed (``COLUMNS``), 80 when it passed none."""
+    try:
+        return int(os.environ.get("COLUMNS") or 80)
+    except ValueError:
+        return 80
 
 
 if __name__ == "__main__":

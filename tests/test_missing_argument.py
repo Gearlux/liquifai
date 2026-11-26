@@ -238,3 +238,80 @@ class TestOperation:
         app, calls = _operation_app()
         _run(app, ["files", "rich", "14.0.0"], monkeypatch)
         assert calls == [{"package": "rich", "version": "14.0.0"}]
+
+
+@configurable
+class _Settings:
+    def __init__(self, level: int = 1) -> None:
+        self.level = level
+
+
+class TestABareDefaultCommand:
+    """The app typed alone, its default command needing an argument only the command line can give, prints the help.
+
+    Without it, a bare ``app`` whose default command is a config runner ended in
+    ``Error: app run: missing required argument 'runnable' — pass it as `--runnable <value>``` — a wrong instruction
+    (the config is what is missing) where the app printed its help before the command became the default.
+    """
+
+    @staticmethod
+    def _runner_app() -> "tuple[LiquifyApp, List[Any]]":
+        app = LiquifyApp(name="runner")
+        calls: List[Any] = []
+
+        @app.script_command(default=True, flow_mode="manual")
+        def run(runnable: Any) -> None:
+            """Run the config's runnable."""
+            calls.append(runnable)
+
+        @app.command()
+        def other() -> None:
+            """Another command."""
+
+        return app, calls
+
+    def test_the_app_alone_prints_the_help_and_runs_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        app, calls = self._runner_app()
+        _run(app, [], monkeypatch)
+        out = capsys.readouterr().out
+        assert "RUNNER - Modular Framework" in out and "other" in out and "Global Options" in out
+        assert "Error" not in out
+        assert calls == []
+        assert list(tmp_path.iterdir()) == []  # nothing started: no log folder
+
+    @pytest.mark.parametrize("argv", [["run"], ["--level", "INFO"]])
+    def test_anything_typed_keeps_the_missing_argument_error(
+        self, argv: List[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        app, calls = self._runner_app()
+        out = _error_line(argv, app, monkeypatch, capsys)
+        assert "Error: runner run: missing required argument 'runnable'" in out
+        assert calls == []
+
+    def test_a_default_command_whose_arguments_have_defaults_still_runs_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        app = LiquifyApp(name="opener")
+        calls: List[str] = []
+
+        @app.command(name="open", default=True, positionals=["workspace"])
+        def open_(workspace: str = "") -> None:
+            calls.append(workspace)
+
+        _run(app, [], monkeypatch)
+        assert calls == [""]
+
+    def test_a_required_argument_injection_builds_still_runs_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A ``@configurable``-annotated parameter is built with its defaults when nothing is typed."""
+        app = LiquifyApp(name="injected")
+        calls: List[int] = []
+
+        @app.command(default=True)
+        def serve(settings: _Settings) -> None:
+            calls.append(settings.level)
+
+        _run(app, [], monkeypatch)
+        assert calls == [1]

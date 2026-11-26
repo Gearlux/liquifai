@@ -29,7 +29,8 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 import confluid
 
-from liquifai.grammar import GLOBAL_FLAG_SPECS
+from liquifai.exceptions import MissingOptionValueError
+from liquifai.grammar import GLOBAL_FLAG_SPECS, GlobalFlag
 from liquifai.walk import Token
 
 #: Dests whose value is a filesystem path (wrapped in ``Path`` on the way out).
@@ -37,7 +38,9 @@ _PATH_DESTS = frozenset({"config_path", "log_dir"})
 
 #: The dests phase 3 actually consumes. Help/completion flags are handled by
 #: their own short-circuits in ``run()`` and must fall through to ``remaining``.
-_BOOTSTRAP_DESTS = frozenset({"config_path", "scopes", "log_level", "console_level", "file_level", "log_dir"})
+_BOOTSTRAP_DESTS = frozenset(
+    {"config_path", "scopes", "log_level", "console_level", "file_level", "log_dir", "save_config"}
+)
 
 
 @dataclass
@@ -57,6 +60,12 @@ class GlobalFlags:
     debug: bool = False
     #: Log knobs, keyed by their spec ``dest`` — passed straight to LiquifyContext.
     log_overrides: Dict[str, Any] = field(default_factory=dict)
+    #: ``--dump-config``: write the resolved configuration and run nothing.
+    dump_config: bool = False
+    #: ``--dump-config=PATH``: the file it goes to; ``None`` prints it.
+    dump_config_path: Path | None = None
+    #: ``--save-config PATH``: write the resolved configuration there, then run the command.
+    save_config: Path | None = None
     #: Tokens phase 3 did not consume, literals included, in order.
     remaining: List[Token] = field(default_factory=list)
 
@@ -68,6 +77,7 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
     declaration ``--help`` and completion render from — so the three surfaces
     can never drift. Only the bootstrap-relevant dests are consumed; everything
     else (including every literal) lands in :attr:`GlobalFlags.remaining`.
+    A value flag takes the next token or the text after its ``=`` (``--level DEBUG``, ``--level=DEBUG``).
 
     Example::
 
@@ -85,6 +95,8 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
         for flag in spec.flags
     }
     debug_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "debug" for flag in spec.flags}
+    dump_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "dump_config" for flag in spec.flags}
+    save_flags = {flag for spec in GLOBAL_FLAG_SPECS if spec.dest == "save_config" for flag in spec.flags}
 
     i, n = 0, len(tokens)
     while i < n:
@@ -94,17 +106,35 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
             i += 1
             continue
 
+        flag, equals, path = tok.text.partition("=")
+        if flag in dump_flags:
+            if equals and not path:
+                raise MissingOptionValueError(
+                    f"{flag}= names no file — write `{flag}=PATH` to write it there, or `{flag}` alone to print it."
+                )
+            out.dump_config = True
+            out.dump_config_path = Path(path) if path else None
+            i += 1
+            continue
+        spec = value_specs.get(flag) if equals else None
+        if spec is not None:
+            # `--scope=quick` is `--scope quick`: read as an override, it became the config key `scope` and the
+            # command ran with no scope (`--level=DEBUG` the key `level`).
+            if not path:
+                raise MissingOptionValueError(
+                    f"{flag}= gives no {spec.metavar} — write `{flag} {spec.metavar}` or `{flag}={spec.metavar}`."
+                )
+            _store(out, spec, path)
+            i += 1
+            continue
+        if tok.text in save_flags and (i + 1 == n or tokens[i + 1].literal or tokens[i + 1].is_flag_like()):
+            # Read as an override, a bare `--save-config` would become the config key `save_config: true` and the
+            # command would run with nothing saved.
+            raise MissingOptionValueError(f"{tok.text} needs a file: `{tok.text} PATH`.")
+
         spec = value_specs.get(tok.text)
         if spec is not None and i + 1 < n and not tokens[i + 1].literal:
-            value = tokens[i + 1].text
-            if spec.dest == "config_path":
-                out.config_path = Path(value)
-            elif spec.dest == "scopes":
-                out.scopes.extend(value.split(","))
-            elif spec.dest in _PATH_DESTS:
-                out.log_overrides[spec.dest] = Path(value)
-            else:
-                out.log_overrides[spec.dest] = value
+            _store(out, spec, tokens[i + 1].text)
             i += 2
         elif tok.text in debug_flags:
             out.debug = True
@@ -114,6 +144,20 @@ def parse_globals(tokens: Sequence[Token]) -> GlobalFlags:
             i += 1
 
     return out
+
+
+def _store(out: GlobalFlags, spec: GlobalFlag, value: str) -> None:
+    """Route one value flag's ``value`` to its field of ``out``."""
+    if spec.dest == "save_config":
+        out.save_config = Path(value)
+    elif spec.dest == "config_path":
+        out.config_path = Path(value)
+    elif spec.dest == "scopes":
+        out.scopes.extend(value.split(","))
+    elif spec.dest in _PATH_DESTS:
+        out.log_overrides[spec.dest] = Path(value)
+    else:
+        out.log_overrides[spec.dest] = value
 
 
 def bind_dimension_flags(

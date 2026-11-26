@@ -6,14 +6,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "liquifai"
-version = "0.3.1"
+version = "0.4.0"
 description = "A streamlined, type-safe application framework for Python ML/HPC."
 readme = "README.md"
 authors = [{name = "Gert Behiels"}]
 # PEP 639 SPDX expression; the license CLASSIFIER is deliberately absent
 # (deprecated in favour of this field — re-adding it reintroduces the
 # SetuptoolsDeprecationWarning at build time).
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -29,12 +29,13 @@ classifiers = [
 dependencies = [
     "rich>=10.0.0",
     "loggair>=0.1.0",
-    # 0.3.0 is the floor for `accepts_any_key` — which joined `accepts_key` /
-    # `accepts_broadcast` as the settability predicates liquifai/overrides.py imports
-    # at module level (0.2.0 was the floor for the first two). Against an older
+    # 0.5.0 is the floor for `discover_boolean_scopes`, which liquifai/overrides.py
+    # imports at module level beside the settability predicates `accepts_key` /
+    # `accepts_broadcast` / `accepts_any_key`, and for `dump(defaults=True)`, which
+    # `--dump-config` / `--save-config` pass (liquifai/dump.py). Against an older
     # confluid the package does not import at all, so this floor is load-bearing,
     # not advisory.
-    "confluid>=0.3.0",
+    "confluid>=0.5.0",
 ]
 requires-python = ">=3.12"
 
@@ -110,6 +111,9 @@ module = [
     # standalone CI has no torch, so the missing-stub error must not fail the gate.
     "torch",
     "torch.*",
+    # confluid's go-to-definition reader, newer than the confluid floor: config_help imports it guarded and names
+    # no include without it, so a CI on the released confluid must not fail on its absence.
+    "confluid.locate",
 ]
 ignore_missing_imports = true
 
