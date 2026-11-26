@@ -29,12 +29,13 @@ classifiers = [
 dependencies = [
     "rich>=10.0.0",
     "loggair>=0.1.0",
-    # 0.3.0 is the floor for `accepts_any_key` — which joined `accepts_key` /
-    # `accepts_broadcast` as the settability predicates liquifai/overrides.py imports
-    # at module level (0.2.0 was the floor for the first two). Against an older
+    # 0.5.0 is the floor for `discover_boolean_scopes`, which liquifai/overrides.py
+    # imports at module level beside the settability predicates `accepts_key` /
+    # `accepts_broadcast` / `accepts_any_key`, and for `dump(defaults=True)`, which
+    # `--dump-config` / `--save-config` pass (liquifai/dump.py). Against an older
     # confluid the package does not import at all, so this floor is load-bearing,
     # not advisory.
-    "confluid>=0.3.0",
+    "confluid>=0.5.0",
 ]
 requires-python = ">=3.12"
 

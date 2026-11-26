@@ -7,6 +7,9 @@ All notable changes to liquifai are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- **liquifai requires confluid 0.5.0** (`confluid>=0.5.0`, was `>=0.3.0`): `overrides.py` imports
+  `discover_boolean_scopes`, and `--dump-config` / `--save-config` pass `dump(defaults=True)`; both are new in
+  confluid 0.5.0. Against an older confluid liquifai does not import.
 - **The licence is now the PolyForm Noncommercial License 1.0.0** (`LICENSE`, `pyproject.toml`): free for personal, academic and other noncommercial use; commercial use needs a separate licence from the author. It was MIT; the versions released under MIT keep that licence.
 
 ### Added
