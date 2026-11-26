@@ -222,7 +222,7 @@ The installed version (read from the package metadata):
 
 ```python
 import liquifai
-print(liquifai.__version__)  # e.g. 0.3.1
+print(liquifai.__version__)  # e.g. 0.4.0
 ```
 
 ### Optional extras

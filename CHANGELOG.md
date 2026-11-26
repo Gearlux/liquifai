@@ -4,9 +4,25 @@ All notable changes to liquifai are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow
 [semver](https://semver.org/) — pre-1.0, minor bumps may break.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-26
+
+### Breaking
+
+- **An option of a declared type other than `bool` needs a value** — `my-app show --name --dry-run` ran with
+  `name=True`, a text option holding `True` (an `int` or a list option the same); it now stops with
+  `Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>``, exit 1
+  (`MissingOptionValueError`). A switch, a config key and an unannotated parameter keep the implicit `True`.
+- **A `bool` parameter takes the word after it only when it is a yes/no value** (`true`/`false`/`yes`/`no`/`on`/
+  `off`/`0`/`1`). `my-app run c.yaml --dry-run name=x` used to bind `dry_run='name=x'` and lose the `name` override
+  without a warning; it now gives `dry_run=True` and applies `name=x`. Any other word after a switch is read on its
+  own (an unrecognised one warns, or is refused under `strict_flags`). Every other key, and every config key, keeps
+  the `--key value` form (`docs/cli-overrides.md`).
+- **A `completions=` key that names no parameter of the command is refused when it is decorated**
+  (`CommandDefinitionError: review: completions key 'libary' names no parameter — did you mean 'library'?`). It used
+  to be kept and complete nothing.
 
 ### Changed
+
 - **liquifai requires confluid 0.5.0** (`confluid>=0.5.0`, was `>=0.3.0`): `overrides.py` imports
   `discover_boolean_scopes`, and `--dump-config` / `--save-config` pass `dump(defaults=True)`; both are new in
   confluid 0.5.0. Against an older confluid liquifai does not import.
@@ -65,6 +81,21 @@ All notable changes to liquifai are documented here. The format follows
   value or default, but a parameter a top-level key already feeds (`datasets: !ref:setup_datasets`) — listed once,
   as that key. `--help` shows a table per object, titled by its path and class, instead of one table with an
   "Applies to" column.
+- **The second TAB lists the candidates grouped, with their help** (bash, zsh): `my-app <TAB><TAB>` shows
+  `commands of my-app`, `arguments of my-app open` (each argument typed with its value, each missing one with its
+  help, the next one's values under it), `options of my-app open`, then `global options`, a row each, instead of one
+  alphabetical list — in colour (titles cyan, commands blue, a typed argument green, a missing one yellow, the next
+  one marked `▸`), an option's default after its help. `LIQUIFAI_COMPLETION_LIST=plain` brings back the shell's own
+  sorted list, `LIQUIFAI_COMPLETION_COLOR=never` (or `NO_COLOR`) the listing without colour. Run
+  `my-app --install-completion` again to get it. Completion-tree cache v11.
+- **The wheel ships the example configs** (`examples/*.yaml`) under `share/liquifai/examples/`, where
+  `pkg://liquifai/examples/<file>.yaml` names them from any install.
+- **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
+  `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
+- **A list's next word completes after a comma** — positionals and option values: `pictures all a,<TAB>`
+  → `a,b a,c`, the words already listed left out.
+- **`--help` shows the values TAB offers** in a "Values" block, read from the completion cache (no provider runs);
+  a dependent slot answers for the words typed before `--help`.
 
 ### Fixed
 
@@ -121,42 +152,6 @@ All notable changes to liquifai are documented here. The format follows
 - **A command-line key reaches the config's `${…}` placeholders**, as a line written at the end of the file would:
   with `output_dir: /runs/${run.name}`, `myapp run c.yaml run.name=pilot` now gives `/runs/pilot` (it gave the
   file's own name: the placeholder was filled in before the key was read).
-
-### Breaking
-
-- **An option of a declared type other than `bool` needs a value** — `my-app show --name --dry-run` ran with
-  `name=True`, a text option holding `True` (an `int` or a list option the same); it now stops with
-  `Error: my-app show: --name needs a value — pass it as `--name <value>` or `name=<value>``, exit 1
-  (`MissingOptionValueError`). A switch, a config key and an unannotated parameter keep the implicit `True`.
-- **A `bool` parameter takes the word after it only when it is a yes/no value** (`true`/`false`/`yes`/`no`/`on`/
-  `off`/`0`/`1`). `my-app run c.yaml --dry-run name=x` used to bind `dry_run='name=x'` and lose the `name` override
-  without a warning; it now gives `dry_run=True` and applies `name=x`. Any other word after a switch is read on its
-  own (an unrecognised one warns, or is refused under `strict_flags`). Every other key, and every config key, keeps
-  the `--key value` form (`docs/cli-overrides.md`).
-- **A `completions=` key that names no parameter of the command is refused when it is decorated**
-  (`CommandDefinitionError: review: completions key 'libary' names no parameter — did you mean 'library'?`). It used
-  to be kept and complete nothing.
-
-### Added
-
-- **The second TAB lists the candidates grouped, with their help** (bash, zsh): `my-app <TAB><TAB>` shows
-  `commands of my-app`, `arguments of my-app open` (each argument typed with its value, each missing one with its
-  help, the next one's values under it), `options of my-app open`, then `global options`, a row each, instead of one
-  alphabetical list — in colour (titles cyan, commands blue, a typed argument green, a missing one yellow, the next
-  one marked `▸`), an option's default after its help. `LIQUIFAI_COMPLETION_LIST=plain` brings back the shell's own
-  sorted list, `LIQUIFAI_COMPLETION_COLOR=never` (or `NO_COLOR`) the listing without colour. Run
-  `my-app --install-completion` again to get it. Completion-tree cache v11.
-- **The wheel ships the example configs** (`examples/*.yaml`) under `share/liquifai/examples/`, where
-  `pkg://liquifai/examples/<file>.yaml` names them from any install.
-- **An option's value completes** when `completions=` names the option: `review a --library <TAB>` →
-  `unofficial complete`. The provider takes nothing, or the positionals typed so far. Completion-tree cache v8.
-- **A list's next word completes after a comma** — positionals and option values: `pictures all a,<TAB>`
-  → `a,b a,c`, the words already listed left out.
-- **`--help` shows the values TAB offers** in a "Values" block, read from the completion cache (no provider runs);
-  a dependent slot answers for the words typed before `--help`.
-
-### Fixed
-
 - **Help text keeps its square brackets.** A docstring, description or default like `a list ("[epochs=1]")` printed as
   `a list ("")`: help is rendered through Rich markup, which read the brackets as a style tag. Every text an app's
   author wrote — the app's description, a command's docstring, the argument and option tables, the command index —
